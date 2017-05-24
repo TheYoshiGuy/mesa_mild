@@ -3650,6 +3650,27 @@ struct gl_constants
    GLboolean AllowHigherCompatVersion;
 
    /**
+    * Allow more types of primitives with glDrawArrays* while being
+    * in a core profile.
+    */
+   GLboolean AllowExtendedPrimitiveType;
+
+   /**
+    * Allow an index value of -1 for _mesa_uniform
+    */
+   GLboolean AllowMinusOneIndexUniform;
+
+   /**
+    * Allow glGetString(GL_EXTENSIONS) in a core profile
+    */
+   GLboolean AllowGLExtensionsInCore;
+
+   /**
+    * Allow Relaxed Validation when using VBO in a core profile
+    */
+   GLboolean AllowRelaxedVboValidation;
+
+   /**
     * Force computing the absolute value for sqrt() and inversesqrt() to follow
     * D3D9 when apps rely on this behaviour.
     */

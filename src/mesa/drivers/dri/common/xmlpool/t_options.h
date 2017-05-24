@@ -125,6 +125,27 @@ DRI_CONF_OPT_BEGIN_B(allow_higher_compat_version, def) \
         DRI_CONF_DESC(en,gettext("Allow a higher compat profile (version 3.1+) for apps that request it")) \
 DRI_CONF_OPT_END
 
+#define DRI_CONF_ALLOW_RELAXED_VBO_VALIDATION(def)\
+DRI_CONF_OPT_BEGIN_B(allow_relaxed_vbo_validation,def) \
+DRI_CONF_DESC(en,gettext("Bypass some validation related to VBO when using core profile")) \
+DRI_CONF_OPT_END
+
+#define DRI_CONF_ALLOW_MINUS_ONE_INDEX_UNIFORM(def)\
+DRI_CONF_OPT_BEGIN_B(allow_minus_one_index_uniform,def) \
+DRI_CONF_DESC(en,gettext("Special handling of mesa_uniform when location is -1")) \
+DRI_CONF_OPT_END
+
+#define DRI_CONF_ALLOW_EXTENDED_PRIMITIVE_TYPE(def)\
+DRI_CONF_OPT_BEGIN_B(allow_extended_primitive_type,def) \
+DRI_CONF_DESC(en,gettext("Allow more types of primitives in glDrawArray")) \
+DRI_CONF_OPT_END
+
+#define DRI_CONF_ALLOW_GL_EXTENSIONS_IN_CORE(def)\
+DRI_CONF_OPT_BEGIN_B(allow_gl_extensions_in_core,def) \
+DRI_CONF_DESC(en,gettext("Always allow glGetString(GL_EXTENSIONS)")) \
+DRI_CONF_OPT_END
+
+
 #define DRI_CONF_FORCE_GLSL_ABS_SQRT(def) \
 DRI_CONF_OPT_BEGIN_B(force_glsl_abs_sqrt, def) \
         DRI_CONF_DESC(en,gettext("Force computing the absolute value for sqrt() and inversesqrt()")) \
