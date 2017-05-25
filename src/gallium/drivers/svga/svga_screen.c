@@ -23,16 +23,20 @@
  *
  **********************************************************/
 
+#include "git_sha1.h" /* For MESA_GIT_SHA1 */
 #include "util/u_format.h"
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
 #include "util/u_string.h"
 #include "util/u_math.h"
 
+#include "os/os_process.h"
+
 #include "svga_winsys.h"
 #include "svga_public.h"
 #include "svga_context.h"
 #include "svga_format.h"
+#include "svga_msg.h"
 #include "svga_screen.h"
 #include "svga_tgsi.h"
 #include "svga_resource_texture.h"
@@ -44,6 +48,10 @@
 
 /* NOTE: this constant may get moved into a svga3d*.h header file */
 #define SVGA3D_DX_MAX_RESOURCE_SIZE (128 * 1024 * 1024)
+
+#ifndef MESA_GIT_SHA1
+#define MESA_GIT_SHA1 "(unknown git revision)"
+#endif
 
 #ifdef DEBUG
 int SVGA_DEBUG = 0;
@@ -921,6 +929,35 @@ svga_get_driver_query_info(struct pipe_screen *screen,
 
 
 static void
+init_logging(struct pipe_screen *screen)
+{
+   static const char *log_prefix = "Mesa: ";
+   char host_log[1000];
+
+   /* Log Version to Host */
+   util_snprintf(host_log, sizeof(host_log) - strlen(log_prefix),
+                 "%s%s", log_prefix, svga_get_name(screen));
+   svga_host_log(host_log);
+
+   util_snprintf(host_log, sizeof(host_log) - strlen(log_prefix),
+                 "%s%s (%s)", log_prefix, PACKAGE_VERSION, MESA_GIT_SHA1);
+   svga_host_log(host_log);
+
+   /* If the SVGA_EXTRA_LOGGING env var is set, log the process's command
+    * line (program name and arguments).
+    */
+   if (debug_get_bool_option("SVGA_EXTRA_LOGGING", FALSE)) {
+      char cmdline[1000];
+      if (os_get_command_line(cmdline, sizeof(cmdline))) {
+         util_snprintf(host_log, sizeof(host_log) - strlen(log_prefix),
+                       "%s%s", log_prefix, cmdline);
+         svga_host_log(host_log);
+      }
+   }
+}
+
+
+static void
 svga_destroy_screen( struct pipe_screen *screen )
 {
    struct svga_screen *svgascreen = svga_screen(screen);
@@ -1120,9 +1157,11 @@ svga_screen_create(struct svga_winsys_screen *sws)
    }
 
    (void) mtx_init(&svgascreen->tex_mutex, mtx_plain);
-   (void) mtx_init(&svgascreen->swc_mutex, mtx_plain);
+   (void) mtx_init(&svgascreen->swc_mutex, mtx_recursive);
 
    svga_screen_cache_init(svgascreen);
+
+   init_logging(screen);
 
    return screen;
 error2:
