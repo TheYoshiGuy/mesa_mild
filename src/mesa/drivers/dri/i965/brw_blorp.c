@@ -71,6 +71,16 @@ brw_blorp_init(struct brw_context *brw)
    brw->blorp.compiler = brw->screen->compiler;
 
    switch (brw->gen) {
+   case 4:
+      if (brw->is_g4x) {
+         brw->blorp.exec = gen45_blorp_exec;
+      } else {
+         brw->blorp.exec = gen4_blorp_exec;
+      }
+      break;
+   case 5:
+      brw->blorp.exec = gen5_blorp_exec;
+      break;
    case 6:
       brw->blorp.mocs.tex = 0;
       brw->blorp.mocs.rb = 0;
@@ -271,6 +281,9 @@ blorp_surf_for_miptree(struct brw_context *brw,
    }
    assert((surf->aux_usage == ISL_AUX_USAGE_NONE) ==
           (surf->aux_addr.buffer == NULL));
+
+   /* ISL wants real levels, not offset ones. */
+   *level -= mt->first_level;
 }
 
 static enum isl_format
@@ -571,12 +584,25 @@ try_blorp_blit(struct brw_context *brw,
           (dst_mt->format == MESA_FORMAT_Z24_UNORM_X8_UINT))
          return false;
 
+      /* We also can't handle any combined depth-stencil formats because we
+       * have to reinterpret as a color format.
+       */
+      if (_mesa_get_format_base_format(src_mt->format) == GL_DEPTH_STENCIL ||
+          _mesa_get_format_base_format(dst_mt->format) == GL_DEPTH_STENCIL)
+         return false;
+
       do_blorp_blit(brw, buffer_bit, src_irb, MESA_FORMAT_NONE,
                     dst_irb, MESA_FORMAT_NONE, srcX0, srcY0,
                     srcX1, srcY1, dstX0, dstY0, dstX1, dstY1,
                     filter, mirror_x, mirror_y);
       break;
    case GL_STENCIL_BUFFER_BIT:
+      /* Blorp doesn't support combined depth stencil which is all we have
+       * prior to gen6.
+       */
+      if (brw->gen < 6)
+         return false;
+
       src_irb =
          intel_renderbuffer(read_fb->Attachment[BUFFER_STENCIL].Renderbuffer);
       dst_irb =
@@ -622,10 +648,6 @@ brw_blorp_copytexsubimage(struct brw_context *brw,
    if (src_mt->num_samples > 8 || dst_mt->num_samples > 8)
       return false;
 
-   /* BLORP is only supported from Gen6 onwards. */
-   if (brw->gen < 6)
-      return false;
-
    if (_mesa_get_format_base_format(src_rb->Format) !=
        _mesa_get_format_base_format(dst_image->TexFormat)) {
       return false;
@@ -639,6 +661,13 @@ brw_blorp_copytexsubimage(struct brw_context *brw,
        (dst_mt->format == MESA_FORMAT_Z24_UNORM_X8_UINT)) {
       return false;
    }
+
+   /* We also can't handle any combined depth-stencil formats because we
+    * have to reinterpret as a color format.
+    */
+   if (_mesa_get_format_base_format(src_mt->format) == GL_DEPTH_STENCIL ||
+       _mesa_get_format_base_format(dst_mt->format) == GL_DEPTH_STENCIL)
+      return false;
 
    if (!brw->format_supported_as_render_target[dst_image->TexFormat])
       return false;
@@ -724,10 +753,6 @@ brw_blorp_framebuffer(struct brw_context *brw,
                       GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                       GLbitfield mask, GLenum filter)
 {
-   /* BLORP is not supported before Gen6. */
-   if (brw->gen < 6)
-      return mask;
-
    static GLbitfield buffer_bits[] = {
       GL_COLOR_BUFFER_BIT,
       GL_DEPTH_BUFFER_BIT,
@@ -876,6 +901,22 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
       DBG("%s (fast) to mt %p level %d layers %d+%d\n", __FUNCTION__,
           irb->mt, irb->mt_level, irb->mt_layer, num_layers);
 
+      /* Ivybrigde PRM Vol 2, Part 1, "11.7 MCS Buffer for Render Target(s)":
+       *
+       *    "Any transition from any value in {Clear, Render, Resolve} to a
+       *    different value in {Clear, Render, Resolve} requires end of pipe
+       *    synchronization."
+       *
+       * In other words, fast clear ops are not properly synchronized with
+       * other drawing.  We need to use a PIPE_CONTROL to ensure that the
+       * contents of the previous draw hit the render target before we resolve
+       * and again afterwards to ensure that the resolve is complete before we
+       * do any more regular drawing.
+       */
+      brw_emit_pipe_control_flush(brw,
+                                  PIPE_CONTROL_RENDER_TARGET_FLUSH |
+                                  PIPE_CONTROL_CS_STALL);
+
       struct blorp_batch batch;
       blorp_batch_init(&brw->blorp, &batch, brw, 0);
       blorp_fast_clear(&batch, &surf,
@@ -883,6 +924,10 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
                        level, logical_layer, num_layers,
                        x0, y0, x1, y1);
       blorp_batch_finish(&batch);
+
+      brw_emit_pipe_control_flush(brw,
+                                  PIPE_CONTROL_RENDER_TARGET_FLUSH |
+                                  PIPE_CONTROL_CS_STALL);
 
       /* Now that the fast clear has occurred, put the buffer in
        * INTEL_FAST_CLEAR_STATE_CLEAR so that we won't waste time doing
@@ -908,17 +953,6 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
                   clear_color, color_write_disable);
       blorp_batch_finish(&batch);
    }
-
-   /*
-    * Ivybrigde PRM Vol 2, Part 1, "11.7 MCS Buffer for Render Target(s)":
-    *
-    *  Any transition from any value in {Clear, Render, Resolve} to a
-    *  different value in {Clear, Render, Resolve} requires end of pipe
-    *  synchronization.
-    */
-   brw_emit_pipe_control_flush(brw,
-                               PIPE_CONTROL_RENDER_TARGET_FLUSH |
-                               PIPE_CONTROL_CS_STALL);
 
    return true;
 }
@@ -981,6 +1015,23 @@ brw_blorp_resolve_color(struct brw_context *brw, struct intel_mipmap_tree *mt,
       resolve_op = BLORP_FAST_CLEAR_OP_RESOLVE_FULL;
    }
 
+   /* Ivybrigde PRM Vol 2, Part 1, "11.7 MCS Buffer for Render Target(s)":
+    *
+    *    "Any transition from any value in {Clear, Render, Resolve} to a
+    *    different value in {Clear, Render, Resolve} requires end of pipe
+    *    synchronization."
+    *
+    * In other words, fast clear ops are not properly synchronized with
+    * other drawing.  We need to use a PIPE_CONTROL to ensure that the
+    * contents of the previous draw hit the render target before we resolve
+    * and again afterwards to ensure that the resolve is complete before we
+    * do any more regular drawing.
+    */
+   brw_emit_pipe_control_flush(brw,
+                               PIPE_CONTROL_RENDER_TARGET_FLUSH |
+                               PIPE_CONTROL_CS_STALL);
+
+
    struct blorp_batch batch;
    blorp_batch_init(&brw->blorp, &batch, brw, 0);
    blorp_ccs_resolve(&batch, &surf, level, layer,
@@ -988,13 +1039,7 @@ brw_blorp_resolve_color(struct brw_context *brw, struct intel_mipmap_tree *mt,
                      resolve_op);
    blorp_batch_finish(&batch);
 
-   /*
-    * Ivybrigde PRM Vol 2, Part 1, "11.7 MCS Buffer for Render Target(s)":
-    *
-    *  Any transition from any value in {Clear, Render, Resolve} to a
-    *  different value in {Clear, Render, Resolve} requires end of pipe
-    *  synchronization.
-    */
+   /* See comment above */
    brw_emit_pipe_control_flush(brw,
                                PIPE_CONTROL_RENDER_TARGET_FLUSH |
                                PIPE_CONTROL_CS_STALL);

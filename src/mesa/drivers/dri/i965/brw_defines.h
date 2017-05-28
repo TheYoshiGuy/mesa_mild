@@ -109,13 +109,6 @@
 #define BRW_CLIP_API_OGL     0
 #define BRW_CLIP_API_DX      1
 
-#define BRW_CLIPMODE_NORMAL              0
-#define BRW_CLIPMODE_CLIP_ALL            1
-#define BRW_CLIPMODE_CLIP_NON_REJECTED   2
-#define BRW_CLIPMODE_REJECT_ALL          3
-#define BRW_CLIPMODE_ACCEPT_ALL          4
-#define BRW_CLIPMODE_KERNEL_CLIP         5
-
 #define BRW_CLIP_NDCSPACE     0
 #define BRW_CLIP_SCREENSPACE  1
 
@@ -152,8 +145,6 @@
 
 #define BRW_FRONTWINDING_CW      0
 #define BRW_FRONTWINDING_CCW     1
-
-#define BRW_SPRITE_POINT_ENABLE  16
 
 #define BRW_CUT_INDEX_ENABLE     (1 << 10)
 

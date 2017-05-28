@@ -71,6 +71,9 @@ brw_blorp_surface_info_init(struct blorp_context *blorp,
                             const struct blorp_surf *surf,
                             unsigned int level, unsigned int layer,
                             enum isl_format format, bool is_render_target);
+void
+blorp_surf_convert_to_single_slice(const struct isl_device *isl_dev,
+                                   struct brw_blorp_surface_info *info);
 
 
 struct brw_blorp_coord_transform
@@ -123,6 +126,9 @@ struct brw_blorp_wm_inputs
 
    struct blorp_surf_offset src_offset;
    struct blorp_surf_offset dst_offset;
+
+   /* (1/width, 1/height) for the source surface */
+   float src_inv_size[2];
 
    /* Minimum layer setting works for all the textures types but texture_3d
     * for which the setting has no effect. Use the z-coordinate instead.
@@ -188,6 +194,8 @@ struct blorp_params
    unsigned num_layers;
    uint32_t vs_prog_kernel;
    struct brw_vs_prog_data *vs_prog_data;
+   uint32_t sf_prog_kernel;
+   struct brw_sf_prog_data *sf_prog_data;
    uint32_t wm_prog_kernel;
    struct brw_wm_prog_data *wm_prog_data;
 
@@ -201,6 +209,7 @@ enum blorp_shader_type {
    BLORP_SHADER_TYPE_BLIT,
    BLORP_SHADER_TYPE_CLEAR,
    BLORP_SHADER_TYPE_LAYER_OFFSET_VS,
+   BLORP_SHADER_TYPE_GEN4_SF,
 };
 
 struct brw_blorp_blit_prog_key
@@ -227,6 +236,9 @@ struct brw_blorp_blit_prog_key
 
    /* Number of bits per channel in the source image. */
    uint8_t src_bpc;
+
+   /* True if the source requires normalized coordinates */
+   bool src_coords_normalized;
 
    /* Number of samples per pixel that have been configured in the render
     * target.
@@ -321,7 +333,7 @@ void brw_blorp_init_wm_prog_key(struct brw_wm_prog_key *wm_key);
 const unsigned *
 blorp_compile_fs(struct blorp_context *blorp, void *mem_ctx,
                  struct nir_shader *nir,
-                 const struct brw_wm_prog_key *wm_key,
+                 struct brw_wm_prog_key *wm_key,
                  bool use_repclear,
                  struct brw_wm_prog_data *wm_prog_data,
                  unsigned *program_size);
@@ -331,6 +343,10 @@ blorp_compile_vs(struct blorp_context *blorp, void *mem_ctx,
                  struct nir_shader *nir,
                  struct brw_vs_prog_data *vs_prog_data,
                  unsigned *program_size);
+
+bool
+blorp_ensure_sf_program(struct blorp_context *blorp,
+                        struct blorp_params *params);
 
 /** \} */
 

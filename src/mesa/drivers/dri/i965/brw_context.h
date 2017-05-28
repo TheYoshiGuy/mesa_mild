@@ -325,27 +325,6 @@ struct brw_program {
 };
 
 
-struct brw_sf_prog_data {
-   GLuint urb_read_length;
-   GLuint total_grf;
-
-   /* Each vertex may have upto 12 attributes, 4 components each,
-    * except WPOS which requires only 2.  (11*4 + 2) == 44 ==> 11
-    * rows.
-    *
-    * Actually we use 4 for each, so call it 12 rows.
-    */
-   GLuint urb_entry_size;
-};
-
-
-struct brw_clip_prog_data {
-   GLuint curb_read_length;	/* user planes? */
-   GLuint clip_mode;
-   GLuint urb_read_length;
-   GLuint total_grf;
-};
-
 struct brw_ff_gs_prog_data {
    GLuint urb_read_length;
    GLuint total_grf;
@@ -1382,6 +1361,8 @@ void brw_destroy_shader_time(struct brw_context *brw);
 
 /* brw_urb.c
  */
+void brw_calculate_urb_fence(struct brw_context *brw, unsigned csize,
+                             unsigned vsize, unsigned sfsize);
 void brw_upload_urb_fence(struct brw_context *brw);
 
 /* brw_curbe.c

@@ -430,7 +430,7 @@
     <field name="Color Buffer Blend Enable" start="108" end="108" type="bool"/>
     <field name="Alpha Test Enable" start="107" end="107" type="bool"/>
     <field name="Alpha Test Function" start="104" end="106" type="3D_Compare_Function"/>
-    <field name="Color Calc State Pointer" start="133" end="159" type="address"/>
+    <field name="CC Viewport State Pointer" start="133" end="159" type="address"/>
     <field name="Color Dither Enable" start="191" end="191" type="bool"/>
     <field name="Round Disable Function Disable" start="190" end="190" type="bool"/>
     <field name="Logic Op Function" start="176" end="179" type="3D_Logic_Op_Function"/>
@@ -479,7 +479,7 @@
     <field name="GS Statistics Enable" start="138" end="138" type="bool"/>
     <field name="SO Statistics Enable" start="137" end="137" type="bool"/>
     <field name="Rendering Enable" start="136" end="136" type="bool"/>
-    <field name="Sampler State Offset" start="165" end="191" type="address"/>
+    <field name="Sampler State Pointer" start="165" end="191" type="address"/>
     <field name="Sampler Count" start="160" end="162" type="uint"/>
     <field name="Reorder Enable" start="222" end="222" type="bool"/>
     <field name="Maximum VPIndex" start="192" end="195" type="uint"/>
@@ -584,7 +584,6 @@
     <field name="V Address Mag Filter Rounding Enable" start="112" end="112" type="bool"/>
     <field name="U Address Min Filter Rounding Enable" start="113" end="113" type="bool"/>
     <field name="U Address Mag Filter Rounding Enable" start="114" end="114" type="bool"/>
-    <field name="Non-normalized Coordinate Enable" start="96" end="96" type="bool"/>
   </struct>
 
   <struct name="RENDER_SURFACE_STATE" length="6">
@@ -857,15 +856,15 @@
     <field name="URB Entry Allocation Size" start="147" end="151" type="uint"/>
     <field name="Number of URB Entries" start="139" end="146" type="uint"/>
     <field name="Statistics Enable" start="138" end="138" type="bool"/>
-    <field name="Sampler State Offset" start="165" end="191" type="address"/>
+    <field name="Sampler State Pointer" start="165" end="191" type="address"/>
     <field name="Sampler Count" start="160" end="162" type="uint"/>
     <field name="Vertex Cache Disable" start="193" end="193" type="bool"/>
     <field name="Enable" start="192" end="192" type="bool"/>
   </struct>
 
   <struct name="WM_STATE" length="11">
-    <field name="Kernel Start Pointer" start="6" end="31" type="offset"/>
-    <field name="GRF Register Count" start="1" end="3" type="uint"/>
+    <field name="Kernel Start Pointer 0" start="6" end="31" type="offset"/>
+    <field name="GRF Register Count 0" start="1" end="3" type="uint"/>
     <field name="Single Program Flow" start="63" end="63" type="bool"/>
     <field name="Binding Table Entry Count" start="50" end="57" type="uint"/>
     <field name="Thread Priority" start="49" end="49" type="uint">
@@ -886,7 +885,7 @@
     <field name="Setup URB Entry Read Length" start="107" end="112" type="uint"/>
     <field name="Setup URB Entry Read Offset" start="100" end="105" type="uint"/>
     <field name="Dispatch GRF Start Register For URB Data" start="96" end="99" type="uint"/>
-    <field name="Sampler State Offset" start="133" end="159" type="address"/>
+    <field name="Sampler State Pointer" start="133" end="159" type="address"/>
     <field name="Sampler Count" start="130" end="132" type="uint"/>
     <field name="Statistics Enable" start="128" end="128" type="bool"/>
     <field name="Maximum Number of Threads" start="185" end="191" type="uint"/>
@@ -924,11 +923,11 @@
     <field name="Global Depth Offset Constant" start="192" end="223" type="float"/>
     <field name="Global Depth Offset Scale" start="224" end="255" type="float"/>
     <field name="Kernel Start Pointer 1" start="262" end="287" type="offset"/>
-    <field name="GRF Register Count[1]" start="257" end="259" type="uint"/>
+    <field name="GRF Register Count 1" start="257" end="259" type="uint"/>
     <field name="Kernel Start Pointer 2" start="294" end="319" type="offset"/>
-    <field name="GRF Register Count[2]" start="289" end="291" type="uint"/>
+    <field name="GRF Register Count 2" start="289" end="291" type="uint"/>
     <field name="Kernel Start Pointer 3" start="326" end="351" type="offset"/>
-    <field name="GRF Register Count[3]" start="321" end="323" type="uint"/>
+    <field name="GRF Register Count 3" start="321" end="323" type="uint"/>
   </struct>
 
   <instruction name="3DPRIMITIVE" bias="2" length="6">
@@ -950,7 +949,7 @@
     <field name="Base Vertex Location" start="160" end="191" type="int"/>
   </instruction>
 
-  <instruction name="3DSTATE_AA_LINE_PARAMS" bias="2" length="3">
+  <instruction name="3DSTATE_AA_LINE_PARAMETERS" bias="2" length="3">
     <field name="Command Type" start="29" end="31" type="uint" default="3"/>
     <field name="Command SubType" start="27" end="28" type="uint" default="3"/>
     <field name="3D Command Opcode" start="24" end="26" type="uint" default="1"/>
@@ -968,11 +967,11 @@
     <field name="3D Command Opcode" start="24" end="26" type="uint" default="0"/>
     <field name="3D Command Sub Opcode" start="16" end="23" type="uint" default="1"/>
     <field name="DWord Length" start="0" end="7" type="uint" default="4"/>
-    <field name="Pointer to VS Binding Table" start="37" end="63" type="address"/>
-    <field name="Pointer to GS Binding Table" start="69" end="95" type="address"/>
-    <field name="Pointer to CLIP Binding Table" start="101" end="127" type="address"/>
-    <field name="Pointer to SF Binding Table" start="133" end="159" type="address"/>
-    <field name="Pointer to PS Binding Table" start="165" end="191" type="address"/>
+    <field name="Pointer to VS Binding Table" start="37" end="63" type="offset"/>
+    <field name="Pointer to GS Binding Table" start="69" end="95" type="offset"/>
+    <field name="Pointer to CLIP Binding Table" start="101" end="127" type="offset"/>
+    <field name="Pointer to SF Binding Table" start="133" end="159" type="offset"/>
+    <field name="Pointer to PS Binding Table" start="165" end="191" type="offset"/>
   </instruction>
 
   <instruction name="3DSTATE_CLEAR_PARAMS" bias="2" length="2">

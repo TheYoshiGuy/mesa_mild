@@ -55,6 +55,7 @@ struct brw_blorp_blit_vars {
    nir_variable *v_src_z;
    nir_variable *v_src_offset;
    nir_variable *v_dst_offset;
+   nir_variable *v_src_inv_size;
 
    /* gl_FragCoord */
    nir_variable *frag_coord;
@@ -79,6 +80,7 @@ brw_blorp_blit_vars_init(nir_builder *b, struct brw_blorp_blit_vars *v,
    LOAD_INPUT(src_z, glsl_uint_type())
    LOAD_INPUT(src_offset, glsl_vector_type(GLSL_TYPE_UINT, 2))
    LOAD_INPUT(dst_offset, glsl_vector_type(GLSL_TYPE_UINT, 2))
+   LOAD_INPUT(src_inv_size, glsl_vector_type(GLSL_TYPE_FLOAT, 2))
 
 #undef LOAD_INPUT
 
@@ -133,7 +135,7 @@ blorp_blit_apply_transform(nir_builder *b, nir_ssa_def *src_pos,
    nir_ssa_def *mul = nir_vec2(b, nir_channel(b, coord_transform, 0),
                                   nir_channel(b, coord_transform, 2));
 
-   return nir_ffma(b, src_pos, mul, offset);
+   return nir_fadd(b, nir_fmul(b, src_pos, mul), offset);
 }
 
 static inline void
@@ -198,10 +200,15 @@ blorp_create_nir_tex_instr(nir_builder *b, struct brw_blorp_blit_vars *v,
 
 static nir_ssa_def *
 blorp_nir_tex(nir_builder *b, struct brw_blorp_blit_vars *v,
-              nir_ssa_def *pos, nir_alu_type dst_type)
+              const struct brw_blorp_blit_prog_key *key, nir_ssa_def *pos)
 {
+   /* If the sampler requires normalized coordinates, we need to compensate. */
+   if (key->src_coords_normalized)
+      pos = nir_fmul(b, pos, nir_load_var(b, v->v_src_inv_size));
+
    nir_tex_instr *tex =
-      blorp_create_nir_tex_instr(b, v, nir_texop_tex, pos, 2, dst_type);
+      blorp_create_nir_tex_instr(b, v, nir_texop_tex, pos, 2,
+                                 key->texture_data_type);
 
    assert(pos->num_components == 2);
    tex->sampler_dim = GLSL_SAMPLER_DIM_2D;
@@ -1188,7 +1195,7 @@ brw_blorp_build_nir_shader(struct blorp_context *blorp, void *mem_ctx,
          src_pos = nir_ishl(&b, src_pos, nir_imm_int(&b, 1));
          src_pos = nir_iadd(&b, src_pos, nir_imm_int(&b, 1));
          src_pos = nir_i2f32(&b, src_pos);
-         color = blorp_nir_tex(&b, &v, src_pos, key->texture_data_type);
+         color = blorp_nir_tex(&b, &v, key, src_pos);
       } else {
          /* Gen7+ hardware doesn't automaticaly blend. */
          color = blorp_nir_manual_blend_average(&b, &v, src_pos, key->src_samples,
@@ -1200,7 +1207,7 @@ brw_blorp_build_nir_shader(struct blorp_context *blorp, void *mem_ctx,
       color = blorp_nir_manual_blend_bilinear(&b, src_pos, key->src_samples, key, &v);
    } else {
       if (key->bilinear_filter) {
-         color = blorp_nir_tex(&b, &v, src_pos, key->texture_data_type);
+         color = blorp_nir_tex(&b, &v, key, src_pos);
       } else {
          /* We're going to use texelFetch, so we need integers */
          if (src_pos->num_components == 2) {
@@ -1371,9 +1378,9 @@ surf_get_intratile_offset_px(struct brw_blorp_surface_info *info,
    }
 }
 
-static void
-surf_convert_to_single_slice(const struct isl_device *isl_dev,
-                             struct brw_blorp_surface_info *info)
+void
+blorp_surf_convert_to_single_slice(const struct isl_device *isl_dev,
+                                   struct brw_blorp_surface_info *info)
 {
    bool ok UNUSED;
 
@@ -1446,7 +1453,7 @@ surf_fake_interleaved_msaa(const struct isl_device *isl_dev,
    assert(info->surf.msaa_layout == ISL_MSAA_LAYOUT_INTERLEAVED);
 
    /* First, we need to convert it to a simple 1-level 1-layer 2-D surface */
-   surf_convert_to_single_slice(isl_dev, info);
+   blorp_surf_convert_to_single_slice(isl_dev, info);
 
    info->surf.logical_level0_px = info->surf.phys_level0_sa;
    info->surf.samples = 1;
@@ -1460,7 +1467,7 @@ surf_retile_w_to_y(const struct isl_device *isl_dev,
    assert(info->surf.tiling == ISL_TILING_W);
 
    /* First, we need to convert it to a simple 1-level 1-layer 2-D surface */
-   surf_convert_to_single_slice(isl_dev, info);
+   blorp_surf_convert_to_single_slice(isl_dev, info);
 
    /* On gen7+, we don't have interleaved multisampling for color render
     * targets so we have to fake it.
@@ -1551,7 +1558,7 @@ surf_fake_rgb_with_red(const struct isl_device *isl_dev,
                        struct brw_blorp_surface_info *info,
                        uint32_t *x, uint32_t *width)
 {
-   surf_convert_to_single_slice(isl_dev, info);
+   blorp_surf_convert_to_single_slice(isl_dev, info);
 
    info->surf.logical_level0_px.width *= 3;
    info->surf.phys_level0_sa.width *= 3;
@@ -1664,6 +1671,18 @@ try_blorp_blit(struct blorp_batch *batch,
                                    coords->y.src0, coords->y.src1,
                                    coords->y.dst0, coords->y.dst1,
                                    coords->y.mirror);
+
+
+   if (devinfo->gen == 4) {
+      /* The MinLOD and MinimumArrayElement don't work properly for cube maps.
+       * Convert them to a single slice on gen4.
+       */
+      if (params->dst.surf.usage & ISL_SURF_USAGE_CUBE_BIT)
+         blorp_surf_convert_to_single_slice(batch->blorp->isl_dev, &params->dst);
+
+      if (params->src.surf.usage & ISL_SURF_USAGE_CUBE_BIT)
+         blorp_surf_convert_to_single_slice(batch->blorp->isl_dev, &params->src);
+   }
 
    if (devinfo->gen > 6 &&
        params->dst.surf.msaa_layout == ISL_MSAA_LAYOUT_INTERLEAVED) {
@@ -1828,6 +1847,9 @@ try_blorp_blit(struct blorp_batch *batch,
    if (!brw_blorp_get_blit_kernel(batch->blorp, params, wm_prog_key))
       return 0;
 
+   if (!blorp_ensure_sf_program(batch->blorp, params))
+      return 0;
+
    unsigned result = 0;
    unsigned max_surface_size = get_max_surface_size(devinfo, params);
    if (params->src.surf.logical_level0_px.width > max_surface_size ||
@@ -1883,7 +1905,7 @@ shrink_surface_params(const struct isl_device *dev,
    struct isl_extent2d px_size_sa;
    int adjust;
 
-   surf_convert_to_single_slice(dev, info);
+   blorp_surf_convert_to_single_slice(dev, info);
 
    px_size_sa = get_px_size_sa(&info->surf);
 
@@ -2020,6 +2042,21 @@ blorp_blit(struct blorp_batch *batch,
    struct blorp_params params;
    blorp_params_init(&params);
 
+   /* We cannot handle combined depth and stencil. */
+   if (src_surf->surf->usage & ISL_SURF_USAGE_STENCIL_BIT)
+      assert(src_surf->surf->format == ISL_FORMAT_R8_UINT);
+   if (dst_surf->surf->usage & ISL_SURF_USAGE_STENCIL_BIT)
+      assert(dst_surf->surf->format == ISL_FORMAT_R8_UINT);
+
+   if (dst_surf->surf->usage & ISL_SURF_USAGE_STENCIL_BIT) {
+      assert(src_surf->surf->usage & ISL_SURF_USAGE_STENCIL_BIT);
+      /* Prior to Broadwell, we can't render to R8_UINT */
+      if (batch->blorp->isl_dev->info->gen < 8) {
+         src_format = ISL_FORMAT_R8_UNORM;
+         dst_format = ISL_FORMAT_R8_UNORM;
+      }
+   }
+
    brw_blorp_surface_info_init(batch->blorp, &params.src, src_surf, src_level,
                                src_layer, src_format, false);
    brw_blorp_surface_info_init(batch->blorp, &params.dst, dst_surf, dst_level,
@@ -2047,8 +2084,18 @@ blorp_blit(struct blorp_batch *batch,
    wm_prog_key.y_scale = params.src.surf.samples / wm_prog_key.x_scale;
 
    if (filter == GL_LINEAR &&
-       params.src.surf.samples <= 1 && params.dst.surf.samples <= 1)
+       params.src.surf.samples <= 1 && params.dst.surf.samples <= 1) {
       wm_prog_key.bilinear_filter = true;
+
+      if (batch->blorp->isl_dev->info->gen < 6) {
+         /* Gen4-5 don't support non-normalized texture coordinates */
+         wm_prog_key.src_coords_normalized = true;
+         params.wm_inputs.src_inv_size[0] =
+            1.0f / minify(params.src.surf.logical_level0_px.width, src_level);
+         params.wm_inputs.src_inv_size[1] =
+            1.0f / minify(params.src.surf.logical_level0_px.height, src_level);
+      }
+   }
 
    if ((params.src.surf.usage & ISL_SURF_USAGE_DEPTH_BIT) == 0 &&
        (params.src.surf.usage & ISL_SURF_USAGE_STENCIL_BIT) == 0 &&
@@ -2298,7 +2345,7 @@ surf_convert_to_uncompressed(const struct isl_device *isl_dev,
     * ones with the same bpb) and divide x, y, width, and height by the
     * block size.
     */
-   surf_convert_to_single_slice(isl_dev, info);
+   blorp_surf_convert_to_single_slice(isl_dev, info);
 
    if (width || height) {
 #ifndef NDEBUG

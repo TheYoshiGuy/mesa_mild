@@ -2397,25 +2397,14 @@ intel_update_r8stencil(struct brw_context *brw,
 
    for (int level = src->first_level; level <= src->last_level; level++) {
       const unsigned depth = src->level[level].depth;
-      const int layers_per_blit =
-         (dst->msaa_layout == INTEL_MSAA_LAYOUT_UMS ||
-          dst->msaa_layout == INTEL_MSAA_LAYOUT_CMS) ?
-         dst->num_samples : 1;
 
       for (unsigned layer = 0; layer < depth; layer++) {
-         brw_blorp_blit_miptrees(brw,
+         brw_blorp_copy_miptrees(brw,
                                  src, level, layer,
-                                 src->format, SWIZZLE_X,
-                                 dst, level, layers_per_blit * layer,
-                                 MESA_FORMAT_R_UNORM8,
-                                 0, 0,
+                                 dst, level, layer,
+                                 0, 0, 0, 0,
                                  minify(src->logical_width0, level),
-                                 minify(src->logical_height0, level),
-                                 0, 0,
-                                 minify(dst->logical_width0, level),
-                                 minify(dst->logical_height0, level),
-                                 GL_NEAREST, false, false /*mirror x, y*/,
-                                 false, false /* decode/encode srgb */);
+                                 minify(src->logical_height0, level));
       }
    }
 
@@ -3269,7 +3258,7 @@ intel_miptree_get_isl_surf(struct brw_context *brw,
       surf->phys_level0_sa.array_len = mt->physical_depth0;
    }
 
-   surf->levels = mt->last_level + 1;
+   surf->levels = mt->last_level - mt->first_level + 1;
    surf->samples = MAX2(mt->num_samples, 1);
 
    surf->size = 0; /* TODO */

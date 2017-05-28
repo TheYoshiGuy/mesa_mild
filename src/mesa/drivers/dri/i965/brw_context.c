@@ -1130,8 +1130,7 @@ brwCreateContext(gl_api api,
 
    brw_init_surface_formats(brw);
 
-   if (brw->gen >= 6)
-      brw_blorp_init(brw);
+   brw_blorp_init(brw);
 
    brw->urb.size = devinfo->urb.size;
 

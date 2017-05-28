@@ -76,6 +76,8 @@ enum ring_type {
     RING_DMA,
     RING_UVD,
     RING_VCE,
+    RING_UVD_ENC,
+    RING_VCN_DEC,
     RING_LAST,
 };
 
