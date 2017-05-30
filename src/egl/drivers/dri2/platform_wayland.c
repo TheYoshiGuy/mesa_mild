@@ -124,7 +124,7 @@ dri2_wl_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
    if (!_eglInitSurface(&dri2_surf->base, disp, EGL_WINDOW_BIT, conf, attrib_list))
       goto cleanup_surf;
 
-   if (dri2_dpy->dri2) {
+   if (dri2_dpy->wl_drm) {
       if (conf->RedSize == 5)
          dri2_surf->format = WL_DRM_FORMAT_RGB565;
       else if (conf->AlphaSize == 0)
@@ -132,6 +132,7 @@ dri2_wl_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
       else
          dri2_surf->format = WL_DRM_FORMAT_ARGB8888;
    } else {
+      assert(dri2_dpy->wl_shm);
       if (conf->RedSize == 5)
          dri2_surf->format = WL_SHM_FORMAT_RGB565;
       else if (conf->AlphaSize == 0)
@@ -187,13 +188,15 @@ dri2_wl_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
    config = dri2_get_dri_config(dri2_conf, EGL_WINDOW_BIT,
                                 dri2_surf->base.GLColorspace);
 
-   if (dri2_dpy->dri2) {
+   if (dri2_dpy->flush)
       dri2_surf->wl_win->resize_callback = resize_callback;
 
+   if (dri2_dpy->image_driver)
+      createNewDrawable = dri2_dpy->image_driver->createNewDrawable;
+   else if (dri2_dpy->dri2)
       createNewDrawable = dri2_dpy->dri2->createNewDrawable;
-   } else {
+   else
       createNewDrawable = dri2_dpy->swrast->createNewDrawable;
-   }
 
    dri2_surf->dri_drawable = (*createNewDrawable)(dri2_dpy->dri_screen, config,
                                                   dri2_surf);
@@ -1066,7 +1069,7 @@ dri2_wl_setup_swap_interval(struct dri2_egl_display *dri2_dpy)
    }
 }
 
-static struct dri2_egl_display_vtbl dri2_wl_display_vtbl = {
+static const struct dri2_egl_display_vtbl dri2_wl_display_vtbl = {
    .authenticate = dri2_wl_authenticate,
    .create_window_surface = dri2_wl_create_window_surface,
    .create_pixmap_surface = dri2_wl_create_pixmap_surface,
@@ -1154,11 +1157,12 @@ dri2_initialize_wayland_drm(_EGLDriver *drv, _EGLDisplay *disp)
    if (!dri2_dpy)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
+   dri2_dpy->fd = -1;
    disp->DriverData = (void *) dri2_dpy;
    if (disp->PlatformDisplay == NULL) {
       dri2_dpy->wl_dpy = wl_display_connect(NULL);
       if (dri2_dpy->wl_dpy == NULL)
-         goto cleanup_dpy;
+         goto cleanup;
       dri2_dpy->own_device = 1;
    } else {
       dri2_dpy->wl_dpy = disp->PlatformDisplay;
@@ -1168,7 +1172,7 @@ dri2_initialize_wayland_drm(_EGLDriver *drv, _EGLDisplay *disp)
 
    dri2_dpy->wl_dpy_wrapper = wl_proxy_create_wrapper(dri2_dpy->wl_dpy);
    if (dri2_dpy->wl_dpy_wrapper == NULL)
-      goto cleanup_dpy_wrapper;
+      goto cleanup;
 
    wl_proxy_set_queue((struct wl_proxy *) dri2_dpy->wl_dpy_wrapper,
                       dri2_dpy->wl_queue);
@@ -1180,13 +1184,13 @@ dri2_initialize_wayland_drm(_EGLDriver *drv, _EGLDisplay *disp)
    wl_registry_add_listener(dri2_dpy->wl_registry,
                             &registry_listener_drm, dri2_dpy);
    if (roundtrip(dri2_dpy) < 0 || dri2_dpy->wl_drm == NULL)
-      goto cleanup_registry;
+      goto cleanup;
 
    if (roundtrip(dri2_dpy) < 0 || dri2_dpy->fd == -1)
-      goto cleanup_drm;
+      goto cleanup;
 
    if (roundtrip(dri2_dpy) < 0 || !dri2_dpy->authenticated)
-      goto cleanup_fd;
+      goto cleanup;
 
    dri2_dpy->fd = loader_get_user_preferred_fd(dri2_dpy->fd,
                                                &dri2_dpy->is_different_gpu);
@@ -1196,7 +1200,7 @@ dri2_initialize_wayland_drm(_EGLDriver *drv, _EGLDisplay *disp)
       if (!dri2_dpy->device_name) {
          _eglError(EGL_BAD_ALLOC, "wayland-egl: failed to get device name "
                                   "for requested GPU");
-         goto cleanup_fd;
+         goto cleanup;
       }
    }
 
@@ -1209,21 +1213,32 @@ dri2_initialize_wayland_drm(_EGLDriver *drv, _EGLDisplay *disp)
    dri2_dpy->driver_name = loader_get_driver_for_fd(dri2_dpy->fd);
    if (dri2_dpy->driver_name == NULL) {
       _eglError(EGL_BAD_ALLOC, "DRI2: failed to get driver name");
-      goto cleanup_fd;
+      goto cleanup;
    }
-
-   if (!dri2_load_driver(disp))
-      goto cleanup_driver_name;
 
    /* render nodes cannot use Gem names, and thus do not support
     * the __DRI_DRI2_LOADER extension */
-   if (!dri2_dpy->is_render_node)
+   if (!dri2_dpy->is_render_node) {
       dri2_dpy->loader_extensions = dri2_loader_extensions;
-   else
+      if (!dri2_load_driver(disp)) {
+         _eglError(EGL_BAD_ALLOC, "DRI2: failed to load driver");
+         goto cleanup;
+      }
+   } else {
       dri2_dpy->loader_extensions = image_loader_extensions;
+      if (!dri2_load_driver_dri3(disp)) {
+         _eglError(EGL_BAD_ALLOC, "DRI3: failed to load driver");
+         goto cleanup;
+      }
+   }
 
    if (!dri2_create_screen(disp))
-      goto cleanup_driver;
+      goto cleanup;
+
+   if (!dri2_setup_extensions(disp))
+      goto cleanup;
+
+   dri2_setup_screen(disp);
 
    dri2_wl_setup_swap_interval(dri2_dpy);
 
@@ -1241,7 +1256,7 @@ dri2_initialize_wayland_drm(_EGLDriver *drv, _EGLDisplay *disp)
    if (dri2_dpy->is_render_node &&
        !(dri2_dpy->capabilities & WL_DRM_CAPABILITY_PRIME)) {
       _eglLog(_EGL_WARNING, "wayland-egl: display is not render-node capable");
-      goto cleanup_screen;
+      goto cleanup;
    }
 
    if (dri2_dpy->is_different_gpu &&
@@ -1251,12 +1266,12 @@ dri2_initialize_wayland_drm(_EGLDriver *drv, _EGLDisplay *disp)
                             "Image extension in the driver is not "
                             "compatible. Version 9 or later and blitImage() "
                             "are required");
-      goto cleanup_screen;
+      goto cleanup;
    }
 
    if (!dri2_wl_add_configs_for_visuals(drv, disp)) {
       _eglError(EGL_NOT_INITIALIZED, "DRI2: failed to add configs");
-      goto cleanup_screen;
+      goto cleanup;
    }
 
    dri2_set_WL_bind_wayland_display(drv, disp);
@@ -1264,12 +1279,9 @@ dri2_initialize_wayland_drm(_EGLDriver *drv, _EGLDisplay *disp)
     * because the buffer of the EGLImage has likely a tiling mode the server
     * gpu won't support. These is no way to check for now. Thus do not support the
     * extension */
-   if (!dri2_dpy->is_different_gpu) {
+   if (!dri2_dpy->is_different_gpu)
       disp->Extensions.WL_create_wayland_buffer_from_image = EGL_TRUE;
-   } else {
-      dri2_wl_display_vtbl.create_wayland_buffer_from_image =
-         dri2_fallback_create_wayland_buffer_from_image;
-   }
+
    disp->Extensions.EXT_buffer_age = EGL_TRUE;
 
    disp->Extensions.EXT_swap_buffers_with_damage = EGL_TRUE;
@@ -1281,28 +1293,8 @@ dri2_initialize_wayland_drm(_EGLDriver *drv, _EGLDisplay *disp)
 
    return EGL_TRUE;
 
- cleanup_screen:
-   dri2_dpy->core->destroyScreen(dri2_dpy->dri_screen);
- cleanup_driver:
-   dlclose(dri2_dpy->driver);
- cleanup_driver_name:
-   free(dri2_dpy->driver_name);
- cleanup_fd:
-   close(dri2_dpy->fd);
- cleanup_drm:
-   free(dri2_dpy->device_name);
-   wl_drm_destroy(dri2_dpy->wl_drm);
- cleanup_registry:
-   wl_registry_destroy(dri2_dpy->wl_registry);
-   wl_proxy_wrapper_destroy(dri2_dpy->wl_dpy_wrapper);
- cleanup_dpy_wrapper:
-   wl_event_queue_destroy(dri2_dpy->wl_queue);
-   if (disp->PlatformDisplay == NULL)
-      wl_display_disconnect(dri2_dpy->wl_dpy);
- cleanup_dpy:
-   free(dri2_dpy);
-   disp->DriverData = NULL;
-
+ cleanup:
+   dri2_display_destroy(disp);
    return EGL_FALSE;
 }
 
@@ -1771,7 +1763,7 @@ static const struct wl_registry_listener registry_listener_swrast = {
    .global_remove = registry_handle_global_remove
 };
 
-static struct dri2_egl_display_vtbl dri2_wl_swrast_display_vtbl = {
+static const struct dri2_egl_display_vtbl dri2_wl_swrast_display_vtbl = {
    .authenticate = NULL,
    .create_window_surface = dri2_wl_create_window_surface,
    .create_pixmap_surface = dri2_wl_create_pixmap_surface,
@@ -1815,11 +1807,12 @@ dri2_initialize_wayland_swrast(_EGLDriver *drv, _EGLDisplay *disp)
    if (!dri2_dpy)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
+   dri2_dpy->fd = -1;
    disp->DriverData = (void *) dri2_dpy;
    if (disp->PlatformDisplay == NULL) {
       dri2_dpy->wl_dpy = wl_display_connect(NULL);
       if (dri2_dpy->wl_dpy == NULL)
-         goto cleanup_dpy;
+         goto cleanup;
       dri2_dpy->own_device = 1;
    } else {
       dri2_dpy->wl_dpy = disp->PlatformDisplay;
@@ -1829,7 +1822,7 @@ dri2_initialize_wayland_swrast(_EGLDriver *drv, _EGLDisplay *disp)
 
    dri2_dpy->wl_dpy_wrapper = wl_proxy_create_wrapper(dri2_dpy->wl_dpy);
    if (dri2_dpy->wl_dpy_wrapper == NULL)
-      goto cleanup_dpy_wrapper;
+      goto cleanup;
 
    wl_proxy_set_queue((struct wl_proxy *) dri2_dpy->wl_dpy_wrapper,
                       dri2_dpy->wl_queue);
@@ -1842,26 +1835,30 @@ dri2_initialize_wayland_swrast(_EGLDriver *drv, _EGLDisplay *disp)
                             &registry_listener_swrast, dri2_dpy);
 
    if (roundtrip(dri2_dpy) < 0 || dri2_dpy->wl_shm == NULL)
-      goto cleanup_registry;
+      goto cleanup;
 
    if (roundtrip(dri2_dpy) < 0 || dri2_dpy->formats == 0)
-      goto cleanup_shm;
+      goto cleanup;
 
-   dri2_dpy->fd = -1;
    dri2_dpy->driver_name = strdup("swrast");
    if (!dri2_load_driver_swrast(disp))
-      goto cleanup_shm;
+      goto cleanup;
 
    dri2_dpy->loader_extensions = swrast_loader_extensions;
 
    if (!dri2_create_screen(disp))
-      goto cleanup_driver;
+      goto cleanup;
+
+   if (!dri2_setup_extensions(disp))
+      goto cleanup;
+
+   dri2_setup_screen(disp);
 
    dri2_wl_setup_swap_interval(dri2_dpy);
 
    if (!dri2_wl_add_configs_for_visuals(drv, disp)) {
       _eglError(EGL_NOT_INITIALIZED, "DRI2: failed to add configs");
-      goto cleanup_screen;
+      goto cleanup;
    }
 
    /* Fill vtbl last to prevent accidentally calling virtual function during
@@ -1871,23 +1868,8 @@ dri2_initialize_wayland_swrast(_EGLDriver *drv, _EGLDisplay *disp)
 
    return EGL_TRUE;
 
- cleanup_screen:
-   dri2_dpy->core->destroyScreen(dri2_dpy->dri_screen);
- cleanup_driver:
-   dlclose(dri2_dpy->driver);
- cleanup_shm:
-   wl_shm_destroy(dri2_dpy->wl_shm);
- cleanup_registry:
-   wl_registry_destroy(dri2_dpy->wl_registry);
-   wl_proxy_wrapper_destroy(dri2_dpy->wl_dpy_wrapper);
- cleanup_dpy_wrapper:
-   wl_event_queue_destroy(dri2_dpy->wl_queue);
-   if (disp->PlatformDisplay == NULL)
-      wl_display_disconnect(dri2_dpy->wl_dpy);
- cleanup_dpy:
-   free(dri2_dpy);
-   disp->DriverData = NULL;
-
+ cleanup:
+   dri2_display_destroy(disp);
    return EGL_FALSE;
 }
 

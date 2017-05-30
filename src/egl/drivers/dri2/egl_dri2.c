@@ -55,6 +55,10 @@
 #include "wayland-drm-client-protocol.h"
 #endif
 
+#ifdef HAVE_X11_PLATFORM
+#include "X11/Xlibint.h"
+#endif
+
 #include "egl_dri2.h"
 #include "loader/loader.h"
 #include "util/u_atomic.h"
@@ -92,10 +96,38 @@ dri_set_background_context(void *loaderPrivate)
    _eglBindContextToThread(ctx, t);
 }
 
+static GLboolean
+dri_is_thread_safe(void *loaderPrivate)
+{
+   struct dri2_egl_surface *dri2_surf = loaderPrivate;
+   _EGLDisplay *display =  dri2_surf->base.Resource.Display;
+
+#ifdef HAVE_X11_PLATFORM
+   Display *xdpy = (Display*)display->PlatformDisplay;
+
+   /* Check Xlib is running in thread safe mode when running on EGL/X11-xlib
+    * platform
+    *
+    * 'lock_fns' is the XLockDisplay function pointer of the X11 display 'dpy'.
+    * It wll be NULL if XInitThreads wasn't called.
+    */
+   if (display->Platform == _EGL_PLATFORM_X11 && xdpy && !xdpy->lock_fns)
+      return false;
+#endif
+
+#ifdef HAVE_WAYLAND_PLATFORM
+   if (display->Platform == _EGL_PLATFORM_WAYLAND)
+      return true;
+#endif
+
+   return true;
+}
+
 const __DRIbackgroundCallableExtension background_callable_extension = {
-   .base = { __DRI_BACKGROUND_CALLABLE, 1 },
+   .base = { __DRI_BACKGROUND_CALLABLE, 2 },
 
    .setBackgroundContext = dri_set_background_context,
+   .isThreadSafe         = dri_is_thread_safe,
 };
 
 const __DRIuseInvalidateExtension use_invalidate = {
@@ -694,14 +726,12 @@ dri2_setup_screen(_EGLDisplay *disp)
    }
 }
 
-/* All platforms but DRM call this function to create the screen, query the
- * dri extensions, setup the vtables and populate the driver_configs.
- * DRM inherits all that information from its display - GBM.
+/* All platforms but DRM call this function to create the screen and populate
+ * the driver_configs. DRM inherits that information from its display - GBM.
  */
 EGLBoolean
 dri2_create_screen(_EGLDisplay *disp)
 {
-   const __DRIextension **extensions;
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 
    if (dri2_dpy->image_driver) {
@@ -744,27 +774,28 @@ dri2_create_screen(_EGLDisplay *disp)
    }
 
    dri2_dpy->own_dri_screen = 1;
+   return EGL_TRUE;
+}
+
+EGLBoolean
+dri2_setup_extensions(_EGLDisplay *disp)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   const struct dri2_extension_match *mandatory_core_extensions;
+   const __DRIextension **extensions;
 
    extensions = dri2_dpy->core->getExtensions(dri2_dpy->dri_screen);
 
-   if (dri2_dpy->image_driver || dri2_dpy->dri2) {
-      if (!dri2_bind_extensions(dri2_dpy, dri2_core_extensions, extensions, false))
-         goto cleanup_dri_screen;
-   } else {
-      assert(dri2_dpy->swrast);
-      if (!dri2_bind_extensions(dri2_dpy, swrast_core_extensions, extensions, false))
-         goto cleanup_dri_screen;
-   }
+   if (dri2_dpy->image_driver || dri2_dpy->dri2)
+      mandatory_core_extensions = dri2_core_extensions;
+   else
+      mandatory_core_extensions = swrast_core_extensions;
+
+   if (!dri2_bind_extensions(dri2_dpy, mandatory_core_extensions, extensions, false))
+      return EGL_FALSE;
 
    dri2_bind_extensions(dri2_dpy, optional_core_extensions, extensions, true);
-   dri2_setup_screen(disp);
-
    return EGL_TRUE;
-
- cleanup_dri_screen:
-   dri2_dpy->core->destroyScreen(dri2_dpy->dri_screen);
-
-   return EGL_FALSE;
 }
 
 /**
@@ -855,7 +886,6 @@ static void
 dri2_display_release(_EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy;
-   unsigned i;
 
    if (!disp)
       return;
@@ -869,6 +899,14 @@ dri2_display_release(_EGLDisplay *disp)
       return;
 
    _eglCleanupDisplay(disp);
+   dri2_display_destroy(disp);
+}
+
+void
+dri2_display_destroy(_EGLDisplay *disp)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   unsigned i;
 
    if (dri2_dpy->own_dri_screen)
       dri2_dpy->core->destroyScreen(dri2_dpy->dri_screen);
@@ -893,7 +931,7 @@ dri2_display_release(_EGLDisplay *disp)
 #ifdef HAVE_DRM_PLATFORM
    case _EGL_PLATFORM_DRM:
       if (dri2_dpy->own_device) {
-         gbm_device_destroy(&dri2_dpy->gbm_dri->base.base);
+         gbm_device_destroy(&dri2_dpy->gbm_dri->base);
       }
       break;
 #endif
@@ -919,7 +957,7 @@ dri2_display_release(_EGLDisplay *disp)
     * the ones from the gbm device. As such the gbm itself is responsible
     * for the cleanup.
     */
-   if (disp->Platform != _EGL_PLATFORM_DRM) {
+   if (disp->Platform != _EGL_PLATFORM_DRM && dri2_dpy->driver_configs) {
       for (i = 0; dri2_dpy->driver_configs[i]; i++)
          free((__DRIconfig *) dri2_dpy->driver_configs[i]);
       free(dri2_dpy->driver_configs);

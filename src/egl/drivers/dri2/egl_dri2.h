@@ -365,6 +365,9 @@ dri2_load_driver_dri3(_EGLDisplay *disp);
 EGLBoolean
 dri2_create_screen(_EGLDisplay *disp);
 
+EGLBoolean
+dri2_setup_extensions(_EGLDisplay *disp);
+
 __DRIdrawable *
 dri2_surface_get_dri_drawable(_EGLSurface *surf);
 
@@ -430,5 +433,8 @@ dri2_set_WL_bind_wayland_display(_EGLDriver *drv, _EGLDisplay *disp)
    }
 #endif
 }
+
+void
+dri2_display_destroy(_EGLDisplay *disp);
 
 #endif /* EGL_DRI2_INCLUDED */

@@ -1896,10 +1896,157 @@ static const struct brw_tracked_state genX(vs_state) = {
 
 /* ---------------------------------------------------------------------- */
 
+static void
+genX(upload_cc_viewport)(struct brw_context *brw)
+{
+   struct gl_context *ctx = &brw->ctx;
+
+   /* BRW_NEW_VIEWPORT_COUNT */
+   const unsigned viewport_count = brw->clip.viewport_count;
+
+   struct GENX(CC_VIEWPORT) ccv;
+   uint32_t cc_vp_offset;
+   uint32_t *cc_map =
+      brw_state_batch(brw, 4 * GENX(CC_VIEWPORT_length) * viewport_count,
+                      32, &cc_vp_offset);
+
+   for (unsigned i = 0; i < viewport_count; i++) {
+      /* _NEW_VIEWPORT | _NEW_TRANSFORM */
+      const struct gl_viewport_attrib *vp = &ctx->ViewportArray[i];
+      if (ctx->Transform.DepthClamp) {
+         ccv.MinimumDepth = MIN2(vp->Near, vp->Far);
+         ccv.MaximumDepth = MAX2(vp->Near, vp->Far);
+      } else {
+         ccv.MinimumDepth = 0.0;
+         ccv.MaximumDepth = 1.0;
+      }
+      GENX(CC_VIEWPORT_pack)(NULL, cc_map, &ccv);
+      cc_map += GENX(CC_VIEWPORT_length);
+   }
+
+#if GEN_GEN >= 7
+   brw_batch_emit(brw, GENX(3DSTATE_VIEWPORT_STATE_POINTERS_CC), ptr) {
+      ptr.CCViewportPointer = cc_vp_offset;
+   }
+#elif GEN_GEN == 6
+   brw_batch_emit(brw, GENX(3DSTATE_VIEWPORT_STATE_POINTERS), vp) {
+      vp.CCViewportStateChange = 1;
+      vp.PointertoCC_VIEWPORT = cc_vp_offset;
+   }
+#else
+   brw->cc.vp_offset = cc_vp_offset;
+   ctx->NewDriverState |= BRW_NEW_CC_VP;
+#endif
+}
+
+const struct brw_tracked_state genX(cc_vp) = {
+   .dirty = {
+      .mesa = _NEW_TRANSFORM |
+              _NEW_VIEWPORT,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
+             BRW_NEW_VIEWPORT_COUNT,
+   },
+   .emit = genX(upload_cc_viewport)
+};
+
+/* ---------------------------------------------------------------------- */
+
+static inline void
+set_scissor_bits(const struct gl_context *ctx, int i,
+                 bool render_to_fbo, unsigned fb_width, unsigned fb_height,
+                 struct GENX(SCISSOR_RECT) *sc)
+{
+   int bbox[4];
+
+   bbox[0] = MAX2(ctx->ViewportArray[i].X, 0);
+   bbox[1] = MIN2(bbox[0] + ctx->ViewportArray[i].Width, fb_width);
+   bbox[2] = MAX2(ctx->ViewportArray[i].Y, 0);
+   bbox[3] = MIN2(bbox[2] + ctx->ViewportArray[i].Height, fb_height);
+   _mesa_intersect_scissor_bounding_box(ctx, i, bbox);
+
+   if (bbox[0] == bbox[1] || bbox[2] == bbox[3]) {
+      /* If the scissor was out of bounds and got clamped to 0 width/height
+       * at the bounds, the subtraction of 1 from maximums could produce a
+       * negative number and thus not clip anything.  Instead, just provide
+       * a min > max scissor inside the bounds, which produces the expected
+       * no rendering.
+       */
+      sc->ScissorRectangleXMin = 1;
+      sc->ScissorRectangleXMax = 0;
+      sc->ScissorRectangleYMin = 1;
+      sc->ScissorRectangleYMax = 0;
+   } else if (render_to_fbo) {
+      /* texmemory: Y=0=bottom */
+      sc->ScissorRectangleXMin = bbox[0];
+      sc->ScissorRectangleXMax = bbox[1] - 1;
+      sc->ScissorRectangleYMin = bbox[2];
+      sc->ScissorRectangleYMax = bbox[3] - 1;
+   } else {
+      /* memory: Y=0=top */
+      sc->ScissorRectangleXMin = bbox[0];
+      sc->ScissorRectangleXMax = bbox[1] - 1;
+      sc->ScissorRectangleYMin = fb_height - bbox[3];
+      sc->ScissorRectangleYMax = fb_height - bbox[2] - 1;
+   }
+}
+
 #if GEN_GEN >= 6
 static void
-brw_calculate_guardband_size(const struct gen_device_info *devinfo,
-                             uint32_t fb_width, uint32_t fb_height,
+genX(upload_scissor_state)(struct brw_context *brw)
+{
+   struct gl_context *ctx = &brw->ctx;
+   const bool render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
+   struct GENX(SCISSOR_RECT) scissor;
+   uint32_t scissor_state_offset;
+   const unsigned int fb_width = _mesa_geometric_width(ctx->DrawBuffer);
+   const unsigned int fb_height = _mesa_geometric_height(ctx->DrawBuffer);
+   uint32_t *scissor_map;
+
+   /* BRW_NEW_VIEWPORT_COUNT */
+   const unsigned viewport_count = brw->clip.viewport_count;
+
+   scissor_map = brw_state_batch(
+      brw, GENX(SCISSOR_RECT_length) * sizeof(uint32_t) * viewport_count,
+      32, &scissor_state_offset);
+
+   /* _NEW_SCISSOR | _NEW_BUFFERS | _NEW_VIEWPORT */
+
+   /* The scissor only needs to handle the intersection of drawable and
+    * scissor rect.  Clipping to the boundaries of static shared buffers
+    * for front/back/depth is covered by looping over cliprects in brw_draw.c.
+    *
+    * Note that the hardware's coordinates are inclusive, while Mesa's min is
+    * inclusive but max is exclusive.
+    */
+   for (unsigned i = 0; i < viewport_count; i++) {
+      set_scissor_bits(ctx, i, render_to_fbo, fb_width, fb_height, &scissor);
+      GENX(SCISSOR_RECT_pack)(
+         NULL, scissor_map + i * GENX(SCISSOR_RECT_length), &scissor);
+   }
+
+   brw_batch_emit(brw, GENX(3DSTATE_SCISSOR_STATE_POINTERS), ptr) {
+      ptr.ScissorRectPointer = scissor_state_offset;
+   }
+}
+
+static const struct brw_tracked_state genX(scissor_state) = {
+   .dirty = {
+      .mesa = _NEW_BUFFERS |
+              _NEW_SCISSOR |
+              _NEW_VIEWPORT,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
+             BRW_NEW_VIEWPORT_COUNT,
+   },
+   .emit = genX(upload_scissor_state),
+};
+#endif
+
+/* ---------------------------------------------------------------------- */
+
+static void
+brw_calculate_guardband_size(uint32_t fb_width, uint32_t fb_height,
                              float m00, float m11, float m30, float m31,
                              float *xmin, float *xmax,
                              float *ymin, float *ymax)
@@ -1940,7 +2087,7 @@ brw_calculate_guardband_size(const struct gen_device_info *devinfo,
     *
     * So, limit the guardband to 16K on Gen7+ and 8K on Sandybridge.
     */
-   const float gb_size = devinfo->gen >= 7 ? 16384.0f : 8192.0f;
+   const float gb_size = GEN_GEN >= 7 ? 16384.0f : 8192.0f;
 
    if (m00 != 0 && m11 != 0) {
       /* First, we compute the screen-space render area */
@@ -1983,7 +2130,6 @@ genX(upload_sf_clip_viewport)(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
    float y_scale, y_bias;
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
    /* BRW_NEW_VIEWPORT_COUNT */
    const unsigned viewport_count = brw->clip.viewport_count;
@@ -1997,15 +2143,19 @@ genX(upload_sf_clip_viewport)(struct brw_context *brw)
 #define clv sfv
    struct GENX(SF_CLIP_VIEWPORT) sfv;
    uint32_t sf_clip_vp_offset;
-   uint32_t *sf_clip_map = brw_state_batch(brw, 16 * 4 * viewport_count,
-                                           64, &sf_clip_vp_offset);
+   uint32_t *sf_clip_map =
+      brw_state_batch(brw, GENX(SF_CLIP_VIEWPORT_length) * 4 * viewport_count,
+                      64, &sf_clip_vp_offset);
 #else
    struct GENX(SF_VIEWPORT) sfv;
    struct GENX(CLIP_VIEWPORT) clv;
-   uint32_t *sf_map = brw_state_batch(brw, 8 * 4 * viewport_count,
-                                      32, &brw->sf.vp_offset);
-   uint32_t *clip_map = brw_state_batch(brw, 4 * 4 * viewport_count,
-                                        32, &brw->clip.vp_offset);
+   uint32_t sf_vp_offset, clip_vp_offset;
+   uint32_t *sf_map =
+      brw_state_batch(brw, GENX(SF_VIEWPORT_length) * 4 * viewport_count,
+                      32, &sf_vp_offset);
+   uint32_t *clip_map =
+      brw_state_batch(brw, GENX(CLIP_VIEWPORT_length) * 4 * viewport_count,
+                      32, &clip_vp_offset);
 #endif
 
    /* _NEW_BUFFERS */
@@ -2028,7 +2178,7 @@ genX(upload_sf_clip_viewport)(struct brw_context *brw)
       sfv.ViewportMatrixElementm30 = translate[0],
       sfv.ViewportMatrixElementm31 = translate[1] * y_scale + y_bias,
       sfv.ViewportMatrixElementm32 = translate[2],
-      brw_calculate_guardband_size(devinfo, fb_width, fb_height,
+      brw_calculate_guardband_size(fb_width, fb_height,
                                    sfv.ViewportMatrixElementm00,
                                    sfv.ViewportMatrixElementm11,
                                    sfv.ViewportMatrixElementm30,
@@ -2041,7 +2191,10 @@ genX(upload_sf_clip_viewport)(struct brw_context *brw)
       clv.YMinClipGuardband = gb_ymin;
       clv.YMaxClipGuardband = gb_ymax;
 
-#if GEN_GEN >= 8
+#if GEN_GEN < 6
+      set_scissor_bits(ctx, i, render_to_fbo, fb_width, fb_height,
+                       &sfv.ScissorRectangle);
+#elif GEN_GEN >= 8
       /* _NEW_VIEWPORT | _NEW_BUFFERS: Screen Space Viewport
        * The hardware will take the intersection of the drawing rectangle,
        * scissor rectangle, and the viewport extents. We don't need to be
@@ -2067,12 +2220,12 @@ genX(upload_sf_clip_viewport)(struct brw_context *brw)
 
 #if GEN_GEN >= 7
       GENX(SF_CLIP_VIEWPORT_pack)(NULL, sf_clip_map, &sfv);
-      sf_clip_map += 16;
+      sf_clip_map += GENX(SF_CLIP_VIEWPORT_length);
 #else
       GENX(SF_VIEWPORT_pack)(NULL, sf_map, &sfv);
       GENX(CLIP_VIEWPORT_pack)(NULL, clip_map, &clv);
-      sf_map += 8;
-      clip_map += 4;
+      sf_map += GENX(SF_VIEWPORT_length);
+      clip_map += GENX(CLIP_VIEWPORT_length);
 #endif
    }
 
@@ -2080,7 +2233,16 @@ genX(upload_sf_clip_viewport)(struct brw_context *brw)
    brw_batch_emit(brw, GENX(3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP), ptr) {
       ptr.SFClipViewportPointer = sf_clip_vp_offset;
    }
+#elif GEN_GEN == 6
+   brw_batch_emit(brw, GENX(3DSTATE_VIEWPORT_STATE_POINTERS), vp) {
+      vp.SFViewportStateChange = 1;
+      vp.CLIPViewportStateChange = 1;
+      vp.PointertoCLIP_VIEWPORT = clip_vp_offset;
+      vp.PointertoSF_VIEWPORT = sf_vp_offset;
+   }
 #else
+   brw->sf.vp_offset = sf_vp_offset;
+   brw->clip.vp_offset = clip_vp_offset;
    brw->ctx.NewDriverState |= BRW_NEW_SF_VP | BRW_NEW_CLIP_VP;
 #endif
 }
@@ -2088,14 +2250,14 @@ genX(upload_sf_clip_viewport)(struct brw_context *brw)
 static const struct brw_tracked_state genX(sf_clip_viewport) = {
    .dirty = {
       .mesa = _NEW_BUFFERS |
-              _NEW_VIEWPORT,
+              _NEW_VIEWPORT |
+              (GEN_GEN <= 5 ? _NEW_SCISSOR : 0),
       .brw = BRW_NEW_BATCH |
              BRW_NEW_BLORP |
              BRW_NEW_VIEWPORT_COUNT,
    },
    .emit = genX(upload_sf_clip_viewport),
 };
-#endif
 
 /* ---------------------------------------------------------------------- */
 
@@ -2485,92 +2647,6 @@ static const struct brw_tracked_state genX(blend_state) = {
              BRW_NEW_STATE_BASE_ADDRESS,
    },
    .emit = genX(upload_blend_state),
-};
-#endif
-
-/* ---------------------------------------------------------------------- */
-
-#if GEN_GEN >= 6
-static void
-genX(upload_scissor_state)(struct brw_context *brw)
-{
-   struct gl_context *ctx = &brw->ctx;
-   const bool render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
-   struct GENX(SCISSOR_RECT) scissor;
-   uint32_t scissor_state_offset;
-   const unsigned int fb_width = _mesa_geometric_width(ctx->DrawBuffer);
-   const unsigned int fb_height = _mesa_geometric_height(ctx->DrawBuffer);
-   uint32_t *scissor_map;
-
-   /* BRW_NEW_VIEWPORT_COUNT */
-   const unsigned viewport_count = brw->clip.viewport_count;
-
-   scissor_map = brw_state_batch(
-      brw, GENX(SCISSOR_RECT_length) * sizeof(uint32_t) * viewport_count,
-      32, &scissor_state_offset);
-
-   /* _NEW_SCISSOR | _NEW_BUFFERS | _NEW_VIEWPORT */
-
-   /* The scissor only needs to handle the intersection of drawable and
-    * scissor rect.  Clipping to the boundaries of static shared buffers
-    * for front/back/depth is covered by looping over cliprects in brw_draw.c.
-    *
-    * Note that the hardware's coordinates are inclusive, while Mesa's min is
-    * inclusive but max is exclusive.
-    */
-   for (unsigned i = 0; i < viewport_count; i++) {
-      int bbox[4];
-
-      bbox[0] = MAX2(ctx->ViewportArray[i].X, 0);
-      bbox[1] = MIN2(bbox[0] + ctx->ViewportArray[i].Width, fb_width);
-      bbox[2] = MAX2(ctx->ViewportArray[i].Y, 0);
-      bbox[3] = MIN2(bbox[2] + ctx->ViewportArray[i].Height, fb_height);
-      _mesa_intersect_scissor_bounding_box(ctx, i, bbox);
-
-      if (bbox[0] == bbox[1] || bbox[2] == bbox[3]) {
-         /* If the scissor was out of bounds and got clamped to 0 width/height
-          * at the bounds, the subtraction of 1 from maximums could produce a
-          * negative number and thus not clip anything.  Instead, just provide
-          * a min > max scissor inside the bounds, which produces the expected
-          * no rendering.
-          */
-         scissor.ScissorRectangleXMin = 1;
-         scissor.ScissorRectangleXMax = 0;
-         scissor.ScissorRectangleYMin = 1;
-         scissor.ScissorRectangleYMax = 0;
-      } else if (render_to_fbo) {
-         /* texmemory: Y=0=bottom */
-         scissor.ScissorRectangleXMin = bbox[0];
-         scissor.ScissorRectangleXMax = bbox[1] - 1;
-         scissor.ScissorRectangleYMin = bbox[2];
-         scissor.ScissorRectangleYMax = bbox[3] - 1;
-      } else {
-         /* memory: Y=0=top */
-         scissor.ScissorRectangleXMin = bbox[0];
-         scissor.ScissorRectangleXMax = bbox[1] - 1;
-         scissor.ScissorRectangleYMin = fb_height - bbox[3];
-         scissor.ScissorRectangleYMax = fb_height - bbox[2] - 1;
-      }
-
-      GENX(SCISSOR_RECT_pack)(
-         NULL, scissor_map + i * GENX(SCISSOR_RECT_length), &scissor);
-   }
-
-   brw_batch_emit(brw, GENX(3DSTATE_SCISSOR_STATE_POINTERS), ptr) {
-      ptr.ScissorRectPointer = scissor_state_offset;
-   }
-}
-
-static const struct brw_tracked_state genX(scissor_state) = {
-   .dirty = {
-      .mesa = _NEW_BUFFERS |
-              _NEW_SCISSOR |
-              _NEW_VIEWPORT,
-      .brw = BRW_NEW_BATCH |
-             BRW_NEW_BLORP |
-             BRW_NEW_VIEWPORT_COUNT,
-   },
-   .emit = genX(upload_scissor_state),
 };
 #endif
 
@@ -3115,7 +3191,7 @@ genX(upload_3dstate_so_buffers)(struct brw_context *brw)
 #else
    struct brw_transform_feedback_object *brw_obj =
       (struct brw_transform_feedback_object *) xfb_obj;
-   uint32_t mocs_wb = brw->gen >= 9 ? SKL_MOCS_WB : BDW_MOCS_WB;
+   uint32_t mocs_wb = GEN_GEN >= 9 ? SKL_MOCS_WB : BDW_MOCS_WB;
 #endif
 
    /* Set up the up to 4 output buffers.  These are the ranges defined in the
@@ -4070,36 +4146,6 @@ static const struct brw_tracked_state genX(vf_topology) = {
 
 /* ---------------------------------------------------------------------- */
 
-#if GEN_GEN == 6
-static void
-genX(upload_viewport_state_pointers)(struct brw_context *brw)
-{
-   brw_batch_emit(brw, GENX(3DSTATE_VIEWPORT_STATE_POINTERS), vp) {
-      vp.CCViewportStateChange = 1;
-      vp.SFViewportStateChange = 1;
-      vp.CLIPViewportStateChange = 1;
-      vp.PointertoCLIP_VIEWPORT = brw->clip.vp_offset;
-      vp.PointertoSF_VIEWPORT = brw->sf.vp_offset;
-      vp.PointertoCC_VIEWPORT = brw->cc.vp_offset;
-   }
-}
-
-static const struct brw_tracked_state genX(viewport_state) = {
-   .dirty = {
-      .mesa = 0,
-      .brw = BRW_NEW_BATCH |
-             BRW_NEW_BLORP |
-             BRW_NEW_CC_VP |
-             BRW_NEW_CLIP_VP |
-             BRW_NEW_SF_VP |
-             BRW_NEW_STATE_BASE_ADDRESS,
-   },
-   .emit = genX(upload_viewport_state_pointers),
-};
-#endif
-
-/* ---------------------------------------------------------------------- */
-
 void
 genX(init_atoms)(struct brw_context *brw)
 {
@@ -4113,7 +4159,7 @@ genX(init_atoms)(struct brw_context *brw)
       &brw_curbe_offsets,
       &brw_recalculate_urb_fence,
 
-      &brw_cc_vp,
+      &genX(cc_vp),
       &brw_cc_unit,
 
       /* Surface state setup.  Must come before the VS/WM unit.  The binding
@@ -4132,7 +4178,7 @@ genX(init_atoms)(struct brw_context *brw)
 
       /* These set up state for brw_psp_urb_cbs */
       &brw_wm_unit,
-      &brw_sf_vp,
+      &genX(sf_clip_viewport),
       &brw_sf_unit,
       &genX(vs_state), /* always required, enabled or not */
       &brw_clip_unit,
@@ -4168,8 +4214,7 @@ genX(init_atoms)(struct brw_context *brw)
 
       /* Command packets: */
 
-      &brw_cc_vp,
-      &genX(viewport_state),	/* must do after *_vp stages */
+      &genX(cc_vp),
 
       &gen6_urb,
       &genX(blend_state),		/* must do before cc unit */
@@ -4231,7 +4276,7 @@ genX(init_atoms)(struct brw_context *brw)
    {
       /* Command packets: */
 
-      &brw_cc_vp,
+      &genX(cc_vp),
       &genX(sf_clip_viewport),
 
       &gen7_l3_state,
@@ -4321,7 +4366,7 @@ genX(init_atoms)(struct brw_context *brw)
 #elif GEN_GEN >= 8
    static const struct brw_tracked_state *render_atoms[] =
    {
-      &brw_cc_vp,
+      &genX(cc_vp),
       &genX(sf_clip_viewport),
 
       &gen7_l3_state,

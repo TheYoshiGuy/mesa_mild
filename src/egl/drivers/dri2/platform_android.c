@@ -315,6 +315,7 @@ droid_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
 		    _EGLConfig *conf, void *native_window,
 		    const EGLint *attrib_list)
 {
+   __DRIcreateNewDrawableFunc createNewDrawable;
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct dri2_egl_config *dri2_conf = dri2_egl_config(conf);
    struct dri2_egl_surface *dri2_surf;
@@ -356,11 +357,15 @@ droid_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
    if (!config)
       goto cleanup_surface;
 
-   dri2_surf->dri_drawable =
-      dri2_dpy->dri2->createNewDrawable(dri2_dpy->dri_screen, config,
-                                        dri2_surf);
+   if (dri2_dpy->image_driver)
+      createNewDrawable = dri2_dpy->image_driver->createNewDrawable;
+   else
+      createNewDrawable = dri2_dpy->dri2->createNewDrawable;
+
+   dri2_surf->dri_drawable = (*createNewDrawable)(dri2_dpy->dri_screen, config,
+                                                  dri2_surf);
    if (dri2_surf->dri_drawable == NULL) {
-      _eglError(EGL_BAD_ALLOC, "dri2->createNewDrawable");
+      _eglError(EGL_BAD_ALLOC, "createNewDrawable");
       goto cleanup_surface;
    }
 
@@ -1050,7 +1055,7 @@ droid_open_device(struct dri2_egl_display *dri2_dpy)
    return (fd >= 0) ? fcntl(fd, F_DUPFD_CLOEXEC, 3) : -1;
 }
 
-static struct dri2_egl_display_vtbl droid_display_vtbl = {
+static const struct dri2_egl_display_vtbl droid_display_vtbl = {
    .authenticate = NULL,
    .create_window_surface = droid_create_window_surface,
    .create_pixmap_surface = dri2_fallback_create_pixmap_surface,
@@ -1112,11 +1117,12 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *dpy)
    if (!dri2_dpy)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
+   dri2_dpy->fd = -1;
    ret = hw_get_module(GRALLOC_HARDWARE_MODULE_ID,
                        (const hw_module_t **)&dri2_dpy->gralloc);
    if (ret) {
       err = "DRI2: failed to get gralloc module";
-      goto cleanup_display;
+      goto cleanup;
    }
 
    dpy->DriverData = (void *) dri2_dpy;
@@ -1124,37 +1130,46 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *dpy)
    dri2_dpy->fd = droid_open_device(dri2_dpy);
    if (dri2_dpy->fd < 0) {
       err = "DRI2: failed to open device";
-      goto cleanup_display;
+      goto cleanup;
    }
 
    dri2_dpy->driver_name = loader_get_driver_for_fd(dri2_dpy->fd);
    if (dri2_dpy->driver_name == NULL) {
       err = "DRI2: failed to get driver name";
-      goto cleanup_device;
-   }
-
-   if (!dri2_load_driver(dpy)) {
-      err = "DRI2: failed to load driver";
-      goto cleanup_driver_name;
+      goto cleanup;
    }
 
    dri2_dpy->is_render_node = drmGetNodeTypeFromFd(dri2_dpy->fd) == DRM_NODE_RENDER;
 
    /* render nodes cannot use Gem names, and thus do not support
     * the __DRI_DRI2_LOADER extension */
-   if (!dri2_dpy->is_render_node)
+   if (!dri2_dpy->is_render_node) {
       dri2_dpy->loader_extensions = droid_dri2_loader_extensions;
-   else
+      if (!dri2_load_driver(dpy)) {
+         err = "DRI2: failed to load driver";
+         goto cleanup;
+      }
+   } else {
       dri2_dpy->loader_extensions = droid_image_loader_extensions;
+      if (!dri2_load_driver_dri3(dpy)) {
+         err = "DRI3: failed to load driver";
+         goto cleanup;
+      }
+   }
 
    if (!dri2_create_screen(dpy)) {
       err = "DRI2: failed to create screen";
-      goto cleanup_driver;
+      goto cleanup;
    }
+
+   if (!dri2_setup_extensions(dpy))
+      goto cleanup;
+
+   dri2_setup_screen(dpy);
 
    if (!droid_add_configs_for_visuals(drv, dpy)) {
       err = "DRI2: failed to add configs";
-      goto cleanup_screen;
+      goto cleanup;
    }
 
    dpy->Extensions.ANDROID_framebuffer_target = EGL_TRUE;
@@ -1169,17 +1184,7 @@ dri2_initialize_android(_EGLDriver *drv, _EGLDisplay *dpy)
 
    return EGL_TRUE;
 
-cleanup_screen:
-   dri2_dpy->core->destroyScreen(dri2_dpy->dri_screen);
-cleanup_driver:
-   dlclose(dri2_dpy->driver);
-cleanup_driver_name:
-   free(dri2_dpy->driver_name);
-cleanup_device:
-   close(dri2_dpy->fd);
-cleanup_display:
-   free(dri2_dpy);
-   dpy->DriverData = NULL;
-
+cleanup:
+   dri2_display_destroy(dpy);
    return _eglError(EGL_NOT_INITIALIZED, err);
 }

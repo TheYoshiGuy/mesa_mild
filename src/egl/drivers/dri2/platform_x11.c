@@ -817,8 +817,7 @@ dri2_copy_region(_EGLDriver *drv, _EGLDisplay *disp,
    if (draw->Type == EGL_PIXMAP_BIT || draw->Type == EGL_PBUFFER_BIT)
       return EGL_TRUE;
 
-   if (dri2_dpy->flush)
-      dri2_dpy->flush->flush(dri2_surf->dri_drawable);
+   dri2_dpy->flush->flush(dri2_surf->dri_drawable);
 
    if (dri2_surf->have_fake_front)
       render_attachment = XCB_DRI2_ATTACHMENT_BUFFER_FAKE_FRONT_LEFT;
@@ -880,8 +879,7 @@ dri2_x11_swap_buffers_msc(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw,
     * happened.  The driver should still be using the viewport hack to catch
     * window resizes.
     */
-   if (dri2_dpy->flush &&
-       dri2_dpy->flush->base.version >= 3 && dri2_dpy->flush->invalidate)
+   if (dri2_dpy->flush->base.version >= 3 && dri2_dpy->flush->invalidate)
       dri2_dpy->flush->invalidate(dri2_surf->dri_drawable);
 
    return swap_count;
@@ -893,19 +891,17 @@ dri2_x11_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct dri2_egl_surface *dri2_surf = dri2_egl_surface(draw);
 
-   if (dri2_dpy->dri2) {
-      if (dri2_x11_swap_buffers_msc(drv, disp, draw, 0, 0, 0) != -1) {
-          return EGL_TRUE;
-      }
-      /* Swap failed with a window drawable. */
-      _eglError(EGL_BAD_NATIVE_WINDOW, __func__);
-      return EGL_FALSE;
-   } else {
-      assert(dri2_dpy->swrast);
-
+   if (!dri2_dpy->flush) {
       dri2_dpy->core->swapBuffers(dri2_surf->dri_drawable);
       return EGL_TRUE;
    }
+
+   if (dri2_x11_swap_buffers_msc(drv, disp, draw, 0, 0, 0) == -1) {
+      /* Swap failed with a window drawable. */
+      _eglError(EGL_BAD_NATIVE_WINDOW, __func__);
+      return EGL_FALSE;
+   }
+   return EGL_TRUE;
 }
 
 static EGLBoolean
@@ -1135,7 +1131,7 @@ dri2_x11_get_sync_values(_EGLDisplay *display, _EGLSurface *surface,
    return EGL_TRUE;
 }
 
-static struct dri2_egl_display_vtbl dri2_x11_swrast_display_vtbl = {
+static const struct dri2_egl_display_vtbl dri2_x11_swrast_display_vtbl = {
    .authenticate = NULL,
    .create_window_surface = dri2_x11_create_window_surface,
    .create_pixmap_surface = dri2_x11_create_pixmap_surface,
@@ -1154,7 +1150,7 @@ static struct dri2_egl_display_vtbl dri2_x11_swrast_display_vtbl = {
    .get_dri_drawable = dri2_surface_get_dri_drawable,
 };
 
-static struct dri2_egl_display_vtbl dri2_x11_display_vtbl = {
+static const struct dri2_egl_display_vtbl dri2_x11_display_vtbl = {
    .authenticate = dri2_x11_authenticate,
    .create_window_surface = dri2_x11_create_window_surface,
    .create_pixmap_surface = dri2_x11_create_pixmap_surface,
@@ -1235,25 +1231,30 @@ dri2_initialize_x11_swrast(_EGLDriver *drv, _EGLDisplay *disp)
    if (!dri2_dpy)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
+   dri2_dpy->fd = -1;
    if (!dri2_get_xcb_connection(drv, disp, dri2_dpy))
-      goto cleanup_dpy;
+      goto cleanup;
 
    /*
     * Every hardware driver_name is set using strdup. Doing the same in
     * here will allow is to simply free the memory at dri2_terminate().
     */
-   dri2_dpy->fd = -1;
    dri2_dpy->driver_name = strdup("swrast");
    if (!dri2_load_driver_swrast(disp))
-      goto cleanup_conn;
+      goto cleanup;
 
    dri2_dpy->loader_extensions = swrast_loader_extensions;
 
    if (!dri2_create_screen(disp))
-      goto cleanup_driver;
+      goto cleanup;
+
+   if (!dri2_setup_extensions(disp))
+      goto cleanup;
+
+   dri2_setup_screen(disp);
 
    if (!dri2_x11_add_configs_for_visuals(dri2_dpy, disp, true))
-      goto cleanup_configs;
+      goto cleanup;
 
    /* Fill vtbl last to prevent accidentally calling virtual function during
     * initialization.
@@ -1262,19 +1263,8 @@ dri2_initialize_x11_swrast(_EGLDriver *drv, _EGLDisplay *disp)
 
    return EGL_TRUE;
 
- cleanup_configs:
-   _eglCleanupDisplay(disp);
-   dri2_dpy->core->destroyScreen(dri2_dpy->dri_screen);
- cleanup_driver:
-   dlclose(dri2_dpy->driver);
- cleanup_conn:
-   free(dri2_dpy->driver_name);
-   if (disp->PlatformDisplay == NULL)
-      xcb_disconnect(dri2_dpy->conn);
- cleanup_dpy:
-   free(dri2_dpy);
-   disp->DriverData = NULL;
-
+ cleanup:
+   dri2_display_destroy(disp);
    return EGL_FALSE;
 }
 
@@ -1342,14 +1332,15 @@ dri2_initialize_x11_dri3(_EGLDriver *drv, _EGLDisplay *disp)
    if (!dri2_dpy)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
+   dri2_dpy->fd = -1;
    if (!dri2_get_xcb_connection(drv, disp, dri2_dpy))
-      goto cleanup_dpy;
+      goto cleanup;
 
    if (!dri3_x11_connect(dri2_dpy))
-      goto cleanup_conn;
+      goto cleanup;
 
    if (!dri2_load_driver_dri3(disp))
-      goto cleanup_conn;
+      goto cleanup;
 
    dri2_dpy->loader_extensions = dri3_image_loader_extensions;
 
@@ -1357,7 +1348,12 @@ dri2_initialize_x11_dri3(_EGLDriver *drv, _EGLDisplay *disp)
    dri2_dpy->invalidate_available = true;
 
    if (!dri2_create_screen(disp))
-      goto cleanup_fd;
+      goto cleanup;
+
+   if (!dri2_setup_extensions(disp))
+      goto cleanup;
+
+   dri2_setup_screen(disp);
 
    dri2_x11_setup_swap_interval(dri2_dpy);
 
@@ -1370,7 +1366,7 @@ dri2_initialize_x11_dri3(_EGLDriver *drv, _EGLDisplay *disp)
    dri2_set_WL_bind_wayland_display(drv, disp);
 
    if (!dri2_x11_add_configs_for_visuals(dri2_dpy, disp, false))
-      goto cleanup_configs;
+      goto cleanup;
 
    dri2_dpy->loader_dri3_ext.core = dri2_dpy->core;
    dri2_dpy->loader_dri3_ext.image_driver = dri2_dpy->image_driver;
@@ -1388,19 +1384,8 @@ dri2_initialize_x11_dri3(_EGLDriver *drv, _EGLDisplay *disp)
 
    return EGL_TRUE;
 
- cleanup_configs:
-   _eglCleanupDisplay(disp);
-   dri2_dpy->core->destroyScreen(dri2_dpy->dri_screen);
-   dlclose(dri2_dpy->driver);
- cleanup_fd:
-   close(dri2_dpy->fd);
- cleanup_conn:
-   if (disp->PlatformDisplay == NULL)
-      xcb_disconnect(dri2_dpy->conn);
- cleanup_dpy:
-   free(dri2_dpy);
-   disp->DriverData = NULL;
-
+ cleanup:
+   dri2_display_destroy(disp);
    return EGL_FALSE;
 }
 #endif
@@ -1444,14 +1429,15 @@ dri2_initialize_x11_dri2(_EGLDriver *drv, _EGLDisplay *disp)
    if (!dri2_dpy)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
+   dri2_dpy->fd = -1;
    if (!dri2_get_xcb_connection(drv, disp, dri2_dpy))
-      goto cleanup_dpy;
+      goto cleanup;
 
    if (!dri2_x11_connect(dri2_dpy))
-      goto cleanup_conn;
+      goto cleanup;
 
    if (!dri2_load_driver(disp))
-      goto cleanup_fd;
+      goto cleanup;
 
    if (dri2_dpy->dri2_minor >= 1)
       dri2_dpy->loader_extensions = dri2_loader_extensions;
@@ -1462,7 +1448,12 @@ dri2_initialize_x11_dri2(_EGLDriver *drv, _EGLDisplay *disp)
    dri2_dpy->invalidate_available = (dri2_dpy->dri2_minor >= 3);
 
    if (!dri2_create_screen(disp))
-      goto cleanup_driver;
+      goto cleanup;
+
+   if (!dri2_setup_extensions(disp))
+      goto cleanup;
+
+   dri2_setup_screen(disp);
 
    dri2_x11_setup_swap_interval(dri2_dpy);
 
@@ -1475,7 +1466,7 @@ dri2_initialize_x11_dri2(_EGLDriver *drv, _EGLDisplay *disp)
    dri2_set_WL_bind_wayland_display(drv, disp);
 
    if (!dri2_x11_add_configs_for_visuals(dri2_dpy, disp, true))
-      goto cleanup_configs;
+      goto cleanup;
 
    /* Fill vtbl last to prevent accidentally calling virtual function during
     * initialization.
@@ -1486,20 +1477,8 @@ dri2_initialize_x11_dri2(_EGLDriver *drv, _EGLDisplay *disp)
 
    return EGL_TRUE;
 
- cleanup_configs:
-   _eglCleanupDisplay(disp);
-   dri2_dpy->core->destroyScreen(dri2_dpy->dri_screen);
- cleanup_driver:
-   dlclose(dri2_dpy->driver);
- cleanup_fd:
-   close(dri2_dpy->fd);
- cleanup_conn:
-   if (disp->PlatformDisplay == NULL)
-      xcb_disconnect(dri2_dpy->conn);
- cleanup_dpy:
-   free(dri2_dpy);
-   disp->DriverData = NULL;
-
+ cleanup:
+   dri2_display_destroy(disp);
    return EGL_FALSE;
 }
 
