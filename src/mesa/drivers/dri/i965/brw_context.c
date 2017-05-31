@@ -1422,7 +1422,7 @@ intel_update_dri2_buffers(struct brw_context *brw, __DRIdrawable *drawable)
    struct gl_framebuffer *fb = drawable->driverPrivate;
    struct intel_renderbuffer *rb;
    __DRIbuffer *buffers = NULL;
-   int i, count;
+   int count;
    const char *region_name;
 
    /* Set this up front, so that in case our buffers get invalidated
@@ -1438,7 +1438,7 @@ intel_update_dri2_buffers(struct brw_context *brw, __DRIdrawable *drawable)
    if (buffers == NULL)
       return;
 
-   for (i = 0; i < count; i++) {
+   for (int i = 0; i < count; i++) {
        switch (buffers[i].attachment) {
        case __DRI_BUFFER_FRONT_LEFT:
            rb = intel_get_renderbuffer(fb, BUFFER_FRONT_LEFT);
@@ -1751,7 +1751,7 @@ intel_update_image_buffers(struct brw_context *brw, __DRIdrawable *drawable)
    struct intel_renderbuffer *front_rb;
    struct intel_renderbuffer *back_rb;
    struct __DRIimageList images;
-   unsigned int format;
+   mesa_format format;
    uint32_t buffer_mask = 0;
    int ret;
 
@@ -1791,6 +1791,7 @@ intel_update_image_buffers(struct brw_context *brw, __DRIdrawable *drawable)
                                 images.front,
                                 __DRI_IMAGE_BUFFER_FRONT);
    }
+
    if (images.image_mask & __DRI_IMAGE_BUFFER_BACK) {
       drawable->w = images.back->width;
       drawable->h = images.back->height;

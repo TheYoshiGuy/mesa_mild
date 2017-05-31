@@ -197,9 +197,16 @@ enum SWR_VTX_SLOTS
 // SoAoSoA
 struct simdvertex
 {
-    simdvector    attrib[SWR_VTX_NUM_SLOTS];
+    simdvector      attrib[SWR_VTX_NUM_SLOTS];
 };
 
+#if ENABLE_AVX512_SIMD16
+struct simd16vertex
+{
+    simd16vector    attrib[SWR_VTX_NUM_SLOTS];
+};
+
+#endif
 //////////////////////////////////////////////////////////////////////////
 /// SWR_VS_CONTEXT
 /// @brief Input to vertex shader
@@ -335,11 +342,11 @@ struct SWR_PS_CONTEXT
     simdvector shaded[SWR_NUM_RENDERTARGETS];
                                 // OUT: result color per rendertarget
 
-    uint32_t frontFace;         // IN: front- 1, back- 0
-    uint32_t primID;            // IN: primitive ID
-    uint32_t sampleIndex;       // IN: sampleIndex
-
-    uint32_t rasterizerSampleCount; // IN: sample count used by the rasterizer
+    uint32_t frontFace;                 // IN: front- 1, back- 0
+    uint32_t primID;                    // IN: primitive ID
+    uint32_t sampleIndex;               // IN: sampleIndex
+    uint32_t renderTargetArrayIndex;    // IN: render target array index from GS
+    uint32_t rasterizerSampleCount;     // IN: sample count used by the rasterizer
 
     uint8_t* pColorBuffer[SWR_NUM_RENDERTARGETS]; // IN: Pointers to render target hottiles
 };
@@ -1038,6 +1045,7 @@ struct SWR_RASTSTATE
     uint8_t cullDistanceMask;
     uint8_t clipDistanceMask;
 };
+
 
 enum SWR_CONSTANT_SOURCE
 {

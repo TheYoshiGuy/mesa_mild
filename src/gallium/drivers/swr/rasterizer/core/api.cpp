@@ -329,7 +329,6 @@ DRAW_CONTEXT* GetDrawContext(SWR_CONTEXT *pContext, bool isSplitDraw = false)
         pCurDrawContext->drawId = pContext->dcRing.GetHead();
 
         pCurDrawContext->cleanupState = true;
-
     }
     else
     {
@@ -783,10 +782,12 @@ void SetupMacroTileScissors(DRAW_CONTEXT *pDC)
     }
 }
 
+
 // templated backend function tables
 extern PFN_BACKEND_FUNC gBackendNullPs[SWR_MULTISAMPLE_TYPE_COUNT];
 extern PFN_BACKEND_FUNC gBackendSingleSample[SWR_INPUT_COVERAGE_COUNT][2][2];
 extern PFN_BACKEND_FUNC gBackendSampleRateTable[SWR_MULTISAMPLE_TYPE_COUNT][SWR_INPUT_COVERAGE_COUNT][2][2];
+
 void SetupPipeline(DRAW_CONTEXT *pDC)
 {
     DRAW_STATE* pState = pDC->pState;
@@ -804,7 +805,7 @@ void SetupPipeline(DRAW_CONTEXT *pDC)
         const uint32_t forcedSampleCount = (rastState.forcedSampleCount) ? 1 : 0;
         const bool bMultisampleEnable = ((rastState.sampleCount > SWR_MULTISAMPLE_1X) || forcedSampleCount) ? 1 : 0;
         const uint32_t centroid = ((psState.barycentricsMask & SWR_BARYCENTRIC_CENTROID_MASK) > 0) ? 1 : 0;
-        const uint32_t canEarlyZ = (psState.forceEarlyZ || (!psState.writesODepth && !psState.usesSourceDepth && !psState.usesUAV)) ? 1 : 0;
+        const uint32_t canEarlyZ = (psState.forceEarlyZ || (!psState.writesODepth && !psState.usesUAV)) ? 1 : 0;
         SWR_BARYCENTRICS_MASK barycentricsMask = (SWR_BARYCENTRICS_MASK)psState.barycentricsMask;
         
         // select backend function
@@ -1133,7 +1134,6 @@ void DrawInstanced(
         pState->rastState.cullMode = SWR_CULLMODE_NONE;
     }
 
-
     int draw = 0;
     while (remainingVerts)
     {
@@ -1173,7 +1173,6 @@ void DrawInstanced(
     // restore culling state
     pDC = GetDrawContext(pContext);
     pDC->pState->state.rastState.cullMode = oldCullMode;
-
 
     AR_API_END(APIDraw, numVertices * numInstances);
 }
@@ -1276,7 +1275,6 @@ void DrawIndexedInstance(
         pState->rastState.cullMode = SWR_CULLMODE_NONE;
     }
 
-
     while (remainingIndices)
     {
         uint32_t numIndicesForDraw = (remainingIndices < maxIndicesPerDraw) ?
@@ -1322,7 +1320,6 @@ void DrawIndexedInstance(
     pDC = GetDrawContext(pContext);
     pDC->pState->state.rastState.cullMode = oldCullMode;
  
-
     AR_API_END(APIDrawIndexed, numIndices * numInstances);
 }
 
@@ -1656,7 +1653,6 @@ void SwrInit()
     InitClearTilesTable();
     InitBackendFuncTables();
 }
-
 
 void SwrGetInterface(SWR_INTERFACE &out_funcs)
 {

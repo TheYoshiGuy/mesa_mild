@@ -488,6 +488,7 @@ _eglCreateExtensionsString(_EGLDisplay *dpy)
    _EGL_CHECK_EXTENSION(EXT_buffer_age);
    _EGL_CHECK_EXTENSION(EXT_create_context_robustness);
    _EGL_CHECK_EXTENSION(EXT_image_dma_buf_import);
+   _EGL_CHECK_EXTENSION(EXT_image_dma_buf_import_modifiers);
    _EGL_CHECK_EXTENSION(EXT_swap_buffers_with_damage);
 
    _EGL_CHECK_EXTENSION(KHR_cl_event2);
@@ -2384,6 +2385,44 @@ _eglFunctionCompare(const void *key, const void *elem)
    const char *procname = key;
    const struct _egl_entrypoint *entrypoint = elem;
    return strcmp(procname, entrypoint->name);
+}
+
+static EGLBoolean EGLAPIENTRY
+eglQueryDmaBufFormatsEXT(EGLDisplay dpy, EGLint max_formats,
+                         EGLint *formats, EGLint *num_formats)
+{
+   _EGLDisplay *disp = _eglLockDisplay(dpy);
+   _EGLDriver *drv;
+   EGLBoolean ret;
+
+   _EGL_FUNC_START(NULL, EGL_NONE, NULL, EGL_FALSE);
+
+   _EGL_CHECK_DISPLAY(disp, EGL_FALSE, drv);
+
+   ret = drv->API.QueryDmaBufFormatsEXT(drv, disp, max_formats, formats,
+                                        num_formats);
+
+   RETURN_EGL_EVAL(disp, ret);
+}
+
+static EGLBoolean EGLAPIENTRY
+eglQueryDmaBufModifiersEXT(EGLDisplay dpy, EGLint format, EGLint max_modifiers,
+                           EGLuint64KHR *modifiers, EGLBoolean *external_only,
+                           EGLint *num_modifiers)
+{
+   _EGLDisplay *disp = _eglLockDisplay(dpy);
+   _EGLDriver *drv;
+   EGLBoolean ret;
+
+   _EGL_FUNC_START(NULL, EGL_NONE, NULL, EGL_FALSE);
+
+   _EGL_CHECK_DISPLAY(disp, EGL_FALSE, drv);
+
+   ret = drv->API.QueryDmaBufModifiersEXT(drv, disp, format, max_modifiers,
+                                          modifiers, external_only,
+                                          num_modifiers);
+
+   RETURN_EGL_EVAL(disp, ret);
 }
 
 __eglMustCastToProperFunctionPointerType EGLAPIENTRY

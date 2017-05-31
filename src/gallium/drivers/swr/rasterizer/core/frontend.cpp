@@ -495,9 +495,6 @@ static void StreamOut(
     PA_STATE& pa,
     uint32_t workerId,
     uint32_t* pPrimData,
-#if USE_SIMD16_FRONTEND
-    uint32_t numPrims_simd8,
-#endif
     uint32_t streamIndex)
 {
     SWR_CONTEXT *pContext = pDC->pContext;
@@ -520,11 +517,7 @@ static void StreamOut(
         soContext.pBuffer[i] = &state.soBuffer[i];
     }
 
-#if USE_SIMD16_FRONTEND
-    uint32_t numPrims = numPrims_simd8;
-#else
     uint32_t numPrims = pa.NumPrims();
-#endif
 
     for (uint32_t primIndex = 0; primIndex < numPrims; ++primIndex)
     {
@@ -717,10 +710,6 @@ void ProcessStreamIdBuffer(uint32_t stream, uint8_t* pStreamIdBase, uint32_t num
 
 THREAD SWR_GS_CONTEXT tlsGsContext;
 
-#if USE_SIMD16_FRONTEND
-THREAD simd16vertex tempVertex_simd16[128];
-
-#endif
 template<typename SIMDVERTEX, uint32_t SIMD_WIDTH>
 struct GsBufferInfo
 {
@@ -819,7 +808,11 @@ static void GeometryShaderStage(
         tlsGsContext.vert[i].attrib[VERTEX_POSITION_SLOT] = attrib[i];
     }
 
+#if USE_SIMD16_FRONTEND
+    const GsBufferInfo<simd16vertex, KNOB_SIMD16_WIDTH> bufferInfo(state.gsState);
+#else
     const GsBufferInfo<simdvertex, KNOB_SIMD_WIDTH> bufferInfo(state.gsState);
+#endif
 
     // record valid prims from the frontend to avoid over binning the newly generated
     // prims from the GS
@@ -923,19 +916,7 @@ static void GeometryShaderStage(
                 }
 
 #if USE_SIMD16_FRONTEND
-                // TEMPORARY: GS outputs simdvertex, PA inputs simd16vertex, so convert simdvertex to simd16vertex
-
-                SWR_ASSERT(numEmittedVerts <= 256);
-
-                PackPairsOfSimdVertexIntoSimd16Vertex(
-                    tempVertex_simd16,
-                    reinterpret_cast<const simdvertex *>(pBase),
-                    numEmittedVerts,
-                    SWR_VTX_NUM_SLOTS);
-
-#endif
-#if USE_SIMD16_FRONTEND
-                PA_STATE_CUT gsPa(pDC, reinterpret_cast<uint8_t *>(tempVertex_simd16), numEmittedVerts, reinterpret_cast<simd16mask *>(pCutBuffer), numEmittedVerts, numAttribs, pState->outputTopology, processCutVerts);
+                PA_STATE_CUT gsPa(pDC, pBase, numEmittedVerts, reinterpret_cast<simd16mask *>(pCutBuffer), numEmittedVerts, numAttribs, pState->outputTopology, processCutVerts);
 
 #else
                 PA_STATE_CUT gsPa(pDC, pBase, numEmittedVerts, pCutBuffer, numEmittedVerts, numAttribs, pState->outputTopology, processCutVerts);
@@ -960,22 +941,8 @@ static void GeometryShaderStage(
 
                             if (HasStreamOutT::value)
                             {
-#if USE_SIMD16_FRONTEND
-                                const uint32_t numPrims = gsPa.NumPrims();
-                                const uint32_t numPrims_lo = std::min<uint32_t>(numPrims, KNOB_SIMD_WIDTH);
-                                const uint32_t numPrims_hi = std::max<uint32_t>(numPrims, KNOB_SIMD_WIDTH) - KNOB_SIMD_WIDTH;
-
                                 gsPa.useAlternateOffset = false;
-                                StreamOut(pDC, gsPa, workerId, pSoPrimData, numPrims_lo, stream);
-
-                                if (numPrims_hi)
-                                {
-                                    gsPa.useAlternateOffset = true;
-                                    StreamOut(pDC, gsPa, workerId, pSoPrimData, numPrims_hi, stream);
-                                }
-#else
                                 StreamOut(pDC, gsPa, workerId, pSoPrimData, stream);
-#endif
                             }
 
                             if (HasRastT::value && state.soState.streamToRasterizer == stream)
@@ -1372,18 +1339,8 @@ static void TessellationStages(
             {
                 if (HasStreamOutT::value)
                 {
-#if USE_SIMD16_FRONTEND
                     tessPa.useAlternateOffset = false;
-                    StreamOut(pDC, tessPa, workerId, pSoPrimData, numPrims_lo, 0);
-
-                    if (numPrims_hi)
-                    {
-                        tessPa.useAlternateOffset = true;
-                        StreamOut(pDC, tessPa, workerId, pSoPrimData, numPrims_hi, 0);
-                    }
-#else
                     StreamOut(pDC, tessPa, workerId, pSoPrimData, 0);
-#endif
                 }
 
                 if (HasRastT::value)
@@ -1759,19 +1716,8 @@ void ProcessDraw(
                                 // If streamout is enabled then stream vertices out to memory.
                                 if (HasStreamOutT::value)
                                 {
-#if 1
-                                    pa.useAlternateOffset = false;
-                                    StreamOut(pDC, pa, workerId, pSoPrimData, numPrims_lo, 0);
-
-                                    if (numPrims_hi)
-                                    {
-                                        pa.useAlternateOffset = true;
-                                        StreamOut(pDC, pa, workerId, pSoPrimData, numPrims_hi, 0);
-                                    }
-#else
                                     pa.useAlternateOffset = false;
                                     StreamOut(pDC, pa, workerId, pSoPrimData, 0);
-#endif
                                 }
 
                                 if (HasRastT::value)

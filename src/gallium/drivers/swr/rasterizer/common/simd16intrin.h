@@ -539,8 +539,6 @@ INLINE int SIMDAPI _simd16_testz_ps(simd16scalar a, simd16scalar b)
     return lo & hi;
 }
 
-#define _simd16_cmplt_epi32(a, b) _simd16_cmpgt_epi32(b, a)
-
 SIMD16_EMU_AVX512_2(simd16scalar, _simd16_unpacklo_ps, _simd_unpacklo_ps)
 SIMD16_EMU_AVX512_2(simd16scalar, _simd16_unpackhi_ps, _simd_unpackhi_ps)
 SIMD16_EMU_AVX512_2(simd16scalard, _simd16_unpacklo_pd, _simd_unpacklo_pd)
@@ -772,6 +770,26 @@ INLINE simd16scalari SIMDAPI _simd16_cvtepu16_epi32(simdscalari a)
     return result;
 }
 
+INLINE simd16scalari SIMDAPI _simd16_cvtepu16_epi64(simdscalari a)
+{
+    simd16scalari result;
+
+    result.lo = _simd_cvtepu16_epi64(_mm256_extractf128_si256(a, 0));
+    result.hi = _simd_cvtepu16_epi64(_mm256_extractf128_si256(a, 1));
+
+    return result;
+}
+
+INLINE simd16scalari SIMDAPI _simd16_cvtepu32_epi64(simdscalari a)
+{
+    simd16scalari result;
+
+    result.lo = _simd_cvtepu32_epi64(_mm256_extractf128_si256(a, 0));
+    result.hi = _simd_cvtepu32_epi64(_mm256_extractf128_si256(a, 1));
+
+    return result;
+}
+
 SIMD16_EMU_AVX512_2(simd16scalari, _simd16_packus_epi16, _simd_packus_epi16)
 SIMD16_EMU_AVX512_2(simd16scalari, _simd16_packs_epi16, _simd_packs_epi16)
 SIMD16_EMU_AVX512_2(simd16scalari, _simd16_packus_epi32, _simd_packus_epi32)
@@ -898,12 +916,14 @@ INLINE simd16scalari SIMDAPI _simd16_blendv_epi32(simd16scalari a, simd16scalari
 
 INLINE simd16mask SIMDAPI _simd16_movemask_ps(simd16scalar a)
 {
-    return  _simd16_scalari2mask(_mm512_castps_si512(a));
+    // movemask_ps only checks the top bit of the float single elements
+    return  _simd16_scalari2mask(_mm512_and_si512(_mm512_castps_si512(a), _mm512_set1_epi32(0x80000000)));
 }
 
 INLINE simd16mask SIMDAPI _simd16_movemask_pd(simd16scalard a)
 {
-    return  _simd16_scalard2mask(a);
+    // movemask_pd only checks the top bit of the float double elements
+    return  _simd16_scalard2mask(_mm512_castsi512_pd(_mm512_and_si512(_mm512_castpd_si512(a), _mm512_set1_epi64(0x8000000000000000))));
 }
 
 #if 0
@@ -941,10 +961,16 @@ INLINE simd16scalar SIMDAPI _simd16_cmp_ps_temp(simd16scalar a, simd16scalar b)
 #define _simd16_castpd_ps           _mm512_castpd_ps
 #define _simd16_castps_pd           _mm512_castps_pd
 
-#define _simd16_and_ps              _mm512_and_ps
-#define _simd16_andnot_ps           _mm512_andnot_ps
-#define _simd16_or_ps               _mm512_or_ps
-#define _simd16_xor_ps              _mm512_xor_ps
+// _mm512_and_ps (and other bitwise operations) exist in AVX512DQ,
+// while the functionally equivalent _mm512_and_epi32 is in AVX512F.
+// Define the _simd16_*_ps versions in terms of AVX512F for broader
+// support.
+#define _simd16_logicop_ps(a, b, op) _simd16_castsi_ps(op##_epi32(_simd16_castps_si(a), _simd16_castps_si(b)))
+
+#define _simd16_and_ps(a, b)        _simd16_logicop_ps(a, b, _mm512_and)
+#define _simd16_andnot_ps(a, b)     _simd16_logicop_ps(a, b, _mm512_andnot)
+#define _simd16_or_ps(a, b)         _simd16_logicop_ps(a, b, _mm512_or)
+#define _simd16_xor_ps(a, b)        _simd16_logicop_ps(a, b, _mm512_xor)
 
 template <int mode>
 INLINE simd16scalar SIMDAPI _simd16_round_ps_temp(simd16scalar a)
@@ -1091,6 +1117,8 @@ INLINE simd16scalari SIMDAPI _simd16_cmpgt_epi8(simd16scalari a, simd16scalari b
 #define _simd16_cvtepu8_epi16           _mm512_cvtepu8_epi16
 #define _simd16_cvtepu8_epi32           _mm512_cvtepu8_epi32
 #define _simd16_cvtepu16_epi32          _mm512_cvtepu16_epi32
+#define _simd16_cvtepu16_epi64          _mm512_cvtepu16_epi64
+#define _simd16_cvtepu32_epi64          _mm512_cvtepu32_epi64
 #define _simd16_packus_epi16            _mm512_packus_epi16
 #define _simd16_packs_epi16             _mm512_packs_epi16
 #define _simd16_packus_epi32            _mm512_packus_epi32

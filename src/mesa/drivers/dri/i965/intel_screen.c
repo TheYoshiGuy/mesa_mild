@@ -1156,7 +1156,11 @@ intelDestroyScreen(__DRIscreen * sPriv)
 
 
 /**
- * This is called when we need to set up GL rendering to a new X window.
+ * Create a gl_framebuffer and attach it to __DRIdrawable::driverPrivate.
+ *
+ *_This implements driDriverAPI::createNewDrawable, which the DRI layer calls
+ * when creating a EGLSurface, GLXDrawable, or GLXPixmap. Despite the name,
+ * this does not allocate GPU memory.
  */
 static GLboolean
 intelCreateBuffer(__DRIscreen *dri_screen,
@@ -1169,12 +1173,11 @@ intelCreateBuffer(__DRIscreen *dri_screen,
    mesa_format rgbFormat;
    unsigned num_samples =
       intel_quantize_num_samples(screen, mesaVis->samples);
-   struct gl_framebuffer *fb;
 
    if (isPixmap)
       return false;
 
-   fb = CALLOC_STRUCT(gl_framebuffer);
+   struct gl_framebuffer *fb = CALLOC_STRUCT(gl_framebuffer);
    if (!fb)
       return false;
 
@@ -1201,11 +1204,11 @@ intelCreateBuffer(__DRIscreen *dri_screen,
    }
 
    /* setup the hardware-based renderbuffers */
-   rb = intel_create_renderbuffer(rgbFormat, num_samples);
+   rb = intel_create_winsys_renderbuffer(rgbFormat, num_samples);
    _mesa_attach_and_own_rb(fb, BUFFER_FRONT_LEFT, &rb->Base.Base);
 
    if (mesaVis->doubleBufferMode) {
-      rb = intel_create_renderbuffer(rgbFormat, num_samples);
+      rb = intel_create_winsys_renderbuffer(rgbFormat, num_samples);
       _mesa_attach_and_own_rb(fb, BUFFER_BACK_LEFT, &rb->Base.Base);
    }
 
