@@ -838,6 +838,18 @@ void si_write_scissors(struct radeon_winsys_cs *cs, int first,
 uint32_t si_get_ia_multi_vgt_param(struct radv_cmd_buffer *cmd_buffer,
 				   bool instanced_draw, bool indirect_draw,
 				   uint32_t draw_vertex_count);
+void si_cs_emit_write_event_eop(struct radeon_winsys_cs *cs,
+				enum chip_class chip_class,
+				bool is_mec,
+				unsigned event, unsigned event_flags,
+				unsigned data_sel,
+				uint64_t va,
+				uint32_t old_fence,
+				uint32_t new_fence);
+
+void si_emit_wait_fence(struct radeon_winsys_cs *cs,
+			uint64_t va, uint32_t ref,
+			uint32_t mask);
 void si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
                             enum chip_class chip_class,
                             bool is_mec,
@@ -1323,36 +1335,36 @@ struct radv_sampler {
 };
 
 struct radv_color_buffer_info {
-	uint32_t cb_color_base;
+	uint64_t cb_color_base;
+	uint64_t cb_color_cmask;
+	uint64_t cb_color_fmask;
+	uint64_t cb_dcc_base;
 	uint32_t cb_color_pitch;
 	uint32_t cb_color_slice;
 	uint32_t cb_color_view;
 	uint32_t cb_color_info;
 	uint32_t cb_color_attrib;
 	uint32_t cb_dcc_control;
-	uint32_t cb_color_cmask;
 	uint32_t cb_color_cmask_slice;
-	uint32_t cb_color_fmask;
 	uint32_t cb_color_fmask_slice;
 	uint32_t cb_clear_value0;
 	uint32_t cb_clear_value1;
-	uint32_t cb_dcc_base;
 	uint32_t micro_tile_mode;
 };
 
 struct radv_ds_buffer_info {
+	uint64_t db_z_read_base;
+	uint64_t db_stencil_read_base;
+	uint64_t db_z_write_base;
+	uint64_t db_stencil_write_base;
+	uint64_t db_htile_data_base;
 	uint32_t db_depth_info;
 	uint32_t db_z_info;
 	uint32_t db_stencil_info;
-	uint32_t db_z_read_base;
-	uint32_t db_stencil_read_base;
-	uint32_t db_z_write_base;
-	uint32_t db_stencil_write_base;
 	uint32_t db_depth_view;
 	uint32_t db_depth_size;
 	uint32_t db_depth_slice;
 	uint32_t db_htile_surface;
-	uint32_t db_htile_data_base;
 	uint32_t pa_su_poly_offset_db_fmt_cntl;
 	float offset_scale;
 };

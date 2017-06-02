@@ -89,7 +89,8 @@ brw_emit_surface_state(struct brw_context *brw,
    surf.dim = get_isl_surf_dim(target);
 
    const enum isl_dim_layout dim_layout =
-      get_isl_dim_layout(&brw->screen->devinfo, mt->tiling, target);
+      get_isl_dim_layout(&brw->screen->devinfo, mt->tiling, target,
+                         mt->array_layout);
 
    if (surf.dim_layout != dim_layout) {
       /* The layout of the specified texture target is not compatible with the
@@ -557,8 +558,8 @@ brw_update_texture_surface(struct gl_context *ctx,
                                 brw_get_texture_swizzle(&brw->ctx, obj));
 
       mesa_format mesa_fmt = plane == 0 ? intel_obj->_Format : mt->format;
-      unsigned format = translate_tex_format(brw, mesa_fmt,
-                                             sampler->sRGBDecode);
+      enum isl_format format = translate_tex_format(brw, mesa_fmt,
+                                                    sampler->sRGBDecode);
 
       /* Implement gen6 and gen7 gather work-around */
       bool need_green_to_blue = false;
@@ -686,7 +687,7 @@ brw_update_buffer_texture_surface(struct gl_context *ctx,
    uint32_t size = tObj->BufferSize;
    struct brw_bo *bo = NULL;
    mesa_format format = tObj->_BufferObjectFormat;
-   uint32_t brw_format = brw_isl_format_for_mesa_format(format);
+   const enum isl_format isl_format = brw_isl_format_for_mesa_format(format);
    int texel_size = _mesa_get_format_bytes(format);
 
    if (intel_obj) {
@@ -712,14 +713,14 @@ brw_update_buffer_texture_surface(struct gl_context *ctx,
     */
    size = MIN2(size, ctx->Const.MaxTextureBufferSize * (unsigned) texel_size);
 
-   if (brw_format == 0 && format != MESA_FORMAT_RGBA_FLOAT32) {
+   if (isl_format == 0 && format != MESA_FORMAT_RGBA_FLOAT32) {
       _mesa_problem(NULL, "bad format %s for texture buffer\n",
 		    _mesa_get_format_name(format));
    }
 
    brw_emit_buffer_surface_state(brw, surf_offset, bo,
                                  tObj->BufferOffset,
-                                 brw_format,
+                                 isl_format,
                                  size,
                                  texel_size,
                                  false /* rw */);
@@ -1587,7 +1588,7 @@ static uint32_t
 get_image_format(struct brw_context *brw, mesa_format format, GLenum access)
 {
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
-   uint32_t hw_format = brw_isl_format_for_mesa_format(format);
+   enum isl_format hw_format = brw_isl_format_for_mesa_format(format);
    if (access == GL_WRITE_ONLY) {
       return hw_format;
    } else if (isl_has_matching_typed_storage_image_format(devinfo, hw_format)) {

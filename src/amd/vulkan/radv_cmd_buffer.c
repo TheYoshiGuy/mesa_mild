@@ -3030,7 +3030,7 @@ static void radv_handle_depth_image_transition(struct radv_cmd_buffer *cmd_buffe
 		radv_initialize_htile(cmd_buffer, image, range, 0);
 	} else if (!radv_layout_is_htile_compressed(image, src_layout, src_queue_mask) &&
 	           radv_layout_is_htile_compressed(image, dst_layout, dst_queue_mask)) {
-		radv_initialize_htile(cmd_buffer, image, range, 0x0000030f);
+		radv_initialize_htile(cmd_buffer, image, range, 0xffffffff);
 	} else if (radv_layout_is_htile_compressed(image, src_layout, src_queue_mask) &&
 	           !radv_layout_is_htile_compressed(image, dst_layout, dst_queue_mask)) {
 		VkImageSubresourceRange local_range = *range;
@@ -3228,28 +3228,16 @@ static void write_event(struct radv_cmd_buffer *cmd_buffer,
 
 	cmd_buffer->device->ws->cs_add_buffer(cs, event->bo, 8);
 
-	MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws, cs, 12);
+	MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws, cs, 18);
 
 	/* TODO: this is overkill. Probably should figure something out from
 	 * the stage mask. */
 
-	if (cmd_buffer->device->physical_device->rad_info.chip_class == CIK) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, 0));
-		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_BOTTOM_OF_PIPE_TS) |
-				EVENT_INDEX(5));
-		radeon_emit(cs, va);
-		radeon_emit(cs, (va >> 32) | EOP_DATA_SEL(1));
-		radeon_emit(cs, 2);
-		radeon_emit(cs, 0);
-	}
-
-	radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, 0));
-	radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_BOTTOM_OF_PIPE_TS) |
-			EVENT_INDEX(5));
-	radeon_emit(cs, va);
-	radeon_emit(cs, (va >> 32) | EOP_DATA_SEL(1));
-	radeon_emit(cs, value);
-	radeon_emit(cs, 0);
+	si_cs_emit_write_event_eop(cs,
+				   cmd_buffer->device->physical_device->rad_info.chip_class == CIK,
+				   false,
+				   EVENT_TYPE_BOTTOM_OF_PIPE_TS, 0,
+				   1, va, 2, value);
 
 	assert(cmd_buffer->cs->cdw <= cdw_max);
 }
@@ -3297,14 +3285,7 @@ void radv_CmdWaitEvents(VkCommandBuffer commandBuffer,
 
 		MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws, cs, 7);
 
-		radeon_emit(cs, PKT3(PKT3_WAIT_REG_MEM, 5, 0));
-		radeon_emit(cs, WAIT_REG_MEM_EQUAL | WAIT_REG_MEM_MEM_SPACE(1));
-		radeon_emit(cs, va);
-		radeon_emit(cs, va >> 32);
-		radeon_emit(cs, 1); /* reference value */
-		radeon_emit(cs, 0xffffffff); /* mask */
-		radeon_emit(cs, 4); /* poll interval */
-
+		si_emit_wait_fence(cs, va, 1, 0xffffffff);
 		assert(cmd_buffer->cs->cdw <= cdw_max);
 	}
 

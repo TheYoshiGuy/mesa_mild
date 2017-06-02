@@ -528,6 +528,46 @@ enum isl_dim_layout {
    ISL_DIM_LAYOUT_GEN4_3D,
 
    /**
+    * Special layout used for HiZ and stencil on Sandy Bridge to work around
+    * the hardware's lack of mipmap support.  On gen6, HiZ and stencil buffers
+    * work the same as on gen7+ except that they don't technically support
+    * mipmapping.  That does not, however, stop us from doing it.  As far as
+    * Sandy Bridge hardware is concerned, HiZ and stencil always operates on a
+    * single miplevel 2D (possibly array) image.  The dimensions of that image
+    * are NOT minified.
+    *
+    * In order to implement HiZ and stencil on Sandy Bridge, we create one
+    * full-sized 2D (possibly array) image for every LOD with every image
+    * aligned to a page boundary.  When the surface is used with the stencil
+    * or HiZ hardware, we manually offset to the image for the given LOD.
+    *
+    * As a memory saving measure,  we pretend that the width of each miplevel
+    * is minified and we place LOD1 and above below LOD0 but horizontally
+    * adjacent to each other.  When considered as full-sized images, LOD1 and
+    * above technically overlap.  However, since we only write to part of that
+    * image, the hardware will never notice the overlap.
+    *
+    * This layout looks something like this:
+    *
+    *   +---------+
+    *   |         |
+    *   |         |
+    *   +---------+
+    *   |         |
+    *   |         |
+    *   +---------+
+    *
+    *   +----+ +-+ .
+    *   |    | +-+
+    *   +----+
+    *
+    *   +----+ +-+ .
+    *   |    | +-+
+    *   +----+
+    */
+   ISL_DIM_LAYOUT_GEN6_STENCIL_HIZ,
+
+   /**
     * For details, see the Skylake BSpec >> Memory Views >> Common Surface
     * Formats >> Surface Layout and Tiling >> » 1D Surfaces.
     */
@@ -1380,8 +1420,7 @@ isl_surf_init_s(const struct isl_device *dev,
                 const struct isl_surf_init_info *restrict info);
 
 void
-isl_surf_get_tile_info(const struct isl_device *dev,
-                       const struct isl_surf *surf,
+isl_surf_get_tile_info(const struct isl_surf *surf,
                        struct isl_tile_info *tile_info);
 
 bool
@@ -1551,6 +1590,27 @@ isl_surf_get_image_offset_el(const struct isl_surf *surf,
                              uint32_t *y_offset_el);
 
 /**
+ * Calculate the offset, in bytes and intratile surface samples, to a
+ * subimage in the surface.
+ *
+ * This is equivalent to calling isl_surf_get_image_offset_el, passing the
+ * result to isl_tiling_get_intratile_offset_el, and converting the tile
+ * offsets to samples.
+ *
+ * @invariant level < surface levels
+ * @invariant logical_array_layer < logical array length of surface
+ * @invariant logical_z_offset_px < logical depth of surface at level
+ */
+void
+isl_surf_get_image_offset_B_tile_sa(const struct isl_surf *surf,
+                                    uint32_t level,
+                                    uint32_t logical_array_layer,
+                                    uint32_t logical_z_offset_px,
+                                    uint32_t *offset_B,
+                                    uint32_t *x_offset_sa,
+                                    uint32_t *y_offset_sa);
+
+/**
  * @brief Calculate the intratile offsets to a surface.
  *
  * In @a base_address_offset return the offset from the base of the surface to
@@ -1561,9 +1621,8 @@ isl_surf_get_image_offset_el(const struct isl_surf *surf,
  * surface's tiling format.
  */
 void
-isl_tiling_get_intratile_offset_el(const struct isl_device *dev,
-                                   enum isl_tiling tiling,
-                                   uint8_t bs,
+isl_tiling_get_intratile_offset_el(enum isl_tiling tiling,
+                                   uint32_t bpb,
                                    uint32_t row_pitch,
                                    uint32_t total_x_offset_el,
                                    uint32_t total_y_offset_el,
@@ -1572,8 +1631,7 @@ isl_tiling_get_intratile_offset_el(const struct isl_device *dev,
                                    uint32_t *y_offset_el);
 
 static inline void
-isl_tiling_get_intratile_offset_sa(const struct isl_device *dev,
-                                   enum isl_tiling tiling,
+isl_tiling_get_intratile_offset_sa(enum isl_tiling tiling,
                                    enum isl_format format,
                                    uint32_t row_pitch,
                                    uint32_t total_x_offset_sa,
@@ -1584,8 +1642,6 @@ isl_tiling_get_intratile_offset_sa(const struct isl_device *dev,
 {
    const struct isl_format_layout *fmtl = isl_format_get_layout(format);
 
-   assert(fmtl->bpb % 8 == 0);
-
    /* For computing the intratile offsets, we actually want a strange unit
     * which is samples for multisampled surfaces but elements for compressed
     * surfaces.
@@ -1595,7 +1651,7 @@ isl_tiling_get_intratile_offset_sa(const struct isl_device *dev,
    const uint32_t total_x_offset = total_x_offset_sa / fmtl->bw;
    const uint32_t total_y_offset = total_y_offset_sa / fmtl->bh;
 
-   isl_tiling_get_intratile_offset_el(dev, tiling, fmtl->bpb / 8, row_pitch,
+   isl_tiling_get_intratile_offset_el(tiling, fmtl->bpb, row_pitch,
                                       total_x_offset, total_y_offset,
                                       base_address_offset,
                                       x_offset_sa, y_offset_sa);

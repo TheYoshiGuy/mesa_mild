@@ -2674,14 +2674,12 @@ upload_constant_state(struct brw_context *brw,
       pkt._3DCommandSubOpcode = push_constant_opcodes[stage];
       if (active) {
 #if GEN_GEN >= 8 || GEN_IS_HASWELL
-         pkt.ConstantBody.ConstantBuffer2ReadLength =
-            stage_state->push_const_size;
-         pkt.ConstantBody.PointerToConstantBuffer2 =
+         pkt.ConstantBody.ReadLength[2] = stage_state->push_const_size;
+         pkt.ConstantBody.Buffer[2] =
             render_ro_bo(brw->curbe.curbe_bo, stage_state->push_const_offset);
 #else
-         pkt.ConstantBody.ConstantBuffer0ReadLength =
-            stage_state->push_const_size;
-         pkt.ConstantBody.PointerToConstantBuffer0.offset =
+         pkt.ConstantBody.ReadLength[0] = stage_state->push_const_size;
+         pkt.ConstantBody.Buffer[0].offset =
             stage_state->push_const_offset | mocs;
 #endif
       }
@@ -3078,42 +3076,16 @@ genX(upload_3dstate_so_decl_list)(struct brw_context *brw,
     * command feels strange -- each dword pair contains a SO_DECL per stream.
     */
    for (unsigned i = 0; i < linked_xfb_info->NumOutputs; i++) {
-      int buffer = linked_xfb_info->Outputs[i].OutputBuffer;
-      struct GENX(SO_DECL) decl = {0};
-      int varying = linked_xfb_info->Outputs[i].OutputRegister;
-      const unsigned components = linked_xfb_info->Outputs[i].NumComponents;
-      unsigned component_mask = (1 << components) - 1;
-      unsigned stream_id = linked_xfb_info->Outputs[i].StreamId;
-      unsigned decl_buffer_slot = buffer;
+      const struct gl_transform_feedback_output *output =
+         &linked_xfb_info->Outputs[i];
+      const int buffer = output->OutputBuffer;
+      const int varying = output->OutputRegister;
+      const unsigned stream_id = output->StreamId;
       assert(stream_id < MAX_VERTEX_STREAMS);
-
-      /* gl_PointSize is stored in VARYING_SLOT_PSIZ.w
-       * gl_Layer is stored in VARYING_SLOT_PSIZ.y
-       * gl_ViewportIndex is stored in VARYING_SLOT_PSIZ.z
-       */
-      if (varying == VARYING_SLOT_PSIZ) {
-         assert(components == 1);
-         component_mask <<= 3;
-      } else if (varying == VARYING_SLOT_LAYER) {
-         assert(components == 1);
-         component_mask <<= 1;
-      } else if (varying == VARYING_SLOT_VIEWPORT) {
-         assert(components == 1);
-         component_mask <<= 2;
-      } else {
-         component_mask <<= linked_xfb_info->Outputs[i].ComponentOffset;
-      }
 
       buffer_mask[stream_id] |= 1 << buffer;
 
-      decl.OutputBufferSlot = decl_buffer_slot;
-      if (varying == VARYING_SLOT_LAYER || varying == VARYING_SLOT_VIEWPORT) {
-         decl.RegisterIndex = vue_map->varying_to_slot[VARYING_SLOT_PSIZ];
-      } else {
-         assert(vue_map->varying_to_slot[varying] >= 0);
-         decl.RegisterIndex = vue_map->varying_to_slot[varying];
-      }
-      decl.ComponentMask = component_mask;
+      assert(vue_map->varying_to_slot[varying] >= 0);
 
       /* Mesa doesn't store entries for gl_SkipComponents in the Outputs[]
        * array.  Instead, it simply increments DstOffset for the following
@@ -3125,31 +3097,25 @@ genX(upload_3dstate_so_decl_list)(struct brw_context *brw,
        * program as many size = 4 holes as we can, then a final hole to
        * accommodate the final 1, 2, or 3 remaining.
        */
-      int skip_components =
-         linked_xfb_info->Outputs[i].DstOffset - next_offset[buffer];
+      int skip_components = output->DstOffset - next_offset[buffer];
 
-      next_offset[buffer] += skip_components;
-
-      while (skip_components >= 4) {
-         struct GENX(SO_DECL) *d = &so_decl[stream_id][decls[stream_id]++];
-         d->HoleFlag = 1;
-         d->OutputBufferSlot = decl_buffer_slot;
-         d->ComponentMask = 0xf;
+      while (skip_components > 0) {
+         so_decl[stream_id][decls[stream_id]++] = (struct GENX(SO_DECL)) {
+            .HoleFlag = 1,
+            .OutputBufferSlot = output->OutputBuffer,
+            .ComponentMask = (1 << MIN2(skip_components, 4)) - 1,
+         };
          skip_components -= 4;
       }
 
-      if (skip_components > 0) {
-         struct GENX(SO_DECL) *d = &so_decl[stream_id][decls[stream_id]++];
-         d->HoleFlag = 1;
-         d->OutputBufferSlot = decl_buffer_slot;
-         d->ComponentMask = (1 << skip_components) - 1;
-      }
+      next_offset[buffer] = output->DstOffset + output->NumComponents;
 
-      assert(linked_xfb_info->Outputs[i].DstOffset == next_offset[buffer]);
-
-      next_offset[buffer] += components;
-
-      so_decl[stream_id][decls[stream_id]++] = decl;
+      so_decl[stream_id][decls[stream_id]++] = (struct GENX(SO_DECL)) {
+         .OutputBufferSlot = output->OutputBuffer,
+         .RegisterIndex = vue_map->varying_to_slot[varying],
+         .ComponentMask =
+            ((1 << output->NumComponents) - 1) << output->ComponentOffset,
+      };
 
       if (decls[stream_id] > max_decls)
          max_decls = decls[stream_id];
@@ -3733,7 +3699,7 @@ genX(upload_cs_state)(struct brw_context *brw)
 
       const uint32_t subslices = MAX2(brw->screen->subslice_total, 1);
       vfe.MaximumNumberofThreads = devinfo->max_cs_threads * subslices - 1;
-      vfe.NumberofURBEntries = GEN_GEN >= 8 ? 2 : 0;;
+      vfe.NumberofURBEntries = GEN_GEN >= 8 ? 2 : 0;
       vfe.ResetGatewayTimer =
          Resettingrelativetimerandlatchingtheglobaltimestamp;
 #if GEN_GEN < 9
