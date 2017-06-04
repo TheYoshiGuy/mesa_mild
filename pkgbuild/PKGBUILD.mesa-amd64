@@ -56,7 +56,7 @@ build () {
                --enable-va \
                --enable-llvm \
                --enable-dri3 \
-               --with-vulkan-drivers=radeoni,intel \
+               --with-vulkan-drivers=radeonsi,intel \
                --enable-egl --disable-gles1  --enable-gles2 --enable-shared-glapi
 
 
