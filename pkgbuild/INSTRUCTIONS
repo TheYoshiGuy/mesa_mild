@@ -19,7 +19,7 @@ There is two radeon drivers for GCN hardware, amdgpu or radeon
     - radeon is well supported, but doesn't provide vulkan
 
 
-Ok let's start the process by installing a shiny new stack 
+Ok let's start the process by installing a shiny new stack, if you know your stuff just check that you're using recent libdrm, clang  and kernel, if not follow the lead.
     
 
 1) Add this repository in /etc/pacman.conf BEFORE the others repositories so you can grab lattest LLVM, kernel and libdrm
@@ -33,7 +33,7 @@ SigLevel = Never
 # pacman -Syu mesagit linux-amd-staging linux-amd-staging-docs linux-amd-staging-headers
 
 - RESULT: 
-    You have a bleeding edge installation of mesa component and mesa. We will need to replace that mesa later.
+    You have a bleeding edge installation of mesa component and mesa. The kernel is recent and support sound via hdmi or dp. We will need to replace that mesa later.
     
 3 ) Tuning before building (OPTIONAL)
 I assume makepkg is installed, aswell as git, the section applies to makepkg.conf
@@ -59,7 +59,7 @@ LDFLAGS="-Wl,-O -Wl,--sort-common -Wl,-z,now"
 
 Explanations :
 -flto : Optimization pass at linking time
--O<level> : Choose an optiomization level
+-O<level> : Choose an optimization level
 -march=native : Use a tuning for the local cpu (ignoring compatibility)
 
 Note : Even if it's not mandatory, if you choose to build wine from git too, you need to build mesa for i686 aswell
@@ -75,15 +75,15 @@ There is two sets of PKGBUILD created
 
 - first is called radeonsi-only. It works with both amdgpu and radeon drivers with GCC and LLVM (from kerberizer) 
 
-- The other work add support for intel IGD  in case you use DRI_PRIME
+- The other work add support for intel IGD  in case you use DRI_PRIME and boot on intel IGD, pick these two, Cemu should work aswell on i965 Haswell+ too
 
-(it's only a trival modification basically only source and <configure> changes)
+(it's only a trival modification basically only source and configure flags change)
 
 - For reliability you'll need to build both amd64 and i686 version of mesa, or wine will probably fail for some applications
 
-Grab the two makepkg in the archive, extract them somewhere, switch to a terminal  and go to their location
+Grab the two PKGBUILD, put them somewhere, switch to a terminal  and go to their location
 
-# cd /"directory where it was extracted"
+# cd /"directory where it was downloaded"
 
 # makepkg -Ccif -p PKGBUILD.mesa-amd64 
 Install when prompted
@@ -97,10 +97,11 @@ Install when prompted
 Now if you want to build wine, do it, again it's not at all mandatory
 
 
-5) 
-If everything goes well you have now a mesa with four new options of configuration available.
+5)If everything goes well you'll  have a mesa with four new options of configuration available.
 
-Select these options (for your graphic card) 
+
+
+Select these options (for your graphic card) in "driconf"
 
 "performance"
     disable "Enable offloading GL driver work to a separate thread"
@@ -110,42 +111,21 @@ Select these options (for your graphic card)
     enable "Allow more type of primitives in glDrawArray"
     enable "Special handling of mesa_uniform when location = -1"
     enable "Bypass some validation related to VBO when using core profile"
-    
 
 Save or close application and it's best if you reboot now.
 
 To launch CEMU (if installed for instance in /cemu/cemu1.8.0)
 Open a terminal
 # cd /cemu/cemu1.8.0
-# "MESA_GL_VERSION_OVERRIDE=4.5 wine64 Cemu.exe"
+# MESA_GL_VERSION_OVERRIDE=4.5 wine64 Cemu.exe
 
-<<<<<<< HEAD
-- Do not use  MESA_NO_ERROR
-=======
-- Check MESA_NO_ERROR is not set
->>>>>>> repo/master
-- Since version 1.8.0 Cemu fails to start first time (screen related?), so try three times to launch cemu.
+- Do not use  MESA_NO_ERROR unless you use 17.1 version, it's has been broken for few days.
+- Since version 1.8.0 Cemu sometimes fails to start first time (screen related?), so try three times to launch cemu , 1.8.0b works better.
 
-6) You need to prevent pacman to erase mesa or at the next update everything in 3 has to be done
+6) You need to prevent pacman to update mesa dependencies or at the next update it's possible you need to rebuild mesa.
 
 in /etc/pacman.conf add where it fits :
+IgnoreGroup = mesagit
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+7) If you want full control on shader cache and many useful stuff check environment variables topic in the mesa documentation 
 
