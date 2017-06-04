@@ -119,7 +119,7 @@ Open a terminal
 # cd /cemu/cemu1.8.0
 # "MESA_GL_VERSION_OVERRIDE=4.5 wine64 Cemu.exe"
 
-- Check MESA_NO_ERROR is set sets
+- Do not use  MESA_NO_ERROR
 - Since version 1.8.0 Cemu fails to start first time (screen related?), so try three times to launch cemu.
 
 6) You need to prevent pacman to erase mesa or at the next update everything in 3 has to be done
