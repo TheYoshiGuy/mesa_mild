@@ -26,7 +26,7 @@
 #include "radv_private.h"
 #include "radv_meta.h"
 #include "wsi_common.h"
-#include "util/vk_util.h"
+#include "vk_util.h"
 
 static const struct wsi_callbacks wsi_cbs = {
    .get_phys_device_format_properties = radv_GetPhysicalDeviceFormatProperties,
@@ -224,7 +224,7 @@ radv_wsi_image_create(VkDevice device_h,
 	*memory_p = memory_h;
 	*size = image->size;
 	*offset = image->offset;
-	*row_pitch = surface->level[0].pitch_bytes;
+	*row_pitch = surface->u.legacy.level[0].nblk_x * surface->bpe;
 	return VK_SUCCESS;
  fail_alloc_memory:
 	radv_FreeMemory(device_h, memory_h, pAllocator);

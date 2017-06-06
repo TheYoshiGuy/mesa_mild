@@ -37,6 +37,7 @@ LOCAL_CFLAGS += \
 	-Wno-missing-field-initializers \
 	-Wno-initializer-overrides \
 	-Wno-mismatched-tags \
+	-DVERSION=\"$(MESA_VERSION)\" \
 	-DPACKAGE_VERSION=\"$(MESA_VERSION)\" \
 	-DPACKAGE_BUGREPORT=\"https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa\"
 
@@ -44,6 +45,7 @@ LOCAL_CFLAGS += \
 # It's likely due to a bug elsewhere, but let's temporarily add them
 # here to fix the radeonsi build.
 LOCAL_CFLAGS += \
+	-DANDROID_API_LEVEL=$(PLATFORM_SDK_VERSION) \
 	-DENABLE_SHADER_CACHE \
 	-D__STDC_CONSTANT_MACROS \
 	-D__STDC_LIMIT_MACROS \

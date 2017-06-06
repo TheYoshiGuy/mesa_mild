@@ -273,7 +273,14 @@ union tc_payload {
    uint64_t __use_8_bytes;
 };
 
-struct tc_call {
+#ifdef _MSC_VER
+#define ALIGN16 __declspec(align(16))
+#else
+#define ALIGN16 __attribute__((aligned(16)))
+#endif
+
+/* Each call slot should be aligned to its own size for optimal cache usage. */
+struct ALIGN16 tc_call {
    unsigned sentinel;
    ushort num_call_slots;
    ushort call_id;
@@ -286,7 +293,6 @@ struct tc_batch {
    unsigned num_total_call_slots;
    struct util_queue_fence fence;
    struct tc_call call[TC_CALLS_PER_BATCH];
-   unsigned sentinel2;
 };
 
 struct threaded_context {

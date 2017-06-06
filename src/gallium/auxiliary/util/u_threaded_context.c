@@ -67,7 +67,6 @@ static void
 tc_batch_check(struct tc_batch *batch)
 {
    tc_assert(batch->sentinel == TC_SENTINEL);
-   tc_assert(batch->sentinel2 == TC_SENTINEL);
    tc_assert(batch->num_total_call_slots <= TC_CALLS_PER_BATCH);
 }
 
@@ -429,7 +428,7 @@ tc_call_render_condition(struct pipe_context *pipe, union tc_payload *payload)
 static void
 tc_render_condition(struct pipe_context *_pipe,
                     struct pipe_query *query, boolean condition,
-                    uint mode)
+                    enum pipe_render_cond_flag mode)
 {
    struct threaded_context *tc = threaded_context(_pipe);
    struct tc_render_condition *p =
@@ -598,7 +597,7 @@ tc_call_set_constant_buffer(struct pipe_context *pipe, union tc_payload *payload
 
 static void
 tc_set_constant_buffer(struct pipe_context *_pipe,
-                       uint shader, uint index,
+                       enum pipe_shader_type shader, uint index,
                        const struct pipe_constant_buffer *cb)
 {
    struct threaded_context *tc = threaded_context(_pipe);
@@ -846,7 +845,8 @@ tc_call_set_shader_buffers(struct pipe_context *pipe, union tc_payload *payload)
 }
 
 static void
-tc_set_shader_buffers(struct pipe_context *_pipe, unsigned shader,
+tc_set_shader_buffers(struct pipe_context *_pipe,
+                      enum pipe_shader_type shader,
                       unsigned start, unsigned count,
                       const struct pipe_shader_buffer *buffers)
 {
@@ -2125,7 +2125,7 @@ tc_destroy(struct pipe_context *_pipe)
 
    slab_destroy_child(&tc->pool_transfers);
    pipe->destroy(pipe);
-   FREE(tc);
+   os_free_aligned(tc);
 }
 
 static const tc_execute execute_func[TC_NUM_CALLS] = {
@@ -2165,11 +2165,19 @@ threaded_context_create(struct pipe_context *pipe,
    if (!debug_get_bool_option("GALLIUM_THREAD", util_cpu_caps.nr_cpus > 1))
       return pipe;
 
-   tc = CALLOC_STRUCT(threaded_context);
+   tc = os_malloc_aligned(sizeof(struct threaded_context), 16);
    if (!tc) {
       pipe->destroy(pipe);
       return NULL;
    }
+   memset(tc, 0, sizeof(*tc));
+
+   assert((uintptr_t)tc % 16 == 0);
+   /* These should be static asserts, but they don't work with MSVC */
+   assert(offsetof(struct threaded_context, batch_slots) % 16 == 0);
+   assert(offsetof(struct threaded_context, batch_slots[0].call) % 16 == 0);
+   assert(offsetof(struct threaded_context, batch_slots[0].call[1]) % 16 == 0);
+   assert(offsetof(struct threaded_context, batch_slots[1].call) % 16 == 0);
 
    /* The driver context isn't wrapped, so set its "priv" to NULL. */
    pipe->priv = NULL;
@@ -2200,7 +2208,6 @@ threaded_context_create(struct pipe_context *pipe,
 
    for (unsigned i = 0; i < TC_MAX_BATCHES; i++) {
       tc->batch_slots[i].sentinel = TC_SENTINEL;
-      tc->batch_slots[i].sentinel2 = TC_SENTINEL;
       tc->batch_slots[i].pipe = pipe;
       util_queue_fence_init(&tc->batch_slots[i].fence);
    }

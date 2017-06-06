@@ -331,10 +331,9 @@ static int gfx6_compute_level(ADDR_HANDLE addrlib,
 	/* TC-compatible HTILE. */
 	if (!is_stencil &&
 	    AddrSurfInfoIn->flags.depth &&
-	    AddrSurfInfoIn->flags.tcCompatible &&
 	    surf_level->mode == RADEON_SURF_MODE_2D &&
 	    level == 0) {
-		AddrHtileIn->flags.tcCompatible = 1;
+		AddrHtileIn->flags.tcCompatible = AddrSurfInfoIn->flags.tcCompatible;
 		AddrHtileIn->pitch = AddrSurfInfoOut->pitch;
 		AddrHtileIn->height = AddrSurfInfoOut->height;
 		AddrHtileIn->numSlices = AddrSurfInfoOut->depth;
@@ -384,6 +383,31 @@ static unsigned cik_get_macro_tile_index(struct radeon_surf *surf)
 
 	assert(index < 16);
 	return index;
+}
+
+/**
+ * Copy surface-global settings like pipe/bank config from level 0 surface
+ * computation.
+ */
+static void gfx6_surface_settings(const struct radeon_info* info,
+				  ADDR_COMPUTE_SURFACE_INFO_OUTPUT* csio,
+				  struct radeon_surf *surf)
+{
+	surf->surf_alignment = csio->baseAlign;
+	surf->u.legacy.pipe_config = csio->pTileInfo->pipeConfig - 1;
+	gfx6_set_micro_tile_mode(surf, info);
+
+	/* For 2D modes only. */
+	if (csio->tileMode >= ADDR_TM_2D_TILED_THIN1) {
+		surf->u.legacy.bankw = csio->pTileInfo->bankWidth;
+		surf->u.legacy.bankh = csio->pTileInfo->bankHeight;
+		surf->u.legacy.mtilea = csio->pTileInfo->macroAspectRatio;
+		surf->u.legacy.tile_split = csio->pTileInfo->tileSplitBytes;
+		surf->u.legacy.num_banks = csio->pTileInfo->banks;
+		surf->u.legacy.macro_tile_index = csio->macroModeIndex;
+	} else {
+		surf->u.legacy.macro_tile_index = 0;
+	}
 }
 
 /**
@@ -584,30 +608,22 @@ static int gfx6_compute_surface(ADDR_HANDLE addrlib,
 	surf->htile_slice_size = 0;
 	surf->htile_alignment = 1;
 
+	const bool only_stencil = (surf->flags & RADEON_SURF_SBUFFER) &&
+				  !(surf->flags & RADEON_SURF_ZBUFFER);
+
 	/* Calculate texture layout information. */
-	for (level = 0; level < config->info.levels; level++) {
-		r = gfx6_compute_level(addrlib, config, surf, false, level, compressed,
-				       &AddrSurfInfoIn, &AddrSurfInfoOut,
-				       &AddrDccIn, &AddrDccOut, &AddrHtileIn, &AddrHtileOut);
-		if (r)
-			return r;
+	if (!only_stencil) {
+		for (level = 0; level < config->info.levels; level++) {
+			r = gfx6_compute_level(addrlib, config, surf, false, level, compressed,
+					       &AddrSurfInfoIn, &AddrSurfInfoOut,
+					       &AddrDccIn, &AddrDccOut, &AddrHtileIn, &AddrHtileOut);
+			if (r)
+				return r;
 
-		if (level == 0) {
-			surf->surf_alignment = AddrSurfInfoOut.baseAlign;
-			surf->u.legacy.pipe_config = AddrSurfInfoOut.pTileInfo->pipeConfig - 1;
-			gfx6_set_micro_tile_mode(surf, info);
+			if (level > 0)
+				continue;
 
-			/* For 2D modes only. */
-			if (AddrSurfInfoOut.tileMode >= ADDR_TM_2D_TILED_THIN1) {
-				surf->u.legacy.bankw = AddrSurfInfoOut.pTileInfo->bankWidth;
-				surf->u.legacy.bankh = AddrSurfInfoOut.pTileInfo->bankHeight;
-				surf->u.legacy.mtilea = AddrSurfInfoOut.pTileInfo->macroAspectRatio;
-				surf->u.legacy.tile_split = AddrSurfInfoOut.pTileInfo->tileSplitBytes;
-				surf->u.legacy.num_banks = AddrSurfInfoOut.pTileInfo->banks;
-				surf->u.legacy.macro_tile_index = AddrSurfInfoOut.macroModeIndex;
-			} else {
-				surf->u.legacy.macro_tile_index = 0;
-			}
+			gfx6_surface_settings(info, &AddrSurfInfoOut, surf);
 		}
 	}
 
@@ -629,11 +645,19 @@ static int gfx6_compute_surface(ADDR_HANDLE addrlib,
 				return r;
 
 			/* DB uses the depth pitch for both stencil and depth. */
-			if (surf->u.legacy.stencil_level[level].nblk_x !=
-			    surf->u.legacy.level[level].nblk_x)
-				surf->u.legacy.stencil_adjusted = true;
+			if (!only_stencil) {
+				if (surf->u.legacy.stencil_level[level].nblk_x !=
+				    surf->u.legacy.level[level].nblk_x)
+					surf->u.legacy.stencil_adjusted = true;
+			} else {
+				surf->u.legacy.level[level].nblk_x =
+					surf->u.legacy.stencil_level[level].nblk_x;
+			}
 
 			if (level == 0) {
+				if (only_stencil)
+					gfx6_surface_settings(info, &AddrSurfInfoOut, surf);
+
 				/* For 2D modes only. */
 				if (AddrSurfInfoOut.tileMode >= ADDR_TM_2D_TILED_THIN1) {
 					surf->u.legacy.stencil_tile_split =

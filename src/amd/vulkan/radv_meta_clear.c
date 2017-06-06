@@ -900,7 +900,7 @@ emit_fast_color_clear(struct radv_cmd_buffer *cmd_buffer,
 	if (iview->image->info.levels > 1)
 		goto fail;
 
-	if (iview->image->surface.level[0].mode < RADEON_SURF_MODE_1D)
+	if (iview->image->surface.u.legacy.level[0].mode < RADEON_SURF_MODE_1D)
 		goto fail;
 	if (!radv_image_extent_compare(iview->image, &iview->extent))
 		goto fail;
@@ -913,6 +913,11 @@ emit_fast_color_clear(struct radv_cmd_buffer *cmd_buffer,
 	if (clear_rect->baseArrayLayer != 0)
 		goto fail;
 	if (clear_rect->layerCount != iview->image->info.array_size)
+		goto fail;
+
+	/* RB+ doesn't work with CMASK fast clear on Stoney. */
+	if (!iview->image->surface.dcc_size &&
+	    cmd_buffer->device->physical_device->rad_info.family == CHIP_STONEY)
 		goto fail;
 
 	/* DCC */

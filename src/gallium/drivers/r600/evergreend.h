@@ -50,6 +50,8 @@
 #define EVENT_TYPE_SO_VGTSTREAMOUT_FLUSH       0x1f
 #define EVENT_TYPE_VGT_FLUSH                   0x24
 #define EVENT_TYPE_FLUSH_AND_INV_DB_META       0x2c
+#define EVENT_TYPE_CS_DONE                     0x2f
+#define EVENT_TYPE_PS_DONE                     0x30
 
 #define		EVENT_TYPE(x)                           ((x) << 0)
 #define		EVENT_INDEX(x)                          ((x) << 8)
@@ -59,6 +61,7 @@
 		 * 3 - SAMPLE_STREAMOUTSTAT*
 		 * 4 - *S_PARTIAL_FLUSH
 		 * 5 - TS events
+		 * 6 - EOS events
 		 */
 
 #define R600_TEXEL_PITCH_ALIGNMENT_MASK        0x7
@@ -96,6 +99,7 @@
 #define PKT3_COND_WRITE                        0x45
 #define PKT3_EVENT_WRITE                       0x46
 #define PKT3_EVENT_WRITE_EOP                   0x47
+#define PKT3_EVENT_WRITE_EOS                   0x48
 #define PKT3_ONE_REG_WRITE                     0x57
 #define PKT3_SET_CONFIG_REG                    0x68
 #define PKT3_SET_CONTEXT_REG                   0x69
@@ -163,6 +167,36 @@
  */
 #define PKT3_CP_DMA_CMD_SAIC      (1 << 28)
 #define PKT3_CP_DMA_CMD_DAIC      (1 << 29)
+
+#define PKT3_SET_APPEND_CNT                    0x75
+/* 1. header
+ * 2. COMMAND
+ *  1:0 - SOURCE SEL
+ *  15:2 - Reserved
+ *  31:16 - WR_REG_OFFSET - context register to write source data to.
+ *          (one of R_02872C_GDS_APPEND_COUNT_0-11)
+ * 3. CONTROL
+ *  (for source == mem)
+ *  31:2 SRC_ADDRESS_LO
+ *  0:1 SWAP
+ *  (for source == GDS)
+ *  31:0 GDS offset
+ *  (for source == DATA)
+ *  31:0 DATA
+ *  (for source == REG)
+ *  31:0 REG
+ * 4. SRC_ADDRESS_HI[7:0]
+ * kernel driver 2.44 only supports SRC == MEM.
+ */
+#define PKT3_SET_APPEND_CNT_SRC_SELECT(x) ((x) << 0)
+/* source is from the data in CONTROL */
+#define PKT3_SAC_SRC_SEL_DATA 0x0
+/* source is from register */
+#define PKT3_SAC_SRC_SEL_REG  0x1
+/* source is from GDS offset in CONTROL */
+#define PKT3_SAC_SRC_SEL_GDS  0x2
+/* source is from memory address */
+#define PKT3_SAC_SRC_SEL_MEM  0x3
 
 /* Registers */
 #define R_0084FC_CP_STRMOUT_CNTL		     0x0084FC
@@ -390,9 +424,9 @@
 #define   S_028C70_FAST_CLEAR(x)                       (((unsigned)(x) & 0x1) << 17)
 #define   G_028C70_FAST_CLEAR(x)                       (((x) >> 17) & 0x1)
 #define   C_028C70_FAST_CLEAR                          0xFFFDFFFF
-#define   S_028C70_COMPRESSION(x)                      (((unsigned)(x) & 0x3) << 18)
-#define   G_028C70_COMPRESSION(x)                      (((x) >> 18) & 0x3)
-#define   C_028C70_COMPRESSION                         0xFFF3FFFF
+#define   S_028C70_COMPRESSION(x)                      (((unsigned)(x) & 0x1) << 18)
+#define   G_028C70_COMPRESSION(x)                      (((x) >> 18) & 0x1)
+#define   C_028C70_COMPRESSION                         0xFFFBFFFF
 #define   S_028C70_BLEND_CLAMP(x)                      (((unsigned)(x) & 0x1) << 19)
 #define   G_028C70_BLEND_CLAMP(x)                      (((x) >> 19) & 0x1)
 #define   C_028C70_BLEND_CLAMP                         0xFFF7FFFF
@@ -851,6 +885,7 @@
 #define     V_02880C_EXPORT_DB_FOUR16                  0x01
 #define     V_02880C_EXPORT_DB_TWO                     0x02
 #define   S_02880C_ALPHA_TO_MASK_DISABLE(x)            (((unsigned)(x) & 0x1) << 12)
+#define   S_02880C_DEPTH_BEFORE_SHADER(x)              (((unsigned)(x) & 0x1) << 15)
 #define   S_02880C_CONSERVATIVE_Z_EXPORT(x)            (((unsigned)(x) & 0x03) << 16)
 #define   G_02880C_CONSERVATIVE_Z_EXPORT(x)            (((x) >> 16) & 0x03)
 #define   C_02880C_CONSERVATIVE_Z_EXPORT               0xFFFCFFFF
@@ -1964,6 +1999,19 @@
 #define R_028720_GDS_ADDR_BASE                       0x00028720
 #define R_028724_GDS_ADDR_SIZE                       0x00028724
 #define R_028728_GDS_ORDERED_WAVE_PER_SE             0x00028728
+#define R_02872C_GDS_APPEND_COUNT_0                  0x0002872C
+#define R_028730_GDS_APPEND_COUNT_1                  0x00028730
+#define R_028734_GDS_APPEND_COUNT_2                  0x00028734
+#define R_028738_GDS_APPEND_COUNT_3                  0x00028738
+#define R_02873C_GDS_APPEND_COUNT_4                  0x0002873C
+#define R_028740_GDS_APPEND_COUNT_5                  0x00028740
+#define R_028748_GDS_APPEND_COUNT_6                  0x00028744
+#define R_028744_GDS_APPEND_COUNT_7                  0x00028748
+#define R_028744_GDS_APPEND_COUNT_8                  0x0002874C
+#define R_028744_GDS_APPEND_COUNT_9                  0x00028750
+#define R_028744_GDS_APPEND_COUNT_10                 0x00028754
+#define R_028744_GDS_APPEND_COUNT_11                 0x00028758
+
 #define R_028784_CB_BLEND1_CONTROL                   0x00028784
 #define R_028788_CB_BLEND2_CONTROL                   0x00028788
 #define R_02878C_CB_BLEND3_CONTROL                   0x0002878C
@@ -2229,6 +2277,18 @@
 #define   S_028B98_STREAM_1_BUFFER_EN(x)		(((unsigned)(x) & 0x0F) << 4)
 #define   S_028B98_STREAM_2_BUFFER_EN(x)		(((unsigned)(x) & 0x0F) << 8)
 #define   S_028B98_STREAM_3_BUFFER_EN(x)		(((unsigned)(x) & 0x0F) << 12)
+#define R_028B9C_CB_IMMED0_BASE                      0x00028B9C
+#define R_028BA0_CB_IMMED1_BASE                      0x00028BA0
+#define R_028BA4_CB_IMMED2_BASE                      0x00028BA4
+#define R_028BA4_CB_IMMED3_BASE                      0x00028BA8
+#define R_028BA4_CB_IMMED4_BASE                      0x00028BAC
+#define R_028BA4_CB_IMMED5_BASE                      0x00028BB0
+#define R_028BA4_CB_IMMED6_BASE                      0x00028BB4
+#define R_028BA4_CB_IMMED7_BASE                      0x00028BB8
+#define R_028BA4_CB_IMMED8_BASE                      0x00028BBC
+#define R_028BA4_CB_IMMED9_BASE                      0x00028BC0
+#define R_028BA4_CB_IMMED10_BASE                     0x00028BC4
+#define R_028BA4_CB_IMMED11_BASE                     0x00028BC8
 #define R_028C00_PA_SC_LINE_CNTL                     0x00028C00
 #define   S_028C00_EXPAND_LINE_WIDTH(x)                (((unsigned)(x) & 0x1) << 9)
 #define   G_028C00_EXPAND_LINE_WIDTH(x)                (((x) >> 9) & 0x1)

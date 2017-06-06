@@ -1,9 +1,7 @@
 /*
  * Copyright © 2016 Red Hat.
  * Copyright © 2016 Bas Nieuwenhuizen
- * based on amdgpu winsys.
- * Copyright © 2011 Marek Olšák <maraeo@gmail.com>
- * Copyright © 2015 Advanced Micro Devices, Inc.
+ * Copyright © 2017 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -25,35 +23,27 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef RADV_AMDGPU_WINSYS_H
-#define RADV_AMDGPU_WINSYS_H
+#include <stdlib.h>
+#include <string.h>
+#include "vk_util.h"
 
-#include "radv_radeon_winsys.h"
-#include "ac_gpu_info.h"
-#include "addrlib/addrinterface.h"
-#include <amdgpu.h>
-#include "util/list.h"
-
-struct radv_amdgpu_winsys {
-	struct radeon_winsys base;
-	amdgpu_device_handle dev;
-
-	struct radeon_info info;
-	struct amdgpu_gpu_info amdinfo;
-	ADDR_HANDLE addrlib;
-
-	bool debug_all_bos;
-	pthread_mutex_t global_bo_list_lock;
-	struct list_head global_bo_list;
-	unsigned num_buffers;
-
-	bool use_ib_bos;
-};
-
-static inline struct radv_amdgpu_winsys *
-radv_amdgpu_winsys(struct radeon_winsys *base)
+uint32_t vk_get_driver_version(void)
 {
-	return (struct radv_amdgpu_winsys*)base;
+   const char *minor_string = strchr(VERSION, '.');
+   const char *patch_string = minor_string ? strchr(minor_string + 1, '.') : NULL;
+   int major = atoi(VERSION);
+   int minor = minor_string ? atoi(minor_string + 1) : 0;
+   int patch = patch_string ? atoi(patch_string + 1) : 0;
+   if (strstr(VERSION, "devel")) {
+      if (patch == 0) {
+         patch = 99;
+         if (minor == 0) {
+            minor = 99;
+            --major;
+         } else
+            --minor;
+      } else
+         --patch;
+   }
+   return VK_MAKE_VERSION(major, minor, patch);
 }
-
-#endif /* RADV_AMDGPU_WINSYS_H */
