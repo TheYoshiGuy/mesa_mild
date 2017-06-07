@@ -90,6 +90,8 @@ fd5_blend_state_create(struct pipe_context *pctx,
 
 	so->base = *cso;
 
+	so->lrz_write = true;  /* unless blend enabled for any MRT */
+
 	for (i = 0; i < ARRAY_SIZE(so->rb_mrt); i++) {
 		const struct pipe_rt_blend_state *rt;
 
@@ -126,6 +128,7 @@ fd5_blend_state_create(struct pipe_context *pctx,
 					A5XX_RB_MRT_CONTROL_BLEND |
 					A5XX_RB_MRT_CONTROL_BLEND2;
 			mrt_blend |= (1 << i);
+			so->lrz_write = false;
 		}
 
 		if (reads_dest) {
@@ -139,6 +142,8 @@ fd5_blend_state_create(struct pipe_context *pctx,
 
 	so->rb_blend_cntl = A5XX_RB_BLEND_CNTL_ENABLE_BLEND(mrt_blend) |
 		COND(cso->independent_blend_enable, A5XX_RB_BLEND_CNTL_INDEPENDENT_BLEND);
+	so->sp_blend_cntl = A5XX_SP_BLEND_CNTL_UNK8 |
+		COND(mrt_blend, A5XX_SP_BLEND_CNTL_ENABLED);
 
 	return so;
 }

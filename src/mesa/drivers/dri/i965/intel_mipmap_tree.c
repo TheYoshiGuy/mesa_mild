@@ -1991,7 +1991,7 @@ intel_miptree_slice_resolve(struct brw_context *brw,
    if (!item || item->need != need)
       return false;
 
-   intel_hiz_exec(brw, mt, level, layer, need);
+   intel_hiz_exec(brw, mt, level, layer, 1, need);
    intel_resolve_map_remove(item);
    return true;
 }
@@ -2027,7 +2027,7 @@ intel_miptree_all_slices_resolve(struct brw_context *brw,
       if (map->need != need)
 	 continue;
 
-      intel_hiz_exec(brw, mt, map->level, map->layer, need);
+      intel_hiz_exec(brw, mt, map->level, map->layer, 1, need);
       intel_resolve_map_remove(map);
       did_resolve = true;
    }
@@ -3398,35 +3398,4 @@ intel_miptree_get_aux_isl_surf(struct brw_context *brw,
     */
    surf->array_pitch_el_rows =
       aux_qpitch / isl_format_get_layout(surf->format)->bh;
-}
-
-union isl_color_value
-intel_miptree_get_isl_clear_color(struct brw_context *brw,
-                                  const struct intel_mipmap_tree *mt)
-{
-   union isl_color_value clear_color;
-
-   if (_mesa_get_format_base_format(mt->format) == GL_DEPTH_COMPONENT) {
-      clear_color.i32[0] = mt->depth_clear_value;
-      clear_color.i32[1] = 0;
-      clear_color.i32[2] = 0;
-      clear_color.i32[3] = 0;
-   } else if (brw->gen >= 9) {
-      clear_color.i32[0] = mt->gen9_fast_clear_color.i[0];
-      clear_color.i32[1] = mt->gen9_fast_clear_color.i[1];
-      clear_color.i32[2] = mt->gen9_fast_clear_color.i[2];
-      clear_color.i32[3] = mt->gen9_fast_clear_color.i[3];
-   } else if (_mesa_is_format_integer(mt->format)) {
-      clear_color.i32[0] = (mt->fast_clear_color_value & (1u << 31)) != 0;
-      clear_color.i32[1] = (mt->fast_clear_color_value & (1u << 30)) != 0;
-      clear_color.i32[2] = (mt->fast_clear_color_value & (1u << 29)) != 0;
-      clear_color.i32[3] = (mt->fast_clear_color_value & (1u << 28)) != 0;
-   } else {
-      clear_color.f32[0] = (mt->fast_clear_color_value & (1u << 31)) != 0;
-      clear_color.f32[1] = (mt->fast_clear_color_value & (1u << 30)) != 0;
-      clear_color.f32[2] = (mt->fast_clear_color_value & (1u << 29)) != 0;
-      clear_color.f32[3] = (mt->fast_clear_color_value & (1u << 28)) != 0;
-   }
-
-   return clear_color;
 }

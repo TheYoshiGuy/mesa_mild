@@ -193,7 +193,7 @@ blorp_surf_for_miptree(struct brw_context *brw,
       /* We only really need a clear color if we also have an auxiliary
        * surface.  Without one, it does nothing.
        */
-      surf->clear_color = intel_miptree_get_isl_clear_color(brw, mt);
+      surf->clear_color = mt->fast_clear_color;
 
       surf->aux_surf = aux_surf;
       surf->aux_addr = (struct blorp_address) {
@@ -790,23 +790,19 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
       can_fast_clear = false;
 
    if (can_fast_clear) {
-      union gl_color_union override_color =
+      union isl_color_value clear_color =
          brw_meta_convert_fast_clear_color(brw, irb->mt,
                                            &ctx->Color.ClearColor);
-
-      /* Record the clear color in the miptree so that it will be
-       * programmed in SURFACE_STATE by later rendering and resolve
-       * operations.
-       */
-      const bool color_updated = brw_meta_set_fast_clear_color(
-                                    brw, &irb->mt->gen9_fast_clear_color,
-                                    &override_color);
 
       /* If the buffer is already in INTEL_FAST_CLEAR_STATE_CLEAR, the clear
        * is redundant and can be skipped.
        */
-      if (!color_updated && fast_clear_state == INTEL_FAST_CLEAR_STATE_CLEAR)
+      if (fast_clear_state == INTEL_FAST_CLEAR_STATE_CLEAR &&
+          memcmp(&irb->mt->fast_clear_color,
+                 &clear_color, sizeof(clear_color)) == 0)
          return true;
+
+      irb->mt->fast_clear_color = clear_color;
 
       /* If the MCS buffer hasn't been allocated yet, we need to allocate
        * it now.
@@ -983,23 +979,6 @@ brw_blorp_resolve_color(struct brw_context *brw, struct intel_mipmap_tree *mt,
                                PIPE_CONTROL_CS_STALL);
 }
 
-static void
-gen6_blorp_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
-                    unsigned int level, unsigned int layer, enum blorp_hiz_op op)
-{
-   assert(intel_miptree_level_has_hiz(mt, level));
-
-   struct isl_surf isl_tmp[2];
-   struct blorp_surf surf;
-   blorp_surf_for_miptree(brw, &surf, mt, true, (1 << ISL_AUX_USAGE_HIZ),
-                          &level, layer, 1, isl_tmp);
-
-   struct blorp_batch batch;
-   blorp_batch_init(&brw->blorp, &batch, brw, 0);
-   blorp_gen6_hiz_op(&batch, &surf, level, layer, op);
-   blorp_batch_finish(&batch);
-}
-
 /**
  * Perform a HiZ or depth resolve operation.
  *
@@ -1011,8 +990,11 @@ gen6_blorp_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
  */
 void
 intel_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
-	       unsigned int level, unsigned int layer, enum blorp_hiz_op op)
+               unsigned int level, unsigned int start_layer,
+               unsigned int num_layers, enum blorp_hiz_op op)
 {
+   assert(intel_miptree_level_has_hiz(mt, level));
+   assert(op != BLORP_HIZ_OP_NONE);
    const char *opname = NULL;
 
    switch (op) {
@@ -1030,12 +1012,105 @@ intel_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
       break;
    }
 
-   DBG("%s %s to mt %p level %d layer %d\n",
-       __func__, opname, mt, level, layer);
+   DBG("%s %s to mt %p level %d layers %d-%d\n",
+       __func__, opname, mt, level, start_layer, start_layer + num_layers - 1);
 
-   if (brw->gen >= 8) {
-      gen8_hiz_exec(brw, mt, level, layer, op);
-   } else {
-      gen6_blorp_hiz_exec(brw, mt, level, layer, op);
+   /* The following stalls and flushes are only documented to be required for
+    * HiZ clear operations.  However, they also seem to be required for the
+    * HiZ resolve operation which is basically the same as a fast clear only a
+    * different value is written into the HiZ surface.
+    */
+   if (op == BLORP_HIZ_OP_DEPTH_CLEAR || op == BLORP_HIZ_OP_HIZ_RESOLVE) {
+      if (brw->gen == 6) {
+         /* From the Sandy Bridge PRM, volume 2 part 1, page 313:
+          *
+          *   "If other rendering operations have preceded this clear, a
+          *   PIPE_CONTROL with write cache flush enabled and Z-inhibit
+          *   disabled must be issued before the rectangle primitive used for
+          *   the depth buffer clear operation.
+          */
+          brw_emit_pipe_control_flush(brw,
+                                      PIPE_CONTROL_RENDER_TARGET_FLUSH |
+                                      PIPE_CONTROL_DEPTH_CACHE_FLUSH |
+                                      PIPE_CONTROL_CS_STALL);
+      } else if (brw->gen >= 7) {
+         /*
+          * From the Ivybridge PRM, volume 2, "Depth Buffer Clear":
+          *
+          *   If other rendering operations have preceded this clear, a
+          *   PIPE_CONTROL with depth cache flush enabled, Depth Stall bit
+          *   enabled must be issued before the rectangle primitive used for
+          *   the depth buffer clear operation.
+          *
+          * Same applies for Gen8 and Gen9.
+          *
+          * In addition, from the Ivybridge PRM, volume 2, 1.10.4.1
+          * PIPE_CONTROL, Depth Cache Flush Enable:
+          *
+          *   This bit must not be set when Depth Stall Enable bit is set in
+          *   this packet.
+          *
+          * This is confirmed to hold for real, HSW gets immediate gpu hangs.
+          *
+          * Therefore issue two pipe control flushes, one for cache flush and
+          * another for depth stall.
+          */
+          brw_emit_pipe_control_flush(brw,
+                                      PIPE_CONTROL_DEPTH_CACHE_FLUSH |
+                                      PIPE_CONTROL_CS_STALL);
+
+          brw_emit_pipe_control_flush(brw, PIPE_CONTROL_DEPTH_STALL);
+      }
+   }
+
+
+   struct isl_surf isl_tmp[2];
+   struct blorp_surf surf;
+   blorp_surf_for_miptree(brw, &surf, mt, true, (1 << ISL_AUX_USAGE_HIZ),
+                          &level, start_layer, num_layers, isl_tmp);
+
+   struct blorp_batch batch;
+   blorp_batch_init(&brw->blorp, &batch, brw, 0);
+   blorp_hiz_op(&batch, &surf, level, start_layer, num_layers, op);
+   blorp_batch_finish(&batch);
+
+   /* The following stalls and flushes are only documented to be required for
+    * HiZ clear operations.  However, they also seem to be required for the
+    * HiZ resolve operation which is basically the same as a fast clear only a
+    * different value is written into the HiZ surface.
+    */
+   if (op == BLORP_HIZ_OP_DEPTH_CLEAR || op == BLORP_HIZ_OP_HIZ_RESOLVE) {
+      if (brw->gen == 6) {
+         /* From the Sandy Bridge PRM, volume 2 part 1, page 314:
+          *
+          *     "DevSNB, DevSNB-B{W/A}]: Depth buffer clear pass must be
+          *     followed by a PIPE_CONTROL command with DEPTH_STALL bit set
+          *     and Then followed by Depth FLUSH'
+         */
+         brw_emit_pipe_control_flush(brw,
+                                     PIPE_CONTROL_DEPTH_STALL);
+
+         brw_emit_pipe_control_flush(brw,
+                                     PIPE_CONTROL_DEPTH_CACHE_FLUSH |
+                                     PIPE_CONTROL_CS_STALL);
+      } else if (brw->gen >= 8) {
+         /*
+          * From the Broadwell PRM, volume 7, "Depth Buffer Clear":
+          *
+          *    "Depth buffer clear pass using any of the methods (WM_STATE,
+          *    3DSTATE_WM or 3DSTATE_WM_HZ_OP) must be followed by a
+          *    PIPE_CONTROL command with DEPTH_STALL bit and Depth FLUSH bits
+          *    "set" before starting to render.  DepthStall and DepthFlush are
+          *    not needed between consecutive depth clear passes nor is it
+          *    required if the depth clear pass was done with
+          *    'full_surf_clear' bit set in the 3DSTATE_WM_HZ_OP."
+          *
+          *  TODO: Such as the spec says, this could be conditional.
+          */
+         brw_emit_pipe_control_flush(brw,
+                                     PIPE_CONTROL_DEPTH_CACHE_FLUSH |
+                                     PIPE_CONTROL_DEPTH_STALL);
+
+      }
    }
 }

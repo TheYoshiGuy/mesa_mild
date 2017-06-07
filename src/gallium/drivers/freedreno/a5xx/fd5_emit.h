@@ -51,6 +51,12 @@ struct fd5_emit {
 	bool rasterflat;
 	bool no_decode_srgb;
 
+	/* in binning pass, we don't have real frag shader, so we
+	 * don't know if real draw disqualifies lrz write.  So just
+	 * figure that out up-front and stash it in the emit.
+	 */
+	bool no_lrz_write;
+
 	/* cached to avoid repeated lookups of same variants: */
 	const struct ir3_shader_variant *vp, *fp;
 	/* TODO: other shader stages.. */
@@ -160,7 +166,22 @@ fd5_emit_render_cntl(struct fd_context *ctx, bool blit, bool binning)
 	OUT_RING(ring, 0x00000008 |   /* GRAS_SC_CNTL */
 			COND(binning, A5XX_GRAS_SC_CNTL_BINNING_PASS) |
 			COND(samples_passed, A5XX_GRAS_SC_CNTL_SAMPLES_PASSED));
+}
 
+static inline void
+fd5_emit_lrz_flush(struct fd_ringbuffer *ring)
+{
+	/* TODO I think the extra writes to GRAS_LRZ_CNTL are probably
+	 * a workaround and not needed on all a5xx.
+	 */
+	OUT_PKT4(ring, REG_A5XX_GRAS_LRZ_CNTL, 1);
+	OUT_RING(ring, A5XX_GRAS_LRZ_CNTL_ENABLE);
+
+	OUT_PKT7(ring, CP_EVENT_WRITE, 1);
+	OUT_RING(ring, LRZ_FLUSH);
+
+	OUT_PKT4(ring, REG_A5XX_GRAS_LRZ_CNTL, 1);
+	OUT_RING(ring, 0x0);
 }
 
 void fd5_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd5_emit *emit);

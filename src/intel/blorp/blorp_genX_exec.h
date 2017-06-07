@@ -27,6 +27,7 @@
 #include "blorp_priv.h"
 #include "common/gen_device_info.h"
 #include "common/gen_sample_positions.h"
+#include "genxml/gen_macros.h"
 
 /**
  * This file provides the blorp pipeline setup and execution functionality.
@@ -59,6 +60,11 @@ static void *
 blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
                           struct blorp_address *addr);
 
+#if GEN_GEN >= 8
+static struct blorp_address
+blorp_get_workaround_page(struct blorp_batch *batch);
+#endif
+
 static void
 blorp_alloc_binding_table(struct blorp_batch *batch, unsigned num_entries,
                           unsigned state_size, unsigned state_alignment,
@@ -81,8 +87,6 @@ blorp_emit_pipeline(struct blorp_batch *batch,
                     const struct blorp_params *params);
 
 /***** BEGIN blorp_exec implementation ******/
-
-#include "genxml/gen_macros.h"
 
 static uint64_t
 _blorp_combine_address(struct blorp_batch *batch, void *location,
@@ -1402,7 +1406,7 @@ blorp_emit_depth_stencil_config(struct blorp_batch *batch,
             blorp_emit_reloc(batch, dw + isl_dev->ds.hiz_offset / 4,
                              hiz_address, 0);
 
-         info.depth_clear_value = params->depth.clear_color.u32[0];
+         info.depth_clear_value = params->depth.clear_color.f32[0];
       }
    }
 
@@ -1466,11 +1470,14 @@ blorp_emit_gen8_hiz_op(struct blorp_batch *batch,
          hzp.StencilBufferClearEnable = params->stencil.enabled;
          hzp.DepthBufferClearEnable = params->depth.enabled;
          hzp.StencilClearValue = params->stencil_ref;
+         hzp.FullSurfaceDepthandStencilClear = params->full_surface_hiz_op;
          break;
       case BLORP_HIZ_OP_DEPTH_RESOLVE:
+         assert(params->full_surface_hiz_op);
          hzp.DepthBufferResolveEnable = true;
          break;
       case BLORP_HIZ_OP_HIZ_RESOLVE:
+         assert(params->full_surface_hiz_op);
          hzp.HierarchicalDepthBufferResolveEnable = true;
          break;
       case BLORP_HIZ_OP_NONE:
@@ -1497,17 +1504,10 @@ blorp_emit_gen8_hiz_op(struct blorp_batch *batch,
     */
    blorp_emit(batch, GENX(PIPE_CONTROL), pc) {
       pc.PostSyncOperation = WriteImmediateData;
+      pc.Address = blorp_get_workaround_page(batch);
    }
 
    blorp_emit(batch, GENX(3DSTATE_WM_HZ_OP), hzp);
-
-   /* Perform depth clear specific flushing */
-   if (params->hiz_op == BLORP_HIZ_OP_DEPTH_CLEAR && params->depth.enabled) {
-      blorp_emit(batch, GENX(PIPE_CONTROL), pc) {
-         pc.DepthStallEnable = true;
-         pc.DepthCacheFlushEnable = true;
-      }
-   }
 }
 #endif
 
