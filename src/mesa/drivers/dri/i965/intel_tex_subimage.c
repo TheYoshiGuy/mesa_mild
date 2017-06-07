@@ -86,8 +86,6 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
    /* The miptree's buffer. */
    struct brw_bo *bo;
 
-   int error = 0;
-
    uint32_t cpp;
    mem_copy_fn mem_copy = NULL;
 
@@ -136,6 +134,17 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
       return false;
    }
 
+   /* linear_to_tiled() assumes that if the object is swizzled, it is using
+    * I915_BIT6_SWIZZLE_9_10 for X and I915_BIT6_SWIZZLE_9 for Y.  This is only
+    * true on gen5 and above.
+    *
+    * The killer on top is that some gen4 have an L-shaped swizzle mode, where
+    * parts of the memory aren't swizzled at all. Userspace just can't handle
+    * that.
+    */
+   if (brw->gen < 5 && brw->has_swizzling)
+      return false;
+
    /* Since we are going to write raw data to the miptree, we need to resolve
     * any pending fast color clears before we start.
     */
@@ -148,8 +157,8 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
       intel_batchbuffer_flush(brw);
    }
 
-   error = brw_bo_map(brw, bo, true /* write enable */);
-   if (error || bo->virtual == NULL) {
+   void *map = brw_bo_map(brw, bo, MAP_WRITE | MAP_RAW);
+   if (map == NULL) {
       DBG("%s: failed to map bo\n", __func__);
       return false;
    }
@@ -177,7 +186,7 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
    linear_to_tiled(
       xoffset * cpp, (xoffset + width) * cpp,
       yoffset, yoffset + height,
-      bo->virtual,
+      map,
       pixels - (ptrdiff_t) yoffset * src_pitch - (ptrdiff_t) xoffset * cpp,
       image->mt->pitch, src_pitch,
       brw->has_swizzling,

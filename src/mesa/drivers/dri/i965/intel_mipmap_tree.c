@@ -49,7 +49,8 @@
 #define FILE_DEBUG_FLAG DEBUG_MIPTREE
 
 static void *intel_miptree_map_raw(struct brw_context *brw,
-                                   struct intel_mipmap_tree *mt);
+                                   struct intel_mipmap_tree *mt,
+                                   GLbitfield mode);
 
 static void intel_miptree_unmap_raw(struct intel_mipmap_tree *mt);
 
@@ -627,6 +628,9 @@ miptree_create(struct brw_context *brw,
                                   mt->cpp, mt->tiling, &mt->pitch,
                                   alloc_flags);
    }
+
+   if (layout_flags & MIPTREE_LAYOUT_FOR_SCANOUT)
+      mt->bo->cache_coherent = false;
 
    return mt;
 }
@@ -1382,14 +1386,14 @@ intel_miptree_init_mcs(struct brw_context *brw,
     *
     * Note: the clear value for MCS buffers is all 1's, so we memset to 0xff.
     */
-   const int ret = brw_bo_map_gtt(brw, mt->mcs_buf->bo);
-   if (unlikely(ret)) {
+   void *map = brw_bo_map(brw, mt->mcs_buf->bo, MAP_WRITE);
+   if (unlikely(map == NULL)) {
       fprintf(stderr, "Failed to map mcs buffer into GTT\n");
       brw_bo_unreference(mt->mcs_buf->bo);
       free(mt->mcs_buf);
       return;
    }
-   void *data = mt->mcs_buf->bo->virtual;
+   void *data = map;
    memset(data, init_value, mt->mcs_buf->size);
    brw_bo_unmap(mt->mcs_buf->bo);
 }
@@ -2408,7 +2412,9 @@ intel_update_r8stencil(struct brw_context *brw,
 }
 
 static void *
-intel_miptree_map_raw(struct brw_context *brw, struct intel_mipmap_tree *mt)
+intel_miptree_map_raw(struct brw_context *brw,
+                      struct intel_mipmap_tree *mt,
+                      GLbitfield mode)
 {
    /* CPU accesses to color buffers don't understand fast color clears, so
     * resolve any pending fast color clears before we map.
@@ -2420,24 +2426,7 @@ intel_miptree_map_raw(struct brw_context *brw, struct intel_mipmap_tree *mt)
    if (brw_batch_references(&brw->batch, bo))
       intel_batchbuffer_flush(brw);
 
-   /* brw_bo_map() uses a WB mmaping of the buffer's backing storage. It
-    * will utilize the CPU cache even if the buffer is incoherent with the
-    * GPU (i.e. any writes will be stored in the cache and not flushed to
-    * memory and so will be invisible to the GPU or display engine). This
-    * is the majority of buffers on a !llc machine, but even on a llc
-    * almost all scanouts are incoherent with the CPU. A WB write into the
-    * backing storage of the current scanout will not be immediately
-    * visible on the screen. The transfer from cache to screen is slow and
-    * indeterministic causing visible glitching on the screen. Never use
-    * this WB mapping for writes to an active scanout (reads are fine, so
-    * long as cache consistency is maintained).
-    */
-   if (mt->tiling != I915_TILING_NONE || mt->is_scanout)
-      brw_bo_map_gtt(brw, bo);
-   else
-      brw_bo_map(brw, bo, true);
-
-   return bo->virtual;
+   return brw_bo_map(brw, bo, mode);
 }
 
 static void
@@ -2468,7 +2457,7 @@ intel_miptree_map_gtt(struct brw_context *brw,
    y /= bh;
    x /= bw;
 
-   base = intel_miptree_map_raw(brw, mt) + mt->offset;
+   base = intel_miptree_map_raw(brw, mt, map->mode) + mt->offset;
 
    if (base == NULL)
       map->ptr = NULL;
@@ -2531,7 +2520,7 @@ intel_miptree_map_blit(struct brw_context *brw,
       }
    }
 
-   map->ptr = intel_miptree_map_raw(brw, map->linear_mt);
+   map->ptr = intel_miptree_map_raw(brw, map->linear_mt, map->mode);
 
    DBG("%s: %d,%d %dx%d from mt %p (%s) %d,%d = %p/%d\n", __func__,
        map->x, map->y, map->w, map->h,
@@ -2593,7 +2582,7 @@ intel_miptree_map_movntdqa(struct brw_context *brw,
    image_x += map->x;
    image_y += map->y;
 
-   void *src = intel_miptree_map_raw(brw, mt);
+   void *src = intel_miptree_map_raw(brw, mt, map->mode);
    if (!src)
       return;
 
@@ -2662,7 +2651,7 @@ intel_miptree_map_s8(struct brw_context *brw,
     */
    if (!(map->mode & GL_MAP_INVALIDATE_RANGE_BIT)) {
       uint8_t *untiled_s8_map = map->ptr;
-      uint8_t *tiled_s8_map = intel_miptree_map_raw(brw, mt);
+      uint8_t *tiled_s8_map = intel_miptree_map_raw(brw, mt, GL_MAP_READ_BIT);
       unsigned int image_x, image_y;
 
       intel_miptree_get_image_offset(mt, level, slice, &image_x, &image_y);
@@ -2699,7 +2688,7 @@ intel_miptree_unmap_s8(struct brw_context *brw,
    if (map->mode & GL_MAP_WRITE_BIT) {
       unsigned int image_x, image_y;
       uint8_t *untiled_s8_map = map->ptr;
-      uint8_t *tiled_s8_map = intel_miptree_map_raw(brw, mt);
+      uint8_t *tiled_s8_map = intel_miptree_map_raw(brw, mt, GL_MAP_WRITE_BIT);
 
       intel_miptree_get_image_offset(mt, level, slice, &image_x, &image_y);
 
@@ -2754,7 +2743,7 @@ intel_miptree_unmap_etc(struct brw_context *brw,
    image_x += map->x;
    image_y += map->y;
 
-   uint8_t *dst = intel_miptree_map_raw(brw, mt)
+   uint8_t *dst = intel_miptree_map_raw(brw, mt, GL_MAP_WRITE_BIT)
                 + image_y * mt->pitch
                 + image_x * mt->cpp;
 
@@ -2805,8 +2794,8 @@ intel_miptree_map_depthstencil(struct brw_context *brw,
     */
    if (!(map->mode & GL_MAP_INVALIDATE_RANGE_BIT)) {
       uint32_t *packed_map = map->ptr;
-      uint8_t *s_map = intel_miptree_map_raw(brw, s_mt);
-      uint32_t *z_map = intel_miptree_map_raw(brw, z_mt);
+      uint8_t *s_map = intel_miptree_map_raw(brw, s_mt, GL_MAP_READ_BIT);
+      uint32_t *z_map = intel_miptree_map_raw(brw, z_mt, GL_MAP_READ_BIT);
       unsigned int s_image_x, s_image_y;
       unsigned int z_image_x, z_image_y;
 
@@ -2866,8 +2855,8 @@ intel_miptree_unmap_depthstencil(struct brw_context *brw,
 
    if (map->mode & GL_MAP_WRITE_BIT) {
       uint32_t *packed_map = map->ptr;
-      uint8_t *s_map = intel_miptree_map_raw(brw, s_mt);
-      uint32_t *z_map = intel_miptree_map_raw(brw, z_mt);
+      uint8_t *s_map = intel_miptree_map_raw(brw, s_mt, GL_MAP_WRITE_BIT);
+      uint32_t *z_map = intel_miptree_map_raw(brw, z_mt, GL_MAP_WRITE_BIT);
       unsigned int s_image_x, s_image_y;
       unsigned int z_image_x, z_image_y;
 

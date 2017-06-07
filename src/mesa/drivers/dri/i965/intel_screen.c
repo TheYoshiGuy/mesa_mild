@@ -1412,6 +1412,7 @@ intel_detect_pipelined_register(struct intel_screen *screen,
    struct brw_bo *results, *bo;
    uint32_t *batch;
    uint32_t offset = 0;
+   void *map;
    bool success = false;
 
    /* Create a zero'ed temporary buffer for reading our results */
@@ -1423,10 +1424,11 @@ intel_detect_pipelined_register(struct intel_screen *screen,
    if (bo == NULL)
       goto err_results;
 
-   if (brw_bo_map(NULL, bo, 1))
+   map = brw_bo_map(NULL, bo, MAP_WRITE);
+   if (!map)
       goto err_batch;
 
-   batch = bo->virtual;
+   batch = map;
 
    /* Write the register. */
    *batch++ = MI_LOAD_REGISTER_IMM | (3 - 2);
@@ -1437,7 +1439,7 @@ intel_detect_pipelined_register(struct intel_screen *screen,
    *batch++ = MI_STORE_REGISTER_MEM | (3 - 2);
    *batch++ = reg;
    struct drm_i915_gem_relocation_entry reloc = {
-      .offset = (char *) batch - (char *) bo->virtual,
+      .offset = (char *) batch - (char *) map,
       .delta = offset * sizeof(uint32_t),
       .target_handle = results->gem_handle,
       .read_domains = I915_GEM_DOMAIN_INSTRUCTION,
@@ -1468,7 +1470,7 @@ intel_detect_pipelined_register(struct intel_screen *screen,
    struct drm_i915_gem_execbuffer2 execbuf = {
       .buffers_ptr = (uintptr_t) exec_objects,
       .buffer_count = 2,
-      .batch_len = ALIGN((char *) batch - (char *) bo->virtual, 8),
+      .batch_len = ALIGN((char *) batch - (char *) map, 8),
       .flags = I915_EXEC_RENDER,
    };
 
@@ -1479,8 +1481,9 @@ intel_detect_pipelined_register(struct intel_screen *screen,
    drmIoctl(dri_screen->fd, DRM_IOCTL_I915_GEM_EXECBUFFER2, &execbuf);
 
    /* Check whether the value got written. */
-   if (brw_bo_map(NULL, results, false) == 0) {
-      success = *((uint32_t *)results->virtual + offset) == expected_value;
+   void *results_map = brw_bo_map(NULL, results, MAP_READ);
+   if (results_map) {
+      success = *((uint32_t *)results_map + offset) == expected_value;
       brw_bo_unmap(results);
    }
 
