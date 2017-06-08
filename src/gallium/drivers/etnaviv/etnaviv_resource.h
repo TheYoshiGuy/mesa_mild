@@ -102,7 +102,7 @@ etna_resource_older(struct etna_resource *a, struct etna_resource *b)
 static inline bool
 etna_resource_needs_flush(struct etna_resource *res)
 {
-   return (int)(res->seqno - res->flush_seqno) > 0;
+   return res->ts_bo && ((int)(res->seqno - res->flush_seqno) > 0);
 }
 
 /* is the resource only used on the sampler? */
@@ -123,9 +123,6 @@ etna_resource(struct pipe_resource *p)
 void
 etna_resource_used(struct etna_context *ctx, struct pipe_resource *prsc,
                    enum etna_resource_status status);
-
-void
-etna_resource_wait(struct pipe_context *ctx, struct etna_resource *rsc);
 
 static inline void
 resource_read(struct etna_context *ctx, struct pipe_resource *prsc)
