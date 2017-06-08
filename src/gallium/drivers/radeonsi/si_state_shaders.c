@@ -843,7 +843,7 @@ static void si_shader_vs(struct si_screen *sscreen, struct si_shader *shader,
 	unsigned oc_lds_en;
 	unsigned window_space =
 	   shader->selector->info.properties[TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION];
-	bool enable_prim_id = shader->key.mono.vs_export_prim_id || shader->selector->info.uses_primid;
+	bool enable_prim_id = shader->key.mono.u.vs_export_prim_id || shader->selector->info.uses_primid;
 
 	pm4 = si_get_shader_pm4_state(shader);
 	if (!pm4)
@@ -1233,7 +1233,9 @@ static void si_shader_selector_key_hw_vs(struct si_context *sctx,
 	uint64_t outputs_written = vs->outputs_written;
 	uint64_t inputs_read = 0;
 
-	outputs_written &= ~0x3; /* ignore POSITION, PSIZE */
+	/* ignore POSITION, PSIZE */
+	outputs_written &= ~((1ull << si_shader_io_get_unique_index(TGSI_SEMANTIC_POSITION, 0) |
+			     (1ull << si_shader_io_get_unique_index(TGSI_SEMANTIC_PSIZE, 0))));
 
 	if (!ps_disabled) {
 		inputs_read = ps->inputs_read;
@@ -1265,7 +1267,7 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 			si_shader_selector_key_hw_vs(sctx, sel, key);
 
 			if (sctx->ps_shader.cso && sctx->ps_shader.cso->info.uses_primid)
-				key->mono.vs_export_prim_id = 1;
+				key->mono.u.vs_export_prim_id = 1;
 		}
 		break;
 	case PIPE_SHADER_TESS_CTRL:
@@ -1281,7 +1283,7 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 			sctx->tes_shader.cso->info.reads_tess_factors;
 
 		if (sel == sctx->fixed_func_tcs_shader.cso)
-			key->mono.ff_tcs_inputs_to_copy = sctx->vs_shader.cso->outputs_written;
+			key->mono.u.ff_tcs_inputs_to_copy = sctx->vs_shader.cso->outputs_written;
 		break;
 	case PIPE_SHADER_TESS_EVAL:
 		if (sctx->gs_shader.cso)
@@ -1290,7 +1292,7 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 			si_shader_selector_key_hw_vs(sctx, sel, key);
 
 			if (sctx->ps_shader.cso && sctx->ps_shader.cso->info.uses_primid)
-				key->mono.vs_export_prim_id = 1;
+				key->mono.u.vs_export_prim_id = 1;
 		}
 		break;
 	case PIPE_SHADER_GEOMETRY:
@@ -2085,6 +2087,22 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
 		break;
 	}
 
+	/* PA_CL_VS_OUT_CNTL */
+	bool misc_vec_ena =
+		sel->info.writes_psize || sel->info.writes_edgeflag ||
+		sel->info.writes_layer || sel->info.writes_viewport_index;
+	sel->pa_cl_vs_out_cntl =
+		S_02881C_USE_VTX_POINT_SIZE(sel->info.writes_psize) |
+		S_02881C_USE_VTX_EDGE_FLAG(sel->info.writes_edgeflag) |
+		S_02881C_USE_VTX_RENDER_TARGET_INDX(sel->info.writes_layer) |
+		S_02881C_USE_VTX_VIEWPORT_INDX(sel->info.writes_viewport_index) |
+		S_02881C_VS_OUT_MISC_VEC_ENA(misc_vec_ena) |
+		S_02881C_VS_OUT_MISC_SIDE_BUS_ENA(misc_vec_ena);
+	sel->clipdist_mask = sel->info.writes_clipvertex ?
+				     SIX_BITS : sel->info.clipdist_writemask;
+	sel->culldist_mask = sel->info.culldist_writemask <<
+			     sel->info.num_written_clipdistance;
+
 	/* DB_SHADER_CONTROL */
 	sel->db_shader_control =
 		S_02880C_Z_EXPORT_ENABLE(sel->info.writes_z) |
@@ -2152,10 +2170,8 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
 
 static void si_update_streamout_state(struct si_context *sctx)
 {
-	struct si_shader_selector *shader_with_so =
-		sctx->gs_shader.cso ? sctx->gs_shader.cso :
-		sctx->tes_shader.cso ? sctx->tes_shader.cso :
-				       sctx->vs_shader.cso;
+	struct si_shader_selector *shader_with_so = si_get_vs(sctx)->cso;
+
 	if (!shader_with_so)
 		return;
 
@@ -2164,9 +2180,31 @@ static void si_update_streamout_state(struct si_context *sctx)
 	sctx->b.streamout.stride_in_dw = shader_with_so->so.stride;
 }
 
+static void si_update_clip_regs(struct si_context *sctx,
+				struct si_shader_selector *old_hw_vs,
+				struct si_shader *old_hw_vs_variant,
+				struct si_shader_selector *next_hw_vs,
+				struct si_shader *next_hw_vs_variant)
+{
+	if (next_hw_vs &&
+	    (!old_hw_vs ||
+	     old_hw_vs->info.properties[TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION] !=
+	     next_hw_vs->info.properties[TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION] ||
+	     old_hw_vs->pa_cl_vs_out_cntl != next_hw_vs->pa_cl_vs_out_cntl ||
+	     old_hw_vs->clipdist_mask != next_hw_vs->clipdist_mask ||
+	     old_hw_vs->culldist_mask != next_hw_vs->culldist_mask ||
+	     !old_hw_vs_variant ||
+	     !next_hw_vs_variant ||
+	     old_hw_vs_variant->key.opt.hw_vs.clip_disable !=
+	     next_hw_vs_variant->key.opt.hw_vs.clip_disable))
+		si_mark_atom_dirty(sctx, &sctx->clip_regs);
+}
+
 static void si_bind_vs_shader(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
+	struct si_shader_selector *old_hw_vs = si_get_vs(sctx)->cso;
+	struct si_shader *old_hw_vs_variant = si_get_vs_state(sctx);
 	struct si_shader_selector *sel = state;
 
 	if (sctx->vs_shader.cso == sel)
@@ -2175,10 +2213,11 @@ static void si_bind_vs_shader(struct pipe_context *ctx, void *state)
 	sctx->vs_shader.cso = sel;
 	sctx->vs_shader.current = sel ? sel->first_variant : NULL;
 	sctx->do_update_shaders = true;
-	si_mark_atom_dirty(sctx, &sctx->clip_regs);
 	r600_update_vs_writes_viewport_index(&sctx->b, si_get_vs_info(sctx));
 	si_set_active_descriptors_for_shader(sctx, sel);
 	si_update_streamout_state(sctx);
+	si_update_clip_regs(sctx, old_hw_vs, old_hw_vs_variant,
+			    si_get_vs(sctx)->cso, si_get_vs_state(sctx));
 }
 
 static void si_update_tess_uses_prim_id(struct si_context *sctx)
@@ -2197,6 +2236,8 @@ static void si_update_tess_uses_prim_id(struct si_context *sctx)
 static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
+	struct si_shader_selector *old_hw_vs = si_get_vs(sctx)->cso;
+	struct si_shader *old_hw_vs_variant = si_get_vs_state(sctx);
 	struct si_shader_selector *sel = state;
 	bool enable_changed = !!sctx->gs_shader.cso != !!sel;
 
@@ -2207,7 +2248,6 @@ static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
 	sctx->gs_shader.current = sel ? sel->first_variant : NULL;
 	sctx->ia_multi_vgt_param_key.u.uses_gs = sel != NULL;
 	sctx->do_update_shaders = true;
-	si_mark_atom_dirty(sctx, &sctx->clip_regs);
 	sctx->last_rast_prim = -1; /* reset this so that it gets updated */
 
 	if (enable_changed) {
@@ -2218,6 +2258,8 @@ static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
 	r600_update_vs_writes_viewport_index(&sctx->b, si_get_vs_info(sctx));
 	si_set_active_descriptors_for_shader(sctx, sel);
 	si_update_streamout_state(sctx);
+	si_update_clip_regs(sctx, old_hw_vs, old_hw_vs_variant,
+			    si_get_vs(sctx)->cso, si_get_vs_state(sctx));
 }
 
 static void si_bind_tcs_shader(struct pipe_context *ctx, void *state)
@@ -2243,6 +2285,8 @@ static void si_bind_tcs_shader(struct pipe_context *ctx, void *state)
 static void si_bind_tes_shader(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
+	struct si_shader_selector *old_hw_vs = si_get_vs(sctx)->cso;
+	struct si_shader *old_hw_vs_variant = si_get_vs_state(sctx);
 	struct si_shader_selector *sel = state;
 	bool enable_changed = !!sctx->tes_shader.cso != !!sel;
 
@@ -2254,7 +2298,6 @@ static void si_bind_tes_shader(struct pipe_context *ctx, void *state)
 	sctx->ia_multi_vgt_param_key.u.uses_tess = sel != NULL;
 	si_update_tess_uses_prim_id(sctx);
 	sctx->do_update_shaders = true;
-	si_mark_atom_dirty(sctx, &sctx->clip_regs);
 	sctx->last_rast_prim = -1; /* reset this so that it gets updated */
 
 	if (enable_changed) {
@@ -2264,6 +2307,8 @@ static void si_bind_tes_shader(struct pipe_context *ctx, void *state)
 	r600_update_vs_writes_viewport_index(&sctx->b, si_get_vs_info(sctx));
 	si_set_active_descriptors_for_shader(sctx, sel);
 	si_update_streamout_state(sctx);
+	si_update_clip_regs(sctx, old_hw_vs, old_hw_vs_variant,
+			    si_get_vs(sctx)->cso, si_get_vs_state(sctx));
 }
 
 static void si_bind_ps_shader(struct pipe_context *ctx, void *state)

@@ -28,7 +28,6 @@
 
 #include "intel_batchbuffer.h"
 #include "intel_mipmap_tree.h"
-#include "intel_resolve_map.h"
 #include "intel_tex.h"
 #include "intel_blit.h"
 #include "intel_fbo.h"
@@ -327,8 +326,7 @@ intel_miptree_create_layout(struct brw_context *brw,
       INTEL_AUX_DISABLE_ALL : INTEL_AUX_DISABLE_NONE;
    mt->aux_disable |= INTEL_AUX_DISABLE_CCS;
    mt->is_scanout = (layout_flags & MIPTREE_LAYOUT_FOR_SCANOUT) != 0;
-   exec_list_make_empty(&mt->hiz_map);
-   exec_list_make_empty(&mt->color_resolve_map);
+   mt->aux_state = NULL;
    mt->cpp = _mesa_get_format_bytes(format);
    mt->num_samples = num_samples;
    mt->compressed = _mesa_is_format_compressed(format);
@@ -576,6 +574,46 @@ intel_lower_compressed_format(struct brw_context *brw, mesa_format format)
       /* Non ETC1 / ETC2 format */
       return format;
    }
+}
+
+static enum isl_aux_state **
+create_aux_state_map(struct intel_mipmap_tree *mt,
+                     enum isl_aux_state initial)
+{
+   const uint32_t levels = mt->last_level + 1;
+
+   uint32_t total_slices = 0;
+   for (uint32_t level = 0; level < levels; level++)
+      total_slices += mt->level[level].depth;
+
+   const size_t per_level_array_size = levels * sizeof(enum isl_aux_state *);
+
+   /* We're going to allocate a single chunk of data for both the per-level
+    * reference array and the arrays of aux_state.  This makes cleanup
+    * significantly easier.
+    */
+   const size_t total_size = per_level_array_size +
+                             total_slices * sizeof(enum isl_aux_state);
+   void *data = malloc(total_size);
+   if (data == NULL)
+      return NULL;
+
+   enum isl_aux_state **per_level_arr = data;
+   enum isl_aux_state *s = data + per_level_array_size;
+   for (uint32_t level = 0; level < levels; level++) {
+      per_level_arr[level] = s;
+      for (uint32_t a = 0; a < mt->level[level].depth; a++)
+         *(s++) = initial;
+   }
+   assert((void *)s == data + total_size);
+
+   return per_level_arr;
+}
+
+static void
+free_aux_state_map(enum isl_aux_state **state)
+{
+   free(state);
 }
 
 static struct intel_mipmap_tree *
@@ -939,8 +977,7 @@ intel_miptree_release(struct intel_mipmap_tree **mt)
          brw_bo_unreference((*mt)->mcs_buf->bo);
          free((*mt)->mcs_buf);
       }
-      intel_resolve_map_clear(&(*mt)->hiz_map);
-      intel_resolve_map_clear(&(*mt)->color_resolve_map);
+      free_aux_state_map((*mt)->aux_state);
 
       intel_miptree_release(&(*mt)->plane[0]);
       intel_miptree_release(&(*mt)->plane[1]);
@@ -1487,26 +1524,30 @@ intel_miptree_alloc_mcs(struct brw_context *brw,
       unreachable("Unrecognized sample count in intel_miptree_alloc_mcs");
    };
 
+   /* Multisampled miptrees are only supported for single level. */
+   assert(mt->first_level == 0);
+   enum isl_aux_state **aux_state =
+      create_aux_state_map(mt, ISL_AUX_STATE_CLEAR);
+   if (!aux_state)
+      return false;
+
    mt->mcs_buf =
       intel_mcs_miptree_buf_create(brw, mt,
                                    format,
                                    mt->logical_width0,
                                    mt->logical_height0,
                                    MIPTREE_LAYOUT_ACCELERATED_UPLOAD);
-   if (!mt->mcs_buf)
+   if (!mt->mcs_buf) {
+      free(aux_state);
       return false;
+   }
+
+   mt->aux_state = aux_state;
 
    intel_miptree_init_mcs(brw, mt, 0xFF);
 
-   /* Multisampled miptrees are only supported for single level. */
-   assert(mt->first_level == 0);
-   intel_miptree_set_fast_clear_state(brw, mt, mt->first_level, 0,
-                                      mt->logical_depth0,
-                                      INTEL_FAST_CLEAR_STATE_CLEAR);
-
    return true;
 }
-
 
 bool
 intel_miptree_alloc_non_msrt_mcs(struct brw_context *brw,
@@ -1533,6 +1574,13 @@ intel_miptree_alloc_non_msrt_mcs(struct brw_context *brw,
    if (!buf)
       return false;
 
+   enum isl_aux_state **aux_state =
+      create_aux_state_map(mt, ISL_AUX_STATE_PASS_THROUGH);
+   if (!aux_state) {
+      free(buf);
+      return false;
+   }
+
    buf->size = temp_ccs_surf.size;
    buf->pitch = temp_ccs_surf.row_pitch;
    buf->qpitch = isl_surf_get_array_pitch_sa_rows(&temp_ccs_surf);
@@ -1554,10 +1602,12 @@ intel_miptree_alloc_non_msrt_mcs(struct brw_context *brw,
                                 1, I915_TILING_Y, &buf->pitch, alloc_flags);
    if (!buf->bo) {
       free(buf);
+      free(aux_state);
       return false;
    }
 
    mt->mcs_buf = buf;
+   mt->aux_state = aux_state;
 
    /* From Gen9 onwards single-sampled (non-msrt) auxiliary buffers are
     * used for lossless compression which requires similar initialisation
@@ -1855,6 +1905,11 @@ intel_miptree_alloc_hiz(struct brw_context *brw,
    assert(mt->hiz_buf == NULL);
    assert((mt->aux_disable & INTEL_AUX_DISABLE_HIZ) == 0);
 
+   enum isl_aux_state **aux_state =
+      create_aux_state_map(mt, ISL_AUX_STATE_AUX_INVALID);
+   if (!aux_state)
+      return false;
+
    if (brw->gen == 7) {
       mt->hiz_buf = intel_gen7_hiz_buf_create(brw, mt);
    } else if (brw->gen >= 8) {
@@ -1863,24 +1918,15 @@ intel_miptree_alloc_hiz(struct brw_context *brw,
       mt->hiz_buf = intel_hiz_miptree_buf_create(brw, mt);
    }
 
-   if (!mt->hiz_buf)
+   if (!mt->hiz_buf) {
+      free(aux_state);
       return false;
-
-   /* Mark that all slices need a HiZ resolve. */
-   for (unsigned level = mt->first_level; level <= mt->last_level; ++level) {
-      if (!intel_miptree_level_enable_hiz(brw, mt, level))
-         continue;
-
-      for (unsigned layer = 0; layer < mt->level[level].depth; ++layer) {
-         struct intel_resolve_map *m = malloc(sizeof(struct intel_resolve_map));
-         exec_node_init(&m->link);
-         m->level = level;
-         m->layer = layer;
-         m->need = BLORP_HIZ_OP_HIZ_RESOLVE;
-
-         exec_list_push_tail(&mt->hiz_map, &m->link);
-      }
    }
+
+   for (unsigned level = mt->first_level; level <= mt->last_level; ++level)
+      intel_miptree_level_enable_hiz(brw, mt, level);
+
+   mt->aux_state = aux_state;
 
    return true;
 }
@@ -1933,137 +1979,41 @@ intel_miptree_sample_with_hiz(struct brw_context *brw,
  * Does the miptree slice have hiz enabled?
  */
 bool
-intel_miptree_level_has_hiz(struct intel_mipmap_tree *mt, uint32_t level)
+intel_miptree_level_has_hiz(const struct intel_mipmap_tree *mt, uint32_t level)
 {
    intel_miptree_check_level_layer(mt, level, 0);
    return mt->level[level].has_hiz;
 }
 
-void
-intel_miptree_slice_set_needs_hiz_resolve(struct intel_mipmap_tree *mt,
-					  uint32_t level,
-					  uint32_t layer)
+bool
+intel_miptree_has_color_unresolved(const struct intel_mipmap_tree *mt,
+                                   unsigned start_level, unsigned num_levels,
+                                   unsigned start_layer, unsigned num_layers)
 {
-   if (!intel_miptree_level_has_hiz(mt, level))
-      return;
+   assert(_mesa_is_format_color_format(mt->format));
 
-   intel_resolve_map_set(&mt->hiz_map,
-			 level, layer, BLORP_HIZ_OP_HIZ_RESOLVE);
-}
-
-
-void
-intel_miptree_slice_set_needs_depth_resolve(struct intel_mipmap_tree *mt,
-                                            uint32_t level,
-                                            uint32_t layer)
-{
-   if (!intel_miptree_level_has_hiz(mt, level))
-      return;
-
-   intel_resolve_map_set(&mt->hiz_map,
-			 level, layer, BLORP_HIZ_OP_DEPTH_RESOLVE);
-}
-
-void
-intel_miptree_set_all_slices_need_depth_resolve(struct intel_mipmap_tree *mt,
-                                                uint32_t level)
-{
-   uint32_t layer;
-   uint32_t end_layer = mt->level[level].depth;
-
-   for (layer = 0; layer < end_layer; layer++) {
-      intel_miptree_slice_set_needs_depth_resolve(mt, level, layer);
-   }
-}
-
-static bool
-intel_miptree_slice_resolve(struct brw_context *brw,
-			    struct intel_mipmap_tree *mt,
-			    uint32_t level,
-			    uint32_t layer,
-			    enum blorp_hiz_op need)
-{
-   intel_miptree_check_level_layer(mt, level, layer);
-
-   struct intel_resolve_map *item =
-	 intel_resolve_map_get(&mt->hiz_map, level, layer);
-
-   if (!item || item->need != need)
+   if (!mt->mcs_buf)
       return false;
 
-   intel_hiz_exec(brw, mt, level, layer, 1, need);
-   intel_resolve_map_remove(item);
-   return true;
-}
+   /* Clamp the level range to fit the miptree */
+   assert(start_level + num_levels >= start_level);
+   const uint32_t last_level =
+      MIN2(mt->last_level, start_level + num_levels - 1);
+   start_level = MAX2(mt->first_level, start_level);
+   num_levels = last_level - start_level + 1;
 
-bool
-intel_miptree_slice_resolve_hiz(struct brw_context *brw,
-				struct intel_mipmap_tree *mt,
-				uint32_t level,
-				uint32_t layer)
-{
-   return intel_miptree_slice_resolve(brw, mt, level, layer,
-				      BLORP_HIZ_OP_HIZ_RESOLVE);
-}
-
-bool
-intel_miptree_slice_resolve_depth(struct brw_context *brw,
-				  struct intel_mipmap_tree *mt,
-				  uint32_t level,
-				  uint32_t layer)
-{
-   return intel_miptree_slice_resolve(brw, mt, level, layer,
-				      BLORP_HIZ_OP_DEPTH_RESOLVE);
-}
-
-static bool
-intel_miptree_all_slices_resolve(struct brw_context *brw,
-				 struct intel_mipmap_tree *mt,
-				 enum blorp_hiz_op need)
-{
-   bool did_resolve = false;
-
-   foreach_list_typed_safe(struct intel_resolve_map, map, link, &mt->hiz_map) {
-      if (map->need != need)
-	 continue;
-
-      intel_hiz_exec(brw, mt, map->level, map->layer, 1, need);
-      intel_resolve_map_remove(map);
-      did_resolve = true;
+   for (uint32_t level = start_level; level <= last_level; level++) {
+      const uint32_t level_layers = MIN2(num_layers, mt->level[level].depth);
+      for (unsigned a = 0; a < level_layers; a++) {
+         enum isl_aux_state aux_state =
+            intel_miptree_get_aux_state(mt, level, start_layer + a);
+         assert(aux_state != ISL_AUX_STATE_AUX_INVALID);
+         if (aux_state != ISL_AUX_STATE_PASS_THROUGH)
+            return true;
+      }
    }
 
-   return did_resolve;
-}
-
-bool
-intel_miptree_all_slices_resolve_hiz(struct brw_context *brw,
-				     struct intel_mipmap_tree *mt)
-{
-   return intel_miptree_all_slices_resolve(brw, mt,
-					   BLORP_HIZ_OP_HIZ_RESOLVE);
-}
-
-bool
-intel_miptree_all_slices_resolve_depth(struct brw_context *brw,
-				       struct intel_mipmap_tree *mt)
-{
-   return intel_miptree_all_slices_resolve(brw, mt,
-					   BLORP_HIZ_OP_DEPTH_RESOLVE);
-}
-
-enum intel_fast_clear_state
-intel_miptree_get_fast_clear_state(const struct intel_mipmap_tree *mt,
-                                   unsigned level, unsigned layer)
-{
-   intel_miptree_check_level_layer(mt, level, layer);
-
-   const struct intel_resolve_map *item =
-      intel_resolve_map_const_get(&mt->color_resolve_map, level, layer);
-
-   if (!item)
-      return INTEL_FAST_CLEAR_STATE_RESOLVED;
-
-   return item->fast_clear_state;
+   return false;
 }
 
 static void
@@ -2090,136 +2040,602 @@ intel_miptree_check_color_resolve(const struct brw_context *brw,
    (void)layer;
 }
 
-void
-intel_miptree_set_fast_clear_state(const struct brw_context *brw,
-                                   struct intel_mipmap_tree *mt,
-                                   unsigned level,
-                                   unsigned first_layer,
-                                   unsigned num_layers,
-                                   enum intel_fast_clear_state new_state)
+static enum blorp_fast_clear_op
+get_ccs_d_resolve_op(enum isl_aux_state aux_state,
+                     bool ccs_supported, bool fast_clear_supported)
 {
-   /* Setting the state to resolved means removing the item from the list
-    * altogether.
-    */
-   assert(new_state != INTEL_FAST_CLEAR_STATE_RESOLVED);
+   assert(ccs_supported == fast_clear_supported);
 
-   intel_miptree_check_color_resolve(brw, mt, level, first_layer);
+   switch (aux_state) {
+   case ISL_AUX_STATE_CLEAR:
+   case ISL_AUX_STATE_COMPRESSED_CLEAR:
+      if (!ccs_supported)
+         return BLORP_FAST_CLEAR_OP_RESOLVE_FULL;
+      else
+         return BLORP_FAST_CLEAR_OP_NONE;
 
-   assert(first_layer + num_layers <= mt->physical_depth0);
+   case ISL_AUX_STATE_PASS_THROUGH:
+      return BLORP_FAST_CLEAR_OP_NONE;
 
-   for (unsigned i = 0; i < num_layers; i++)
-      intel_resolve_map_set(&mt->color_resolve_map, level,
-                            first_layer + i, new_state);
+   case ISL_AUX_STATE_RESOLVED:
+   case ISL_AUX_STATE_AUX_INVALID:
+   case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
+      break;
+   }
+
+   unreachable("Invalid aux state for CCS_D");
 }
 
-bool
-intel_miptree_has_color_unresolved(const struct intel_mipmap_tree *mt,
-                                   unsigned start_level, unsigned num_levels,
-                                   unsigned start_layer, unsigned num_layers)
+static enum blorp_fast_clear_op
+get_ccs_e_resolve_op(enum isl_aux_state aux_state,
+                     bool ccs_supported, bool fast_clear_supported)
 {
-   return intel_resolve_map_find_any(&mt->color_resolve_map,
-                                     start_level, num_levels,
-                                     start_layer, num_layers) != NULL;
+   switch (aux_state) {
+   case ISL_AUX_STATE_CLEAR:
+   case ISL_AUX_STATE_COMPRESSED_CLEAR:
+      if (!ccs_supported)
+         return BLORP_FAST_CLEAR_OP_RESOLVE_FULL;
+      else if (!fast_clear_supported)
+         return BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL;
+      else
+         return BLORP_FAST_CLEAR_OP_NONE;
+
+   case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
+      if (!ccs_supported)
+         return BLORP_FAST_CLEAR_OP_RESOLVE_FULL;
+      else
+         return BLORP_FAST_CLEAR_OP_NONE;
+
+   case ISL_AUX_STATE_PASS_THROUGH:
+      return BLORP_FAST_CLEAR_OP_NONE;
+
+   case ISL_AUX_STATE_RESOLVED:
+   case ISL_AUX_STATE_AUX_INVALID:
+      break;
+   }
+
+   unreachable("Invalid aux state for CCS_E");
 }
 
-void
-intel_miptree_used_for_rendering(const struct brw_context *brw,
-                                 struct intel_mipmap_tree *mt, unsigned level,
-                                 unsigned start_layer, unsigned num_layers)
+static void
+intel_miptree_prepare_ccs_access(struct brw_context *brw,
+                                 struct intel_mipmap_tree *mt,
+                                 uint32_t level, uint32_t layer,
+                                 bool aux_supported,
+                                 bool fast_clear_supported)
 {
-   const bool is_lossless_compressed =
-      intel_miptree_is_lossless_compressed(brw, mt);
+   enum isl_aux_state aux_state = intel_miptree_get_aux_state(mt, level, layer);
 
-   for (unsigned i = 0; i < num_layers; ++i) {
-      const enum intel_fast_clear_state fast_clear_state =
-         intel_miptree_get_fast_clear_state(mt, level, start_layer + i);
+   enum blorp_fast_clear_op resolve_op;
+   if (intel_miptree_is_lossless_compressed(brw, mt)) {
+      resolve_op = get_ccs_e_resolve_op(aux_state, aux_supported,
+                                        fast_clear_supported);
+   } else {
+      resolve_op = get_ccs_d_resolve_op(aux_state, aux_supported,
+                                        fast_clear_supported);
+   }
 
-      /* If the buffer was previously in fast clear state, change it to
-       * unresolved state, since it won't be guaranteed to be clear after
-       * rendering occurs.
-       */
-      if (is_lossless_compressed ||
-          fast_clear_state == INTEL_FAST_CLEAR_STATE_CLEAR) {
-         intel_miptree_set_fast_clear_state(
-            brw, mt, level, start_layer + i, 1,
-            INTEL_FAST_CLEAR_STATE_UNRESOLVED);
+   if (resolve_op != BLORP_FAST_CLEAR_OP_NONE) {
+      intel_miptree_check_color_resolve(brw, mt, level, layer);
+      brw_blorp_resolve_color(brw, mt, level, layer, resolve_op);
+
+      switch (resolve_op) {
+      case BLORP_FAST_CLEAR_OP_RESOLVE_FULL:
+         /* The CCS full resolve operation destroys the CCS and sets it to the
+          * pass-through state.  (You can also think of this as being both a
+          * resolve and an ambiguate in one operation.)
+          */
+         intel_miptree_set_aux_state(brw, mt, level, layer, 1,
+                                     ISL_AUX_STATE_PASS_THROUGH);
+         break;
+
+      case BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL:
+         intel_miptree_set_aux_state(brw, mt, level, layer, 1,
+                                     ISL_AUX_STATE_COMPRESSED_NO_CLEAR);
+         break;
+
+      default:
+         unreachable("Invalid resolve op");
       }
    }
 }
 
-static bool
-intel_miptree_needs_color_resolve(const struct brw_context *brw,
-                                  const struct intel_mipmap_tree *mt,
-                                  int flags)
+static void
+intel_miptree_finish_ccs_write(struct brw_context *brw,
+                               struct intel_mipmap_tree *mt,
+                               uint32_t level, uint32_t layer,
+                               bool written_with_ccs)
 {
-   if (mt->aux_disable & INTEL_AUX_DISABLE_CCS)
+   enum isl_aux_state aux_state = intel_miptree_get_aux_state(mt, level, layer);
+
+   if (intel_miptree_is_lossless_compressed(brw, mt)) {
+      switch (aux_state) {
+      case ISL_AUX_STATE_CLEAR:
+         assert(written_with_ccs);
+         intel_miptree_set_aux_state(brw, mt, level, layer, 1,
+                                     ISL_AUX_STATE_COMPRESSED_CLEAR);
+         break;
+
+      case ISL_AUX_STATE_COMPRESSED_CLEAR:
+      case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
+         assert(written_with_ccs);
+         break; /* Nothing to do */
+
+      case ISL_AUX_STATE_PASS_THROUGH:
+         if (written_with_ccs) {
+            intel_miptree_set_aux_state(brw, mt, level, layer, 1,
+                                        ISL_AUX_STATE_COMPRESSED_NO_CLEAR);
+         } else {
+            /* Nothing to do */
+         }
+         break;
+
+      case ISL_AUX_STATE_RESOLVED:
+      case ISL_AUX_STATE_AUX_INVALID:
+         unreachable("Invalid aux state for CCS_E");
+      }
+   } else {
+      /* CCS_D is a bit simpler */
+      switch (aux_state) {
+      case ISL_AUX_STATE_CLEAR:
+         assert(written_with_ccs);
+         intel_miptree_set_aux_state(brw, mt, level, layer, 1,
+                                     ISL_AUX_STATE_COMPRESSED_CLEAR);
+         break;
+
+      case ISL_AUX_STATE_COMPRESSED_CLEAR:
+         assert(written_with_ccs);
+         break; /* Nothing to do */
+
+      case ISL_AUX_STATE_PASS_THROUGH:
+         /* Nothing to do */
+         break;
+
+      case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
+      case ISL_AUX_STATE_RESOLVED:
+      case ISL_AUX_STATE_AUX_INVALID:
+         unreachable("Invalid aux state for CCS_D");
+      }
+   }
+}
+
+static void
+intel_miptree_finish_mcs_write(struct brw_context *brw,
+                               struct intel_mipmap_tree *mt,
+                               uint32_t level, uint32_t layer,
+                               bool written_with_aux)
+{
+   switch (intel_miptree_get_aux_state(mt, level, layer)) {
+   case ISL_AUX_STATE_CLEAR:
+      assert(written_with_aux);
+      intel_miptree_set_aux_state(brw, mt, level, layer, 1,
+                                  ISL_AUX_STATE_COMPRESSED_CLEAR);
+      break;
+
+   case ISL_AUX_STATE_COMPRESSED_CLEAR:
+      assert(written_with_aux);
+      break; /* Nothing to do */
+
+   case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
+   case ISL_AUX_STATE_RESOLVED:
+   case ISL_AUX_STATE_PASS_THROUGH:
+   case ISL_AUX_STATE_AUX_INVALID:
+      unreachable("Invalid aux state for MCS");
+   }
+}
+
+static void
+intel_miptree_prepare_hiz_access(struct brw_context *brw,
+                                 struct intel_mipmap_tree *mt,
+                                 uint32_t level, uint32_t layer,
+                                 bool hiz_supported, bool fast_clear_supported)
+{
+   enum blorp_hiz_op hiz_op = BLORP_HIZ_OP_NONE;
+   switch (intel_miptree_get_aux_state(mt, level, layer)) {
+   case ISL_AUX_STATE_CLEAR:
+   case ISL_AUX_STATE_COMPRESSED_CLEAR:
+      if (!hiz_supported || !fast_clear_supported)
+         hiz_op = BLORP_HIZ_OP_DEPTH_RESOLVE;
+      break;
+
+   case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
+      if (!hiz_supported)
+         hiz_op = BLORP_HIZ_OP_DEPTH_RESOLVE;
+      break;
+
+   case ISL_AUX_STATE_PASS_THROUGH:
+   case ISL_AUX_STATE_RESOLVED:
+      break;
+
+   case ISL_AUX_STATE_AUX_INVALID:
+      if (hiz_supported)
+         hiz_op = BLORP_HIZ_OP_HIZ_RESOLVE;
+      break;
+   }
+
+   if (hiz_op != BLORP_HIZ_OP_NONE) {
+      intel_hiz_exec(brw, mt, level, layer, 1, hiz_op);
+
+      switch (hiz_op) {
+      case BLORP_HIZ_OP_DEPTH_RESOLVE:
+         intel_miptree_set_aux_state(brw, mt, level, layer, 1,
+                                     ISL_AUX_STATE_RESOLVED);
+         break;
+
+      case BLORP_HIZ_OP_HIZ_RESOLVE:
+         /* The HiZ resolve operation is actually an ambiguate */
+         intel_miptree_set_aux_state(brw, mt, level, layer, 1,
+                                     ISL_AUX_STATE_PASS_THROUGH);
+         break;
+
+      default:
+         unreachable("Invalid HiZ op");
+      }
+   }
+}
+
+static void
+intel_miptree_finish_hiz_write(struct brw_context *brw,
+                               struct intel_mipmap_tree *mt,
+                               uint32_t level, uint32_t layer,
+                               bool written_with_hiz)
+{
+   switch (intel_miptree_get_aux_state(mt, level, layer)) {
+   case ISL_AUX_STATE_CLEAR:
+      assert(written_with_hiz);
+      intel_miptree_set_aux_state(brw, mt, level, layer, 1,
+                                  ISL_AUX_STATE_COMPRESSED_CLEAR);
+      break;
+
+   case ISL_AUX_STATE_COMPRESSED_NO_CLEAR:
+   case ISL_AUX_STATE_COMPRESSED_CLEAR:
+      assert(written_with_hiz);
+      break; /* Nothing to do */
+
+   case ISL_AUX_STATE_RESOLVED:
+      if (written_with_hiz) {
+         intel_miptree_set_aux_state(brw, mt, level, layer, 1,
+                                     ISL_AUX_STATE_COMPRESSED_NO_CLEAR);
+      } else {
+         intel_miptree_set_aux_state(brw, mt, level, layer, 1,
+                                     ISL_AUX_STATE_AUX_INVALID);
+      }
+
+   case ISL_AUX_STATE_PASS_THROUGH:
+      if (written_with_hiz) {
+         intel_miptree_set_aux_state(brw, mt, level, layer, 1,
+                                     ISL_AUX_STATE_COMPRESSED_NO_CLEAR);
+      }
+      break;
+
+   case ISL_AUX_STATE_AUX_INVALID:
+      assert(!written_with_hiz);
+      break;
+   }
+}
+
+static inline uint32_t
+miptree_level_range_length(const struct intel_mipmap_tree *mt,
+                           uint32_t start_level, uint32_t num_levels)
+{
+   assert(start_level >= mt->first_level);
+   assert(start_level <= mt->last_level);
+
+   if (num_levels == INTEL_REMAINING_LAYERS)
+      num_levels = mt->last_level - start_level + 1;
+   /* Check for overflow */
+   assert(start_level + num_levels >= start_level);
+   assert(start_level + num_levels <= mt->last_level + 1);
+
+   return num_levels;
+}
+
+static inline uint32_t
+miptree_layer_range_length(const struct intel_mipmap_tree *mt, uint32_t level,
+                           uint32_t start_layer, uint32_t num_layers)
+{
+   assert(level <= mt->last_level);
+   uint32_t total_num_layers = mt->level[level].depth;
+
+   assert(start_layer < total_num_layers);
+   if (num_layers == INTEL_REMAINING_LAYERS)
+      num_layers = total_num_layers - start_layer;
+   /* Check for overflow */
+   assert(start_layer + num_layers >= start_layer);
+   assert(start_layer + num_layers <= total_num_layers);
+
+   return num_layers;
+}
+
+void
+intel_miptree_prepare_access(struct brw_context *brw,
+                             struct intel_mipmap_tree *mt,
+                             uint32_t start_level, uint32_t num_levels,
+                             uint32_t start_layer, uint32_t num_layers,
+                             bool aux_supported, bool fast_clear_supported)
+{
+   num_levels = miptree_level_range_length(mt, start_level, num_levels);
+
+   if (_mesa_is_format_color_format(mt->format)) {
+      if (!mt->mcs_buf)
+         return;
+
+      if (mt->num_samples > 1) {
+         /* Nothing to do for MSAA */
+         assert(aux_supported && fast_clear_supported);
+      } else {
+         for (uint32_t l = 0; l < num_levels; l++) {
+            const uint32_t level = start_level + l;
+            const uint32_t level_layers =
+               miptree_layer_range_length(mt, level, start_layer, num_layers);
+            for (uint32_t a = 0; a < level_layers; a++) {
+               intel_miptree_prepare_ccs_access(brw, mt, level,
+                                                start_layer + a, aux_supported,
+                                                fast_clear_supported);
+            }
+         }
+      }
+   } else if (mt->format == MESA_FORMAT_S_UINT8) {
+      /* Nothing to do for stencil */
+   } else {
+      if (!mt->hiz_buf)
+         return;
+
+      for (uint32_t l = 0; l < num_levels; l++) {
+         const uint32_t level = start_level + l;
+         if (!intel_miptree_level_has_hiz(mt, level))
+            continue;
+
+         const uint32_t level_layers =
+            miptree_layer_range_length(mt, level, start_layer, num_layers);
+         for (uint32_t a = 0; a < level_layers; a++) {
+            intel_miptree_prepare_hiz_access(brw, mt, level, start_layer + a,
+                                             aux_supported,
+                                             fast_clear_supported);
+         }
+      }
+   }
+}
+
+void
+intel_miptree_finish_write(struct brw_context *brw,
+                           struct intel_mipmap_tree *mt, uint32_t level,
+                           uint32_t start_layer, uint32_t num_layers,
+                           bool written_with_aux)
+{
+   num_layers = miptree_layer_range_length(mt, level, start_layer, num_layers);
+
+   if (_mesa_is_format_color_format(mt->format)) {
+      if (!mt->mcs_buf)
+         return;
+
+      if (mt->num_samples > 1) {
+         for (uint32_t a = 0; a < num_layers; a++) {
+            intel_miptree_finish_mcs_write(brw, mt, level, start_layer + a,
+                                           written_with_aux);
+         }
+      } else {
+         for (uint32_t a = 0; a < num_layers; a++) {
+            intel_miptree_finish_ccs_write(brw, mt, level, start_layer + a,
+                                           written_with_aux);
+         }
+      }
+   } else if (mt->format == MESA_FORMAT_S_UINT8) {
+      /* Nothing to do for stencil */
+   } else {
+      if (!intel_miptree_level_has_hiz(mt, level))
+         return;
+
+      for (uint32_t a = 0; a < num_layers; a++) {
+         intel_miptree_finish_hiz_write(brw, mt, level, start_layer + a,
+                                        written_with_aux);
+      }
+   }
+}
+
+enum isl_aux_state
+intel_miptree_get_aux_state(const struct intel_mipmap_tree *mt,
+                            uint32_t level, uint32_t layer)
+{
+   intel_miptree_check_level_layer(mt, level, layer);
+
+   if (_mesa_is_format_color_format(mt->format)) {
+      assert(mt->mcs_buf != NULL);
+      assert(mt->num_samples <= 1 || mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS);
+   } else if (mt->format == MESA_FORMAT_S_UINT8) {
+      unreachable("Cannot get aux state for stencil");
+   } else {
+      assert(intel_miptree_level_has_hiz(mt, level));
+   }
+
+   return mt->aux_state[level][layer];
+}
+
+void
+intel_miptree_set_aux_state(struct brw_context *brw,
+                            struct intel_mipmap_tree *mt, uint32_t level,
+                            uint32_t start_layer, uint32_t num_layers,
+                            enum isl_aux_state aux_state)
+{
+   num_layers = miptree_layer_range_length(mt, level, start_layer, num_layers);
+
+   if (_mesa_is_format_color_format(mt->format)) {
+      assert(mt->mcs_buf != NULL);
+      assert(mt->num_samples <= 1 || mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS);
+   } else if (mt->format == MESA_FORMAT_S_UINT8) {
+      unreachable("Cannot get aux state for stencil");
+   } else {
+      assert(intel_miptree_level_has_hiz(mt, level));
+   }
+
+   for (unsigned a = 0; a < num_layers; a++)
+      mt->aux_state[level][start_layer + a] = aux_state;
+}
+
+/* On Gen9 color buffers may be compressed by the hardware (lossless
+ * compression). There are, however, format restrictions and care needs to be
+ * taken that the sampler engine is capable for re-interpreting a buffer with
+ * format different the buffer was originally written with.
+ *
+ * For example, SRGB formats are not compressible and the sampler engine isn't
+ * capable of treating RGBA_UNORM as SRGB_ALPHA. In such a case the underlying
+ * color buffer needs to be resolved so that the sampling surface can be
+ * sampled as non-compressed (i.e., without the auxiliary MCS buffer being
+ * set).
+ */
+static bool
+can_texture_with_ccs(struct brw_context *brw,
+                     struct intel_mipmap_tree *mt,
+                     mesa_format view_format)
+{
+   if (!intel_miptree_is_lossless_compressed(brw, mt))
       return false;
 
-   const bool is_lossless_compressed =
-      intel_miptree_is_lossless_compressed(brw, mt);
+   enum isl_format isl_mt_format = brw_isl_format_for_mesa_format(mt->format);
+   enum isl_format isl_view_format = brw_isl_format_for_mesa_format(view_format);
 
-   /* From gen9 onwards there is new compression scheme for single sampled
-    * surfaces called "lossless compressed". These don't need to be always
-    * resolved.
-    */
-   if ((flags & INTEL_MIPTREE_IGNORE_CCS_E) && is_lossless_compressed)
+   if (!isl_formats_are_ccs_e_compatible(&brw->screen->devinfo,
+                                         isl_mt_format, isl_view_format)) {
+      perf_debug("Incompatible sampling format (%s) for rbc (%s)\n",
+                 _mesa_get_format_name(view_format),
+                 _mesa_get_format_name(mt->format));
       return false;
-
-   /* Fast color clear resolves only make sense for non-MSAA buffers. */
-   if (mt->msaa_layout != INTEL_MSAA_LAYOUT_NONE && !is_lossless_compressed)
-      return false;
+   }
 
    return true;
 }
 
-bool
-intel_miptree_resolve_color(struct brw_context *brw,
-                            struct intel_mipmap_tree *mt, unsigned level,
-                            unsigned start_layer, unsigned num_layers,
-                            int flags)
+static void
+intel_miptree_prepare_texture_slices(struct brw_context *brw,
+                                     struct intel_mipmap_tree *mt,
+                                     mesa_format view_format,
+                                     uint32_t start_level, uint32_t num_levels,
+                                     uint32_t start_layer, uint32_t num_layers,
+                                     bool *aux_supported_out)
 {
-   intel_miptree_check_color_resolve(brw, mt, level, start_layer);
+   bool aux_supported, clear_supported;
+   if (_mesa_is_format_color_format(mt->format)) {
+      if (mt->num_samples > 1) {
+         aux_supported = clear_supported = true;
+      } else {
+         aux_supported = can_texture_with_ccs(brw, mt, view_format);
 
-   if (!intel_miptree_needs_color_resolve(brw, mt, flags))
-      return false;
-
-   /* Arrayed fast clear is only supported for gen8+. */
-   assert(brw->gen >= 8 || num_layers == 1);
-
-   bool resolved = false;
-   for (unsigned i = 0; i < num_layers; ++i) {
-      intel_miptree_check_level_layer(mt, level, start_layer + i);
-
-      struct intel_resolve_map *item =
-         intel_resolve_map_get(&mt->color_resolve_map, level,
-                               start_layer + i);
-
-      if (item) {
-         assert(item->fast_clear_state != INTEL_FAST_CLEAR_STATE_RESOLVED);
-
-         brw_blorp_resolve_color(brw, mt, level, start_layer);
-         intel_resolve_map_remove(item);
-         resolved = true;
+         /* Clear color is specified as ints or floats and the conversion is
+          * done by the sampler.  If we have a texture view, we would have to
+          * perform the clear color conversion manually.  Just disable clear
+          * color.
+          */
+         clear_supported = aux_supported && (mt->format == view_format);
       }
+   } else if (mt->format == MESA_FORMAT_S_UINT8) {
+      aux_supported = clear_supported = false;
+   } else {
+      aux_supported = clear_supported = intel_miptree_sample_with_hiz(brw, mt);
    }
 
-   return resolved;
+   intel_miptree_prepare_access(brw, mt, start_level, num_levels,
+                                start_layer, num_layers,
+                                aux_supported, clear_supported);
+   if (aux_supported_out)
+      *aux_supported_out = aux_supported;
 }
 
 void
-intel_miptree_all_slices_resolve_color(struct brw_context *brw,
-                                       struct intel_mipmap_tree *mt,
-                                       int flags)
+intel_miptree_prepare_texture(struct brw_context *brw,
+                              struct intel_mipmap_tree *mt,
+                              mesa_format view_format,
+                              bool *aux_supported_out)
 {
-   if (!intel_miptree_needs_color_resolve(brw, mt, flags))
-      return;
-      
-   foreach_list_typed_safe(struct intel_resolve_map, map, link,
-                           &mt->color_resolve_map) {
-      assert(map->fast_clear_state != INTEL_FAST_CLEAR_STATE_RESOLVED);
+   intel_miptree_prepare_texture_slices(brw, mt, view_format,
+                                        0, INTEL_REMAINING_LEVELS,
+                                        0, INTEL_REMAINING_LAYERS,
+                                        aux_supported_out);
+}
 
-      brw_blorp_resolve_color(brw, mt, map->level, map->layer);
-      intel_resolve_map_remove(map);
+void
+intel_miptree_prepare_image(struct brw_context *brw,
+                            struct intel_mipmap_tree *mt)
+{
+   /* The data port doesn't understand any compression */
+   intel_miptree_prepare_access(brw, mt, 0, INTEL_REMAINING_LEVELS,
+                                0, INTEL_REMAINING_LAYERS, false, false);
+}
+
+void
+intel_miptree_prepare_fb_fetch(struct brw_context *brw,
+                               struct intel_mipmap_tree *mt, uint32_t level,
+                               uint32_t start_layer, uint32_t num_layers)
+{
+   intel_miptree_prepare_texture_slices(brw, mt, mt->format, level, 1,
+                                        start_layer, num_layers, NULL);
+}
+
+void
+intel_miptree_prepare_render(struct brw_context *brw,
+                             struct intel_mipmap_tree *mt, uint32_t level,
+                             uint32_t start_layer, uint32_t layer_count,
+                             bool srgb_enabled)
+{
+   /* If FRAMEBUFFER_SRGB is used on Gen9+ then we need to resolve any of
+    * the single-sampled color renderbuffers because the CCS buffer isn't
+    * supported for SRGB formats. This only matters if FRAMEBUFFER_SRGB is
+    * enabled because otherwise the surface state will be programmed with
+    * the linear equivalent format anyway.
+    */
+   if (brw->gen >= 9 && srgb_enabled && mt->num_samples <= 1 &&
+       _mesa_get_srgb_format_linear(mt->format) != mt->format) {
+
+      /* Lossless compression is not supported for SRGB formats, it
+       * should be impossible to get here with such surfaces.
+       */
+      assert(!intel_miptree_is_lossless_compressed(brw, mt));
+      intel_miptree_prepare_access(brw, mt, level, 1, start_layer, layer_count,
+                                   false, false);
+   }
+
+   /* For layered rendering non-compressed fast cleared buffers need to be
+    * resolved. Surface state can carry only one fast color clear value
+    * while each layer may have its own fast clear color value. For
+    * compressed buffers color value is available in the color buffer.
+    */
+   if (layer_count > 1 &&
+       !(mt->aux_disable & INTEL_AUX_DISABLE_CCS) &&
+       !intel_miptree_is_lossless_compressed(brw, mt)) {
+      assert(brw->gen >= 8);
+
+      intel_miptree_prepare_access(brw, mt, level, 1, start_layer, layer_count,
+                                   false, false);
+   }
+}
+
+void
+intel_miptree_finish_render(struct brw_context *brw,
+                            struct intel_mipmap_tree *mt, uint32_t level,
+                            uint32_t start_layer, uint32_t layer_count)
+{
+   assert(_mesa_is_format_color_format(mt->format));
+   intel_miptree_finish_write(brw, mt, level, start_layer, layer_count,
+                              mt->mcs_buf != NULL);
+}
+
+void
+intel_miptree_prepare_depth(struct brw_context *brw,
+                            struct intel_mipmap_tree *mt, uint32_t level,
+                            uint32_t start_layer, uint32_t layer_count)
+{
+   intel_miptree_prepare_access(brw, mt, level, 1, start_layer, layer_count,
+                                mt->hiz_buf != NULL, mt->hiz_buf != NULL);
+}
+
+void
+intel_miptree_finish_depth(struct brw_context *brw,
+                           struct intel_mipmap_tree *mt, uint32_t level,
+                           uint32_t start_layer, uint32_t layer_count,
+                           bool depth_written)
+{
+   if (depth_written) {
+      intel_miptree_finish_write(brw, mt, level, start_layer, layer_count,
+                                 mt->hiz_buf != NULL);
    }
 }
 
@@ -2244,8 +2660,10 @@ intel_miptree_make_shareable(struct brw_context *brw,
     */
    assert(mt->msaa_layout == INTEL_MSAA_LAYOUT_NONE || mt->num_samples <= 1);
 
+   intel_miptree_prepare_access(brw, mt, 0, INTEL_REMAINING_LEVELS,
+                                0, INTEL_REMAINING_LAYERS, false, false);
+
    if (mt->mcs_buf) {
-      intel_miptree_all_slices_resolve_color(brw, mt, 0);
       mt->aux_disable |= (INTEL_AUX_DISABLE_CCS | INTEL_AUX_DISABLE_MCS);
       brw_bo_unreference(mt->mcs_buf->bo);
       free(mt->mcs_buf);
@@ -2255,12 +2673,12 @@ intel_miptree_make_shareable(struct brw_context *brw,
        * execute any will likely crash due to the missing aux buffer. So let's
        * delete all pending ops.
        */
-      exec_list_make_empty(&mt->color_resolve_map);
+      free(mt->aux_state);
+      mt->aux_state = NULL;
    }
 
    if (mt->hiz_buf) {
       mt->aux_disable |= INTEL_AUX_DISABLE_HIZ;
-      intel_miptree_all_slices_resolve_depth(brw, mt);
       intel_miptree_hiz_buffer_free(mt->hiz_buf);
       mt->hiz_buf = NULL;
 
@@ -2272,7 +2690,8 @@ intel_miptree_make_shareable(struct brw_context *brw,
        * any will likely crash due to the missing aux buffer. So let's delete
        * all pending ops.
        */
-      exec_list_make_empty(&mt->hiz_map);
+      free(mt->aux_state);
+      mt->aux_state = NULL;
    }
 }
 
@@ -2416,11 +2835,6 @@ intel_miptree_map_raw(struct brw_context *brw,
                       struct intel_mipmap_tree *mt,
                       GLbitfield mode)
 {
-   /* CPU accesses to color buffers don't understand fast color clears, so
-    * resolve any pending fast color clears before we map.
-    */
-   intel_miptree_all_slices_resolve_color(brw, mt, 0);
-
    struct brw_bo *bo = mt->bo;
 
    if (brw_batch_references(&brw->batch, bo))
@@ -3023,10 +3437,8 @@ intel_miptree_map(struct brw_context *brw,
       return;
    }
 
-   intel_miptree_slice_resolve_depth(brw, mt, level, slice);
-   if (map->mode & GL_MAP_WRITE_BIT) {
-      intel_miptree_slice_set_needs_hiz_resolve(mt, level, slice);
-   }
+   intel_miptree_access_raw(brw, mt, level, slice,
+                            map->mode & GL_MAP_WRITE_BIT);
 
    if (mt->format == MESA_FORMAT_S_UINT8) {
       intel_miptree_map_s8(brw, mt, map, level, slice);

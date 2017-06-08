@@ -162,11 +162,12 @@ brw_fast_clear_depth(struct gl_context *ctx)
     * flags out of the HiZ buffer into the real depth buffer.
     */
    if (mt->fast_clear_color.f32[0] != ctx->Depth.Clear) {
-      intel_miptree_all_slices_resolve_depth(brw, mt);
+      intel_miptree_prepare_access(brw, mt, 0, INTEL_REMAINING_LEVELS,
+                                   0, INTEL_REMAINING_LAYERS, true, false);
       mt->fast_clear_color.f32[0] = ctx->Depth.Clear;
    }
 
-   if (fb->MaxNumLayers > 0) {
+   if (depth_att->Layered) {
       intel_hiz_exec(brw, mt, depth_irb->mt_level,
                      depth_irb->mt_layer, depth_irb->layer_count,
                      BLORP_HIZ_OP_DEPTH_CLEAR);
@@ -178,7 +179,15 @@ brw_fast_clear_depth(struct gl_context *ctx)
    /* Now, the HiZ buffer contains data that needs to be resolved to the depth
     * buffer.
     */
-   intel_renderbuffer_att_set_needs_depth_resolve(depth_att);
+   if (depth_att->Layered) {
+      intel_miptree_set_aux_state(brw, mt, depth_irb->mt_level,
+                                  depth_irb->mt_layer, depth_irb->layer_count,
+                                  ISL_AUX_STATE_CLEAR);
+   } else {
+      intel_miptree_set_aux_state(brw, mt, depth_irb->mt_level,
+                                  depth_irb->mt_layer, 1,
+                                  ISL_AUX_STATE_CLEAR);
+   }
 
    return true;
 }

@@ -56,6 +56,7 @@
 #include "st_nir.h"
 #include "st_shader_cache.h"
 
+#include "util/hash_table.h"
 #include <algorithm>
 
 #define PROGRAM_ANY_CONST ((1 << PROGRAM_STATE_VAR) |    \
@@ -165,7 +166,7 @@ public:
 
    explicit st_src_reg(st_dst_reg reg);
 
-   int16_t index; /**< temporary index, VERT_ATTRIB_*, VARYING_SLOT_*, etc. */
+   int32_t index; /**< temporary index, VERT_ATTRIB_*, VARYING_SLOT_*, etc. */
    int16_t index2D;
    uint16_t swizzle; /**< SWIZZLE_XYZWONEZERO swizzles from Mesa. */
    int negate:4; /**< NEGATE_XYZW mask from mesa */
@@ -239,7 +240,7 @@ public:
 
    explicit st_dst_reg(st_src_reg reg);
 
-   int16_t index; /**< temporary index, VERT_ATTRIB_*, VARYING_SLOT_*, etc. */
+   int32_t index; /**< temporary index, VERT_ATTRIB_*, VARYING_SLOT_*, etc. */
    int16_t index2D;
    gl_register_file file:5; /**< PROGRAM_* from Mesa */
    unsigned writemask:4; /**< Bitfield of WRITEMASK_[XYZW] */
@@ -310,7 +311,9 @@ public:
    const struct tgsi_opcode_info *info;
 };
 
-class variable_storage : public exec_node {
+class variable_storage {
+   DECLARE_RZALLOC_CXX_OPERATORS(variable_storage)
+
 public:
    variable_storage(ir_variable *var, gl_register_file file, int index,
                     unsigned array_id = 0)
@@ -388,7 +391,7 @@ find_array_type(struct inout_decl *decls, unsigned count, unsigned array_id)
 }
 
 struct rename_reg_pair {
-   int old_reg;
+   bool valid;
    int new_reg;
 };
 
@@ -488,7 +491,7 @@ public:
    st_src_reg result;
 
    /** List of variable_storage */
-   exec_list variables;
+   struct hash_table *variables;
 
    /** List of immediate_storage */
    exec_list immediates;
@@ -556,7 +559,7 @@ public:
 
    void simplify_cmp(void);
 
-   void rename_temp_registers(int num_renames, struct rename_reg_pair *renames);
+   void rename_temp_registers(struct rename_reg_pair *renames);
    void get_first_temp_read(int *first_reads);
    void get_first_temp_write(int *first_writes);
    void get_last_temp_read_first_temp_write(int *last_reads, int *first_writes);
@@ -1307,13 +1310,13 @@ glsl_to_tgsi_visitor::get_temp(const glsl_type *type)
 variable_storage *
 glsl_to_tgsi_visitor::find_variable_storage(ir_variable *var)
 {
+   struct hash_entry *entry;
 
-   foreach_in_list(variable_storage, entry, &this->variables) {
-      if (entry->var == var)
-         return entry;
-   }
+   entry = _mesa_hash_table_search(this->variables, var);
+   if (!entry)
+      return NULL;
 
-   return NULL;
+   return (variable_storage *)entry->data;
 }
 
 void
@@ -1346,7 +1349,8 @@ glsl_to_tgsi_visitor::visit(ir_variable *ir)
       if (i == ir->get_num_state_slots()) {
          /* We'll set the index later. */
          storage = new(mem_ctx) variable_storage(ir, PROGRAM_STATE_VAR, -1);
-         this->variables.push_tail(storage);
+
+         _mesa_hash_table_insert(this->variables, ir, storage);
 
          dst = undef_dst;
       } else {
@@ -1361,7 +1365,7 @@ glsl_to_tgsi_visitor::visit(ir_variable *ir)
          storage = new(mem_ctx) variable_storage(ir, dst.file, dst.index,
                                                  dst.array_id);
 
-         this->variables.push_tail(storage);
+         _mesa_hash_table_insert(this->variables, ir, storage);
       }
 
 
@@ -2604,7 +2608,7 @@ glsl_to_tgsi_visitor::visit(ir_dereference_variable *ir)
       case ir_var_uniform:
          entry = new(mem_ctx) variable_storage(var, PROGRAM_UNIFORM,
                                                var->data.param_index);
-         this->variables.push_tail(entry);
+         _mesa_hash_table_insert(this->variables, var, entry);
          break;
       case ir_var_shader_in: {
          /* The linker assigns locations for varyings and attributes,
@@ -2651,7 +2655,8 @@ glsl_to_tgsi_visitor::visit(ir_dereference_variable *ir)
                                                decl->array_id);
          entry->component = component;
 
-         this->variables.push_tail(entry);
+         _mesa_hash_table_insert(this->variables, var, entry);
+
          break;
       }
       case ir_var_shader_out: {
@@ -2709,7 +2714,8 @@ glsl_to_tgsi_visitor::visit(ir_dereference_variable *ir)
          }
          entry->component = component;
 
-         this->variables.push_tail(entry);
+         _mesa_hash_table_insert(this->variables, var, entry);
+
          break;
       }
       case ir_var_system_value:
@@ -2723,7 +2729,7 @@ glsl_to_tgsi_visitor::visit(ir_dereference_variable *ir)
 
          entry = new(mem_ctx) variable_storage(var, src.file, src.index,
                                                src.array_id);
-         this->variables.push_tail(entry);
+         _mesa_hash_table_insert(this->variables, var, entry);
 
          break;
       }
@@ -4557,10 +4563,19 @@ glsl_to_tgsi_visitor::glsl_to_tgsi_visitor()
    have_fma = false;
    use_shared_memory = false;
    has_tex_txf_lz = false;
+   variables = NULL;
+}
+
+static void var_destroy(struct hash_entry *entry)
+{
+   variable_storage *storage = (variable_storage *)entry->data;
+
+   delete storage;
 }
 
 glsl_to_tgsi_visitor::~glsl_to_tgsi_visitor()
 {
+   _mesa_hash_table_destroy(variables, var_destroy);
    free(array_sizes);
    ralloc_free(mem_ctx);
 }
@@ -4730,30 +4745,31 @@ glsl_to_tgsi_visitor::simplify_cmp(void)
 
 /* Replaces all references to a temporary register index with another index. */
 void
-glsl_to_tgsi_visitor::rename_temp_registers(int num_renames, struct rename_reg_pair *renames)
+glsl_to_tgsi_visitor::rename_temp_registers(struct rename_reg_pair *renames)
 {
    foreach_in_list(glsl_to_tgsi_instruction, inst, &this->instructions) {
       unsigned j;
-      int k;
       for (j = 0; j < num_inst_src_regs(inst); j++) {
-         if (inst->src[j].file == PROGRAM_TEMPORARY)
-            for (k = 0; k < num_renames; k++)
-               if (inst->src[j].index == renames[k].old_reg)
-                  inst->src[j].index = renames[k].new_reg;
+         if (inst->src[j].file == PROGRAM_TEMPORARY) {
+            int old_idx = inst->src[j].index;
+            if (renames[old_idx].valid)
+               inst->src[j].index = renames[old_idx].new_reg;
+         }
       }
 
       for (j = 0; j < inst->tex_offset_num_offset; j++) {
-         if (inst->tex_offsets[j].file == PROGRAM_TEMPORARY)
-            for (k = 0; k < num_renames; k++)
-               if (inst->tex_offsets[j].index == renames[k].old_reg)
-                  inst->tex_offsets[j].index = renames[k].new_reg;
+         if (inst->tex_offsets[j].file == PROGRAM_TEMPORARY) {
+            int old_idx = inst->tex_offsets[j].index;
+            if (renames[old_idx].valid)
+               inst->tex_offsets[j].index = renames[old_idx].new_reg;
+         }
       }
 
       for (j = 0; j < num_inst_dst_regs(inst); j++) {
-         if (inst->dst[j].file == PROGRAM_TEMPORARY)
-             for (k = 0; k < num_renames; k++)
-                if (inst->dst[j].index == renames[k].old_reg)
-                   inst->dst[j].index = renames[k].new_reg;
+         if (inst->dst[j].file == PROGRAM_TEMPORARY) {
+            int old_idx = inst->dst[j].index;
+            if (renames[old_idx].valid)
+               inst->dst[j].index = renames[old_idx].new_reg;}
       }
    }
 }
@@ -5319,7 +5335,6 @@ glsl_to_tgsi_visitor::merge_registers(void)
    int *first_writes = ralloc_array(mem_ctx, int, this->next_temp);
    struct rename_reg_pair *renames = rzalloc_array(mem_ctx, struct rename_reg_pair, this->next_temp);
    int i, j;
-   int num_renames = 0;
 
    /* Read the indices of the last read and first write to each temp register
     * into an array so that we don't have to traverse the instruction list as
@@ -5346,9 +5361,8 @@ glsl_to_tgsi_visitor::merge_registers(void)
           * as the register at index j. */
          if (first_writes[i] <= first_writes[j] &&
              last_reads[i] <= first_writes[j]) {
-            renames[num_renames].old_reg = j;
-            renames[num_renames].new_reg = i;
-            num_renames++;
+            renames[j].new_reg = i;
+            renames[j].valid = true;
 
             /* Update the first_writes and last_reads arrays with the new
              * values for the merged register index, and mark the newly unused
@@ -5361,7 +5375,7 @@ glsl_to_tgsi_visitor::merge_registers(void)
       }
    }
 
-   rename_temp_registers(num_renames, renames);
+   rename_temp_registers(renames);
    ralloc_free(renames);
    ralloc_free(last_reads);
    ralloc_free(first_writes);
@@ -5376,7 +5390,6 @@ glsl_to_tgsi_visitor::renumber_registers(void)
    int new_index = 0;
    int *first_writes = ralloc_array(mem_ctx, int, this->next_temp);
    struct rename_reg_pair *renames = rzalloc_array(mem_ctx, struct rename_reg_pair, this->next_temp);
-   int num_renames = 0;
 
    for (i = 0; i < this->next_temp; i++) {
       first_writes[i] = -1;
@@ -5386,14 +5399,13 @@ glsl_to_tgsi_visitor::renumber_registers(void)
    for (i = 0; i < this->next_temp; i++) {
       if (first_writes[i] < 0) continue;
       if (i != new_index) {
-         renames[num_renames].old_reg = i;
-         renames[num_renames].new_reg = new_index;
-         num_renames++;
+         renames[i].new_reg = new_index;
+         renames[i].valid = true;
       }
       new_index++;
    }
 
-   rename_temp_registers(num_renames, renames);
+   rename_temp_registers(renames);
    this->next_temp = new_index;
    ralloc_free(renames);
    ralloc_free(first_writes);
@@ -6702,6 +6714,9 @@ get_mesa_program_tgsi(struct gl_context *ctx,
                                            PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED);
    v->has_tex_txf_lz = pscreen->get_param(pscreen,
                                           PIPE_CAP_TGSI_TEX_TXF_LZ);
+
+   v->variables = _mesa_hash_table_create(v->mem_ctx, _mesa_hash_pointer,
+                                          _mesa_key_pointer_equal);
    skip_merge_registers =
       pscreen->get_shader_param(pscreen, ptarget,
                                 PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS);

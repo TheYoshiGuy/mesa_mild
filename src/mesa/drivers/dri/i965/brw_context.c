@@ -186,42 +186,6 @@ intel_disable_rb_aux_buffer(struct brw_context *brw, const struct brw_bo *bo)
    return found;
 }
 
-/* On Gen9 color buffers may be compressed by the hardware (lossless
- * compression). There are, however, format restrictions and care needs to be
- * taken that the sampler engine is capable for re-interpreting a buffer with
- * format different the buffer was originally written with.
- *
- * For example, SRGB formats are not compressible and the sampler engine isn't
- * capable of treating RGBA_UNORM as SRGB_ALPHA. In such a case the underlying
- * color buffer needs to be resolved so that the sampling surface can be
- * sampled as non-compressed (i.e., without the auxiliary MCS buffer being
- * set).
- */
-static bool
-intel_texture_view_requires_resolve(struct brw_context *brw,
-                                    struct intel_texture_object *intel_tex)
-{
-   if (brw->gen < 9 ||
-       !intel_miptree_is_lossless_compressed(brw, intel_tex->mt))
-     return false;
-
-   const enum isl_format isl_format =
-      brw_isl_format_for_mesa_format(intel_tex->_Format);
-
-   if (isl_format_supports_ccs_e(&brw->screen->devinfo, isl_format))
-      return false;
-
-   perf_debug("Incompatible sampling format (%s) for rbc (%s)\n",
-              _mesa_get_format_name(intel_tex->_Format),
-              _mesa_get_format_name(intel_tex->mt->format));
-
-   if (intel_disable_rb_aux_buffer(brw, intel_tex->mt->bo))
-      perf_debug("Sampling renderbuffer with non-compressible format - "
-                 "turning off compression");
-
-   return true;
-}
-
 static void
 intel_update_state(struct gl_context * ctx, GLuint new_state)
 {
@@ -239,8 +203,12 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
 
    /* Resolve the depth buffer's HiZ buffer. */
    depth_irb = intel_get_renderbuffer(ctx->DrawBuffer, BUFFER_DEPTH);
-   if (depth_irb)
-      intel_renderbuffer_resolve_hiz(brw, depth_irb);
+   if (depth_irb && depth_irb->mt) {
+      intel_miptree_prepare_depth(brw, depth_irb->mt,
+                                  depth_irb->mt_level,
+                                  depth_irb->mt_layer,
+                                  depth_irb->layer_count);
+   }
 
    memset(brw->draw_aux_buffer_disabled, 0,
           sizeof(brw->draw_aux_buffer_disabled));
@@ -257,16 +225,16 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
       /* We need inte_texture_object::_Format to be valid */
       intel_finalize_mipmap_tree(brw, i);
 
-      if (intel_miptree_sample_with_hiz(brw, tex_obj->mt))
-         intel_miptree_all_slices_resolve_hiz(brw, tex_obj->mt);
-      else
-         intel_miptree_all_slices_resolve_depth(brw, tex_obj->mt);
-      /* Sampling engine understands lossless compression and resolving
-       * those surfaces should be skipped for performance reasons.
-       */
-      const int flags = intel_texture_view_requires_resolve(brw, tex_obj) ?
-                           0 : INTEL_MIPTREE_IGNORE_CCS_E;
-      intel_miptree_all_slices_resolve_color(brw, tex_obj->mt, flags);
+      bool aux_supported;
+      intel_miptree_prepare_texture(brw, tex_obj->mt, tex_obj->_Format,
+                                    &aux_supported);
+
+      if (!aux_supported && brw->gen >= 9 &&
+          intel_disable_rb_aux_buffer(brw, tex_obj->mt->bo)) {
+         perf_debug("Sampling renderbuffer with non-compressible format - "
+                    "turning off compression");
+      }
+
       brw_render_cache_set_check_flush(brw, tex_obj->mt->bo);
 
       if (tex_obj->base.StencilSampling ||
@@ -286,14 +254,7 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
             tex_obj = intel_texture_object(u->TexObj);
 
             if (tex_obj && tex_obj->mt) {
-               /* Access to images is implemented using indirect messages
-                * against data port. Normal render target write understands
-                * lossless compression but unfortunately the typed/untyped
-                * read/write interface doesn't. Therefore even lossless
-                * compressed surfaces need to be resolved prior to accessing
-                * them. Hence skip setting INTEL_MIPTREE_IGNORE_CCS_E.
-                */
-               intel_miptree_all_slices_resolve_color(brw, tex_obj->mt, 0);
+               intel_miptree_prepare_image(brw, tex_obj->mt);
 
                if (intel_miptree_is_lossless_compressed(brw, tex_obj->mt) &&
                    intel_disable_rb_aux_buffer(brw, tex_obj->mt->bo)) {
@@ -317,43 +278,24 @@ intel_update_state(struct gl_context * ctx, GLuint new_state)
          const struct intel_renderbuffer *irb =
             intel_renderbuffer(fb->_ColorDrawBuffers[i]);
 
-         if (irb &&
-             intel_miptree_resolve_color(
-                brw, irb->mt, irb->mt_level, irb->mt_layer, irb->layer_count,
-                INTEL_MIPTREE_IGNORE_CCS_E))
-            brw_render_cache_set_check_flush(brw, irb->mt->bo);
+         if (irb) {
+            intel_miptree_prepare_fb_fetch(brw, irb->mt, irb->mt_level,
+                                           irb->mt_layer, irb->layer_count);
+         }
       }
    }
 
-   /* If FRAMEBUFFER_SRGB is used on Gen9+ then we need to resolve any of the
-    * single-sampled color renderbuffers because the CCS buffer isn't
-    * supported for SRGB formats. This only matters if FRAMEBUFFER_SRGB is
-    * enabled because otherwise the surface state will be programmed with the
-    * linear equivalent format anyway.
-    */
-   if (brw->gen >= 9 && ctx->Color.sRGBEnabled) {
-      struct gl_framebuffer *fb = ctx->DrawBuffer;
-      for (int i = 0; i < fb->_NumColorDrawBuffers; i++) {
-         struct gl_renderbuffer *rb = fb->_ColorDrawBuffers[i];
+   struct gl_framebuffer *fb = ctx->DrawBuffer;
+   for (int i = 0; i < fb->_NumColorDrawBuffers; i++) {
+      struct intel_renderbuffer *irb =
+         intel_renderbuffer(fb->_ColorDrawBuffers[i]);
 
-         if (rb == NULL)
-            continue;
+      if (irb == NULL || irb->mt == NULL)
+         continue;
 
-         struct intel_renderbuffer *irb = intel_renderbuffer(rb);
-         struct intel_mipmap_tree *mt = irb->mt;
-
-         if (mt == NULL ||
-             mt->num_samples > 1 ||
-             _mesa_get_srgb_format_linear(mt->format) == mt->format)
-               continue;
-
-         /* Lossless compression is not supported for SRGB formats, it
-          * should be impossible to get here with such surfaces.
-          */
-         assert(!intel_miptree_is_lossless_compressed(brw, mt));
-         intel_miptree_all_slices_resolve_color(brw, mt, 0);
-         brw_render_cache_set_check_flush(brw, mt->bo);
-      }
+      intel_miptree_prepare_render(brw, irb->mt, irb->mt_level,
+                                   irb->mt_layer, irb->layer_count,
+                                   ctx->Color.sRGBEnabled);
    }
 
    _mesa_lock_context_textures(ctx);
@@ -1392,7 +1334,7 @@ intel_resolve_for_dri2_flush(struct brw_context *brw,
       if (rb->mt->num_samples <= 1) {
          assert(rb->mt_layer == 0 && rb->mt_level == 0 &&
                 rb->layer_count == 1);
-         intel_miptree_resolve_color(brw, rb->mt, 0, 0, 1, 0);
+         intel_miptree_prepare_access(brw, rb->mt, 0, 1, 0, 1, false, false);
       } else {
          intel_renderbuffer_downsample(brw, rb);
       }

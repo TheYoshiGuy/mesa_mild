@@ -240,10 +240,7 @@ static int r600_init_surface(struct r600_common_screen *rscreen,
 		bpe = 4; /* stencil is allocated separately on evergreen */
 	} else {
 		bpe = util_format_get_blocksize(ptex->format);
-		/* align byte per element on dword */
-		if (bpe == 3) {
-			bpe = 4;
-		}
+		assert(util_is_power_of_two(bpe));
 	}
 
 	if (!is_flushed_depth && is_depth) {
@@ -1281,6 +1278,8 @@ r600_choose_tiling(struct r600_common_screen *rscreen,
 {
 	const struct util_format_description *desc = util_format_description(templ->format);
 	bool force_tiling = templ->flags & R600_RESOURCE_FLAG_FORCE_TILING;
+	bool is_depth_stencil = util_format_is_depth_or_stencil(templ->format) &&
+				!(templ->flags & R600_RESOURCE_FLAG_FLUSHED_DEPTH);
 
 	/* MSAA resources must be 2D tiled. */
 	if (templ->nr_samples > 1)
@@ -1289,6 +1288,14 @@ r600_choose_tiling(struct r600_common_screen *rscreen,
 	/* Transfer resources should be linear. */
 	if (templ->flags & R600_RESOURCE_FLAG_TRANSFER)
 		return RADEON_SURF_MODE_LINEAR_ALIGNED;
+
+	/* Avoid Z/S decompress blits by forcing TC-compatible HTILE on VI,
+	 * which requires 2D tiling.
+	 */
+	if (rscreen->chip_class == VI &&
+	    is_depth_stencil &&
+	    (templ->flags & PIPE_RESOURCE_FLAG_TEXTURING_MORE_LIKELY))
+		return RADEON_SURF_MODE_2D;
 
 	/* r600g: force tiling on TEXTURE_2D and TEXTURE_3D compute resources. */
 	if (rscreen->chip_class >= R600 && rscreen->chip_class <= CAYMAN &&
@@ -1300,9 +1307,9 @@ r600_choose_tiling(struct r600_common_screen *rscreen,
 	/* Handle common candidates for the linear mode.
 	 * Compressed textures and DB surfaces must always be tiled.
 	 */
-	if (!force_tiling && !util_format_is_compressed(templ->format) &&
-	    (!util_format_is_depth_or_stencil(templ->format) ||
-	     templ->flags & R600_RESOURCE_FLAG_FLUSHED_DEPTH)) {
+	if (!force_tiling &&
+	    !is_depth_stencil &&
+	    !util_format_is_compressed(templ->format)) {
 		if (rscreen->debug_flags & DBG_NO_TILING)
 			return RADEON_SURF_MODE_LINEAR_ALIGNED;
 
