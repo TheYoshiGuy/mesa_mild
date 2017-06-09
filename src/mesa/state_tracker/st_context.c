@@ -161,25 +161,34 @@ st_get_active_states(struct gl_context *ctx)
 }
 
 
+void
+st_invalidate_buffers(struct st_context *st)
+{
+   st->dirty |= ST_NEW_BLEND |
+                ST_NEW_DSA |
+                ST_NEW_FB_STATE |
+                ST_NEW_SAMPLE_MASK |
+                ST_NEW_SAMPLE_SHADING |
+                ST_NEW_FS_STATE |
+                ST_NEW_POLY_STIPPLE |
+                ST_NEW_VIEWPORT |
+                ST_NEW_RASTERIZER |
+                ST_NEW_SCISSOR |
+                ST_NEW_WINDOW_RECTANGLES;
+}
+
+
 /**
  * Called via ctx->Driver.UpdateState()
  */
-void st_invalidate_state(struct gl_context * ctx, GLbitfield new_state)
+static void
+st_invalidate_state(struct gl_context * ctx)
 {
+   GLbitfield new_state = ctx->NewState;
    struct st_context *st = st_context(ctx);
 
    if (new_state & _NEW_BUFFERS) {
-      st->dirty |= ST_NEW_BLEND |
-                   ST_NEW_DSA |
-                   ST_NEW_FB_STATE |
-                   ST_NEW_SAMPLE_MASK |
-                   ST_NEW_SAMPLE_SHADING |
-                   ST_NEW_FS_STATE |
-                   ST_NEW_POLY_STIPPLE |
-                   ST_NEW_VIEWPORT |
-                   ST_NEW_RASTERIZER |
-                   ST_NEW_SCISSOR |
-                   ST_NEW_WINDOW_RECTANGLES;
+      st_invalidate_buffers(st);
    } else {
       /* These set a subset of flags set by _NEW_BUFFERS, so we only have to
        * check them when _NEW_BUFFERS isn't set.
@@ -190,10 +199,6 @@ void st_invalidate_state(struct gl_context * ctx, GLbitfield new_state)
 
       if (new_state & _NEW_PROGRAM)
          st->dirty |= ST_NEW_RASTERIZER;
-
-      if (new_state & _NEW_SCISSOR)
-         st->dirty |= ST_NEW_RASTERIZER |
-                      ST_NEW_SCISSOR;
 
       if (new_state & _NEW_FOG)
          st->dirty |= ST_NEW_FS_STATE;
@@ -270,11 +275,6 @@ void st_invalidate_state(struct gl_context * ctx, GLbitfield new_state)
 
    if (new_state & _NEW_PROGRAM_CONSTANTS)
       st->dirty |= st->active_states & ST_NEW_CONSTANTS;
-
-   /* This is the only core Mesa module we depend upon.
-    * No longer use swrast, swsetup, tnl.
-    */
-   _vbo_InvalidateState(ctx, new_state);
 }
 
 
@@ -519,6 +519,8 @@ static void st_init_driver_flags(struct st_context *st)
    f->NewImageUnits = ST_NEW_IMAGE_UNITS;
    f->NewWindowRectangles = ST_NEW_WINDOW_RECTANGLES;
    f->NewFramebufferSRGB = ST_NEW_FRAMEBUFFER;
+   f->NewScissorRect = ST_NEW_SCISSOR;
+   f->NewScissorTest = ST_NEW_SCISSOR | ST_NEW_RASTERIZER;
 }
 
 struct st_context *st_create_context(gl_api api, struct pipe_context *pipe,

@@ -451,8 +451,9 @@ nouveau_state_emit(struct gl_context *ctx)
 }
 
 static void
-nouveau_update_state(struct gl_context *ctx, GLbitfield new_state)
+nouveau_update_state(struct gl_context *ctx)
 {
+	GLbitfield new_state = ctx->NewState;
 	int i;
 
 	if (new_state & (_NEW_PROJECTION | _NEW_MODELVIEW))
@@ -493,7 +494,6 @@ nouveau_update_state(struct gl_context *ctx, GLbitfield new_state)
 
 	_swrast_InvalidateState(ctx, new_state);
 	_tnl_InvalidateState(ctx, new_state);
-	_vbo_InvalidateState(ctx, new_state);
 
 	nouveau_state_emit(ctx);
 }

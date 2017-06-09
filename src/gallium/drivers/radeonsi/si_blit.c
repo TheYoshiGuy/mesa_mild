@@ -310,11 +310,11 @@ si_blit_decompress_zs_in_place(struct si_context *sctx,
 }
 
 static void
-si_flush_depth_texture(struct si_context *sctx,
-		       struct r600_texture *tex,
-		       unsigned required_planes,
-		       unsigned first_level, unsigned last_level,
-		       unsigned first_layer, unsigned last_layer)
+si_decompress_depth(struct si_context *sctx,
+		    struct r600_texture *tex,
+		    unsigned required_planes,
+		    unsigned first_level, unsigned last_level,
+		    unsigned first_layer, unsigned last_layer)
 {
 	unsigned inplace_planes = 0;
 	unsigned copy_planes = 0;
@@ -391,11 +391,11 @@ si_flush_depth_texture(struct si_context *sctx,
 }
 
 static void
-si_flush_depth_textures(struct si_context *sctx,
-			struct si_textures_info *textures)
+si_decompress_sampler_depth_textures(struct si_context *sctx,
+				     struct si_textures_info *textures)
 {
 	unsigned i;
-	unsigned mask = textures->depth_texture_mask;
+	unsigned mask = textures->needs_depth_decompress_mask;
 
 	while (mask) {
 		struct pipe_sampler_view *view;
@@ -411,11 +411,10 @@ si_flush_depth_textures(struct si_context *sctx,
 		tex = (struct r600_texture *)view->texture;
 		assert(tex->db_compatible);
 
-		si_flush_depth_texture(
-				sctx, tex,
-				sview->is_stencil_sampler ? PIPE_MASK_S : PIPE_MASK_Z,
-				view->u.tex.first_level, view->u.tex.last_level,
-				0, util_max_layer(&tex->resource.b.b, view->u.tex.first_level));
+		si_decompress_depth(sctx, tex,
+				    sview->is_stencil_sampler ? PIPE_MASK_S : PIPE_MASK_Z,
+				    view->u.tex.first_level, view->u.tex.last_level,
+				    0, util_max_layer(&tex->resource.b.b, view->u.tex.first_level));
 	}
 }
 
@@ -507,7 +506,7 @@ si_decompress_sampler_color_textures(struct si_context *sctx,
 				     struct si_textures_info *textures)
 {
 	unsigned i;
-	unsigned mask = textures->compressed_colortex_mask;
+	unsigned mask = textures->needs_color_decompress_mask;
 
 	while (mask) {
 		struct pipe_sampler_view *view;
@@ -530,7 +529,7 @@ si_decompress_image_color_textures(struct si_context *sctx,
 				   struct si_images_info *images)
 {
 	unsigned i;
-	unsigned mask = images->compressed_colortex_mask;
+	unsigned mask = images->needs_color_decompress_mask;
 
 	while (mask) {
 		const struct pipe_image_view *view;
@@ -664,13 +663,13 @@ static void si_decompress_textures(struct si_context *sctx, unsigned shader_mask
 	while (mask) {
 		unsigned i = u_bit_scan(&mask);
 
-		if (sctx->samplers[i].depth_texture_mask) {
-			si_flush_depth_textures(sctx, &sctx->samplers[i]);
+		if (sctx->samplers[i].needs_depth_decompress_mask) {
+			si_decompress_sampler_depth_textures(sctx, &sctx->samplers[i]);
 		}
-		if (sctx->samplers[i].compressed_colortex_mask) {
+		if (sctx->samplers[i].needs_color_decompress_mask) {
 			si_decompress_sampler_color_textures(sctx, &sctx->samplers[i]);
 		}
-		if (sctx->images[i].compressed_colortex_mask) {
+		if (sctx->images[i].needs_color_decompress_mask) {
 			si_decompress_image_color_textures(sctx, &sctx->images[i]);
 		}
 	}
@@ -727,7 +726,7 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 		}
 	}
 
-	if (zstex && zstex->htile_buffer &&
+	if (zstex && zstex->htile_offset &&
 	    zsbuf->u.tex.level == 0 &&
 	    zsbuf->u.tex.first_layer == 0 &&
 	    zsbuf->u.tex.last_layer == util_max_layer(&zstex->resource.b.b, 0)) {
@@ -840,9 +839,9 @@ static void si_decompress_subresource(struct pipe_context *ctx,
 		if (!(rtex->surface.flags & RADEON_SURF_SBUFFER))
 			planes &= ~PIPE_MASK_S;
 
-		si_flush_depth_texture(sctx, rtex, planes,
-				       level, level,
-				       first_layer, last_layer);
+		si_decompress_depth(sctx, rtex, planes,
+				    level, level,
+				    first_layer, last_layer);
 	} else if (rtex->fmask.size || rtex->cmask.size || rtex->dcc_offset) {
 		si_blit_decompress_color(ctx, rtex, level, level,
 					 first_layer, last_layer, false);

@@ -35,7 +35,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "main/glheader.h"
 #include "main/imports.h"
-#include "main/api_arrayelt.h"
 #include "main/enums.h"
 #include "main/light.h"
 #include "main/framebuffer.h"
@@ -2277,15 +2276,15 @@ GLboolean r200ValidateState( struct gl_context *ctx )
 }
 
 
-static void r200InvalidateState( struct gl_context *ctx, GLuint new_state )
+static void r200InvalidateState(struct gl_context *ctx)
 {
+   GLuint new_state = ctx->NewState;
+
    r200ContextPtr rmesa = R200_CONTEXT(ctx);
 
    _swrast_InvalidateState( ctx, new_state );
    _swsetup_InvalidateState( ctx, new_state );
-   _vbo_InvalidateState( ctx, new_state );
    _tnl_InvalidateState( ctx, new_state );
-   _ae_invalidate_state( ctx, new_state );
    R200_CONTEXT(ctx)->radeon.NewGLState |= new_state;
 
    if (new_state & _NEW_PROGRAM)
