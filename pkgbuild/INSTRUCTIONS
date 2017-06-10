@@ -2,105 +2,47 @@
 -
 -This is for archlinux, many distribution based on arch should work.
 -Any distribution recent enough should work when building from source 
--
--If you know how to compile mesa from source, do not waste your time,  skip directly to "5)"
--
--
--
--Prequisites :
--
--- It's assumed you have at least basic knowledge about makepkg and a working toolchain for both i686 and amd64 
--
--Something you must be aware of :
--- A recent kernel is best, because mesa support and features varies in function of kernel
--
--- You may use LLVM or GCC to build mesa but for LLVM it's best to activate kerberizer repository to grab LLVM (or 32 bits compilation will fail)
--
--
--- Now some radeon specifics :
--There is two radeon drivers for GCN hardware, amdgpu or radeon
--(If you execute 'lspci -k' you will be able to see which one is used)
--
--    - amdgpu needs a special kernel unless you don't care about sound via HDMI or DisplayPort (or if you rely on intel IGD as primary monitor and DRI_PRIME), it provides vulkan 
--
--    - radeon is well supported, but doesn't provide vulkan
--
--
--Ok let's start the process by installing a shiny new stack 
--    
--
+-Because of dependencies related to wine, be sure to enable multilib and have a gcc able to build both amd64 or i686 binaries
+-Mesa depends on a recent libdrm and a recent kernel
+-This repository will be updated from time to time when I'm sure the update doesn't break some programs (but not all)
+
+
+I) If you don't know how to proceed to build a package from git
+
+- Download the script called build_mesa.sh from this directory (as raw), don't clone repository first unless you don't care about the space or the data, (you'll be cloning more than enough)
+- check if it suits you (as an habit you should never execute something you just downloaded just because you're told to)
+
 -1) Add this repository in /etc/pacman.conf BEFORE the others repositories so you can grab lattest LLVM, kernel and libdrm
 -
 -[mesa-git]
 -Server = http://pkgbuild.com/~lcarlier/$repo/$arch
 -SigLevel = Never
 -
--2) Install (using pacman) (if it complains force with "-Syudd --force")
--
--# pacman -Syu mesagit linux-amd-staging linux-amd-staging-docs linux-amd-staging-headers
--
--- RESULT: 
--    You have a bleeding edge installation of mesa component and mesa. We will need to replace that mesa later.
--    
--3 ) Tuning before building (OPTIONAL)
--I assume makepkg is installed, aswell as git, the section applies to makepkg.conf
--
--Mesa works well with compiler flags "-O3 -march=native -flto", but I recommend first to make it works fine and after in case you need it to "tune"
--
--wine-staging/gamining-nine doesn't like "-O3" and "-flto", so for it use only "-march=native"
--
--Despite this, if you want to tune at the beginning mesa (but not wine*)
--Try to copy /etc/makepkg.conf to /etc/makepkg-opt.conf
--
--and check CFLAGS, CXXFLAGS, LDFLAGS values :
--
--CFLAGS="-march=native -O2 -flto"
--CXXFLAGS="-march=native -O2 -flto"
--LDFLAGS="-Wl,-O2 -Wl,--sort-common -Wl,-z,now -Wl,-flto"
--
--For wine-* it would be best like this :
--
--CFLAGS="-march=native -O"
--CXXFLAGS="-march=native -O"
--LDFLAGS="-Wl,-O -Wl,--sort-common -Wl,-z,now"
--
--Explanations :
---flto : Optimization pass at linking time
---O<level> : Choose an optiomization level
---march=native : Use a tuning for the local cpu (ignoring compatibility)
--
--Note : Even if it's not mandatory, if you choose to build wine from git too, you need to build mesa for i686 aswell
--
--4) Building
--- If you want it to be quick you can clone my repository localy and changes "source" URLs in both PKGBUILD like this
--replace :
--source=('mesa::git+https://github.com/mikakev1/mesa_mild_compatibility.git')
--with
--source=('mesa::git+file:///path/on/this/machine/mesa')
--
--There is two sets of PKGBUILD created 
--(it's only a trival modification basically only source and <configure> changes) 
--
--- first is called radeonsi-only. It works with both amdgpu and radeon drivers with GCC and LLVM (from kerberizer) 
--
--- The other add support for intel IGD so you can have an intel IGD as primary GPU and radeonsi for application (DRI_PRIME) . There is a possibility that Cemu works with intel IGDi aswell (with HASWELL or more recent :) ), but I did not test.
--
--- For reliability you'll need to build both amd64 and i686 version of mesa, or wine will probably fail for some applications, and it's better to validate with some steam applications
--
--Download the two PKGBUILDs, switch to a terminal  and go to their location
--
--# cd /"directory where it was extracted"
--
--# makepkg -Ccif -p PKGBUILD.mesa-amd64 
--Install when prompted
--
--# makepkg -Ccif -p  PKGBUILD.mesa-i686
--Install when prompted
--
--Now if you want to build wine, do it, again it's not at all mandatory
--
--
--5) If everything goes well you have now a mesa with four new options of configuration available.
+
+-2) Run the script 
+
+-3) Wait
+
+-4) Wait more
+
+-5) Try to learn "to wait" in many languages, in french "attendre" open a door to many synonyms.
+
+-6) Once it's finished, the packages will be available in PKGBUILD/<component>/
+
+-7) Note this on a paper :" if systems is unable to boot add =>  modprobe.blacklist=amdgpu,radeonsi <= to the kernel command line and then reinstall official mesa"
+
+-8) You may install the pkg if it complains with the commandline 
+
+    pacman -Udd PKGBUILD/libdrm64/*xz --force
+    pacman -Udd PKGBUILD/libdrm32/*xz --force
+    pacman -Udd PKGBUILD/mesa64/*xz --force
+    pacman -Udd PKGBUILD/mesa32/*xz --force
+
+
+
+II) 
+
+If everything goes well you have now a mesa with four new options of configuration available.
 -
 -Select these options (for your graphic card) using "driconf" 
 -
@@ -114,15 +56,14 @@
 -    enable "Bypass some validation related to VBO when using core profile"
 -    
 -
--Save or close application and it's best if you reboot now.
+-Save or close application and it's best if you reboot now, but it may not be necessary
 -
 -To launch CEMU (if installed for instance in /cemu/cemu1.8.0)
 -Open a terminal
 -# cd /cemu/cemu1.8.0
--# "MESA_GL_VERSION_OVERRIDE=4.5 wine64 Cemu.exe"
+-# "MESA_GL_VERSION_OVERRIDE=4.5" wine64 Cemu.exe
 -
 -- Check MESA_NO_ERROR is  not set (unless you stick to a stable 17.1)
--- Since version 1.8.0 Cemu fails to start first time (screen related?), I did not experience this in 1.7.5 nor 1.8.0b
 -
 -6) You need to prevent pacman to erase mesa and its dependencies or you'll endup building it again 
 -
