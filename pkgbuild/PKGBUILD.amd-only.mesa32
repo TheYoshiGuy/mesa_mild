@@ -12,7 +12,7 @@
 pkgbase=lib32-mesa-git
 pkgname=('lib32-mesa-git' 'lib32-mesa-libgl-git')
 pkgdesc="an open-source implementation of the OpenGL specification, git version"
-pkgver=17.2.0_devel.92564.8939528399
+pkgver=17.2.0_devel.92872.66c01409cc
 pkgrel=1
 arch=('x86_64')
 makedepends=('python2-mako' 'lib32-libxml2' 'lib32-libx11' 'glproto' 'lib32-libdrm' 'dri2proto' 'dri3proto' 'presentproto' 
@@ -21,8 +21,9 @@ makedepends=('python2-mako' 'lib32-libxml2' 'lib32-libx11' 'glproto' 'lib32-libd
               'mesa-git' 'lib32-llvm-libs-svn' 'lib32-libunwind')
 url="http://mesa3d.sourceforge.net"
 license=('custom')
-source=('mesa::git+https://github.com/mikakev1/mesa_mild_compatibility.git')
+source=('git+file:///srv/storage/Media/makepkg/repositories/mesa') 
 sha512sums=('SKIP')
+
 pkgver() {
     cd mesa
     read -r _ver <VERSION
@@ -36,7 +37,7 @@ build () {
   export LLVM_CONFIG=/usr/bin/llvm-config32
 
   cd mesa
-  ./autogen.sh  --build=i686-pc-linux-gnu --host=i686-pc-linux-gnu --target=i686-pc-linux-gnu --libdir=/usr/lib32 --prefix=/usr --sysconfdir=/etc --with-dri-driverdir=/usr/lib32/xorg/modules/dri --with-gallium-drivers=radeonsi,swrast --with-dri-drivers="i965" --with-platforms=x11,drm,wayland,surfaceless --with-vulkan-drivers=radeon,intel --enable-texture-float -enable-nine --enable-gbm --enable-glx-tls --with-va-libdir=/usr/lib32/dri --enable-vpdau --disable-xvmc --enable-gles2 --disable-gles1 -with-gnu-ld  --with-clang-libdir=/usr/lib/
+  ./autogen.sh  --build=i686-pc-linux-gnu --host=i686-pc-linux-gnu --target=i686-pc-linux-gnu --libdir=/usr/lib32 --prefix=/usr --sysconfdir=/etc --with-dri-driverdir=/usr/lib32/xorg/modules/dri --with-gallium-drivers=radeonsi,swrast --with-dri-drivers="" --with-platforms=x11,drm,wayland,surfaceless --with-vulkan-drivers=radeon --enable-texture-float -enable-nine --enable-gbm --enable-glx-tls --with-va-libdir=/usr/lib32/dri --enable-vpdau --disable-xvmc --enable-gles2 --disable-gles1 --enable-lmsensors --enable-gallium-extra-hud  -with-gnu-ld  --with-clang-libdir=/usr/lib/
 
 # Used configure settings
 #
