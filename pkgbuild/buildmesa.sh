@@ -98,7 +98,7 @@ done
 
 echo "* NOTICE *: if system is unbootable after installation boot kernel with commandline < modprobe.blacklist=amdgpu,radeon > and reinstall normal packages from mesa-git"
 echo "To install run "
-find ./ -name "*xz" -exec echo "pacman -Udd {} --force" \; | sort 
+find ./ -name "*xz" -exec echo "sudo pacman -Udd {} --force" \; | sort 
 
 
 
