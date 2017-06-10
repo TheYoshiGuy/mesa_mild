@@ -361,6 +361,7 @@ void gen7_init_atoms(struct brw_context *brw);
 void gen75_init_atoms(struct brw_context *brw);
 void gen8_init_atoms(struct brw_context *brw);
 void gen9_init_atoms(struct brw_context *brw);
+void gen10_init_atoms(struct brw_context *brw);
 
 void upload_gs_state_for_tf(struct brw_context *brw);
 
@@ -405,6 +406,14 @@ void upload_gs_state_for_tf(struct brw_context *brw);
 #define SKL_MOCS_WB  (2 << 1)
 /* TC=LLC/eLLC, LeCC=PTE, LRUM=3, L3CC=WB */
 #define SKL_MOCS_PTE (1 << 1)
+
+/* Cannonlake: MOCS is now an index into an array of 62 different caching
+ * configurations programmed by the kernel.
+ */
+/* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */
+#define CNL_MOCS_WB  (2 << 1)
+/* TC=LLC/eLLC, LeCC=PTE, LRUM=3, L3CC=WB */
+#define CNL_MOCS_PTE (1 << 1)
 
 #ifdef __cplusplus
 }

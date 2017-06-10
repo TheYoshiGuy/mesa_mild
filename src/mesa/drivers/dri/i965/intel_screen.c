@@ -1856,6 +1856,7 @@ set_max_gl_versions(struct intel_screen *screen)
    const bool has_astc = screen->devinfo.gen >= 9;
 
    switch (screen->devinfo.gen) {
+   case 10:
    case 9:
    case 8:
       dri_screen->max_gl_core_version = 45;
@@ -1978,6 +1979,7 @@ parse_devid_override(const char *devid_override)
       { "bdw", 0x162e },
       { "skl", 0x1912 },
       { "kbl", 0x5912 },
+      { "cnl", 0x5a52 },
    };
 
    for (unsigned i = 0; i < ARRAY_SIZE(name_map); i++) {

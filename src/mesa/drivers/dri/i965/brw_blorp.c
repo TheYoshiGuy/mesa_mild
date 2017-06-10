@@ -109,6 +109,12 @@ brw_blorp_init(struct brw_context *brw)
       brw->blorp.mocs.vb = SKL_MOCS_WB;
       brw->blorp.exec = gen9_blorp_exec;
       break;
+   case 10:
+      brw->blorp.mocs.tex = CNL_MOCS_WB;
+      brw->blorp.mocs.rb = CNL_MOCS_PTE;
+      brw->blorp.mocs.vb = CNL_MOCS_WB;
+      brw->blorp.exec = gen10_blorp_exec;
+      break;
    default:
       unreachable("Invalid gen");
    }
