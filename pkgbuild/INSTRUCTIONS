@@ -31,7 +31,7 @@ You can then at boot select directly by issuing kernel parameter modprobe.blackl
 -Server = http://pkgbuild.com/~lcarlier/$repo/$arch
 -SigLevel = Never
 
--2) A script called buildmesa.sh is available here to simplify the process
+-2) A script called buildmesa.sh is available here to simplify the process, there is only one configuration option called flavor (by default there's only AMD's gpu support )
 
 WARNING : As a matter of habit, you must never download a script and/or execute it simply because you're told to.
 

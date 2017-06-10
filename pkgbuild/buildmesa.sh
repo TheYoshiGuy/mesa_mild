@@ -1,10 +1,11 @@
 #!/bin/bash
 
 # Settings 
+flavor="amd-only"
 
 # either empty ("") or amd-only
-# NOTE wether you're using amdgpu or radeon driver, it doesn't care
-flavor="amd-only"
+# empty build i965 (intel IGD support including vulkan)
+# amd-only build for both amdgpu and radeon kernel driver
 
 pckflavor="${flavor}."
 
@@ -25,7 +26,7 @@ function check_mesa_git_configured {
 }
 
 function check_multilib_configured {
-  cat /etc/pacman.conf  |grep -E '(\[.*\])' |grep -v "#" |grep multilib
+  cat /etc/pacman.conf  |grep -E '(\[.*\])' |grep -v "#" |grep -q multilib
 }
 function install_packages {
   pre_packages="llvm-svn llvm-ocaml-svn llvm-libs-svn  libclc-git  lib32-llvm-svn lib32-llvm-libs-svn clang-tools-extra-svn clang-svn"
