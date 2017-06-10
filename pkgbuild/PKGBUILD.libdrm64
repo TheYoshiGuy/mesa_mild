@@ -27,7 +27,7 @@ pkgver() {
 
 build() {
   cd ${_pkgname}
-  ./autogen.sh --prefix=/usr --with-gnu-ld --enable-manpages --disable-vc4 --disable-freedreno --disable-vmwgfx --disable-nouveau  --enable-udev --disable-intel
+  ./autogen.sh --prefix=/usr --with-gnu-ld --enable-manpages --disable-vc4 --disable-freedreno --disable-vmwgfx --disable-nouveau  --enable-udev
   make
 }
 

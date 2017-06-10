@@ -34,7 +34,7 @@ build() {
 
   ./autogen.sh \
     --prefix=/usr \
-    --libdir=/usr/lib32 --with-gnu-ld --enable-manpages --disable-vc4 --disable-freedreno --disable-vmwgfx --disable-nouveau  --enable-udev --disable-intel
+    --libdir=/usr/lib32 --with-gnu-ld --enable-manpages --disable-vc4 --disable-freedreno --disable-vmwgfx --disable-nouveau  --enable-udev
   make
 }
 
