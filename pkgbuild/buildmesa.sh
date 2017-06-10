@@ -4,8 +4,8 @@
 flavor="amd-only"
 
 # either empty ("") or amd-only
-# empty build i965 (intel IGD support including vulkan)
 # amd-only build for both amdgpu and radeon kernel driver
+# empty is suitable for amd and intel igd 
 
 pckflavor="${flavor}."
 
