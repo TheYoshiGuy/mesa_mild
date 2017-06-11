@@ -30,7 +30,7 @@ function check_multilib_configured {
 }
 function install_packages {
   pre_packages="llvm-svn llvm-ocaml-svn llvm-libs-svn  libclc-git  lib32-llvm-svn lib32-llvm-libs-svn clang-tools-extra-svn clang-svn"
-#  sudo pacman -Syy
+  sudo pacman -Syy
   sudo pacman -Sdd $pre_packages  --noconfirm --needed --force
 }
 
@@ -91,7 +91,7 @@ export CXXFLAGS=$CFLAGS
 for directory in  ${PKGBUILD_DEST[*]}; do
   echo "building in $directory"
   cd $directory
-  makepkg -Ccf 
+  makepkg -sCcf 
   cd ..;cd ..
 done
 
