@@ -2276,6 +2276,7 @@ static void si_llvm_export_vs(struct lp_build_tgsi_context *bld_base,
 		semantic_name = outputs[i].semantic_name;
 		semantic_index = outputs[i].semantic_index;
 		bool export_param = true;
+		unsigned id;
 
 		switch (semantic_name) {
 		case TGSI_SEMANTIC_POSITION: /* ignore these */
@@ -2289,8 +2290,8 @@ static void si_llvm_export_vs(struct lp_build_tgsi_context *bld_base,
 				break;
 			/* fall through */
 		default:
-			if (shader->key.opt.hw_vs.kill_outputs &
-			    (1ull << si_shader_io_get_unique_index(semantic_name, semantic_index)))
+			id = si_shader_io_get_unique_index(semantic_name, semantic_index);
+			if (shader->key.opt.kill_outputs[id / 32] & (1u << (id % 32)))
 				export_param = false;
 		}
 
@@ -2321,14 +2322,14 @@ handle_semantic:
 			target = V_008DFC_SQ_EXP_POS;
 			break;
 		case TGSI_SEMANTIC_CLIPDIST:
-			if (shader->key.opt.hw_vs.clip_disable) {
+			if (shader->key.opt.clip_disable) {
 				semantic_name = TGSI_SEMANTIC_GENERIC;
 				goto handle_semantic;
 			}
 			target = V_008DFC_SQ_EXP_POS + 2 + semantic_index;
 			break;
 		case TGSI_SEMANTIC_CLIPVERTEX:
-			if (shader->key.opt.hw_vs.clip_disable)
+			if (shader->key.opt.clip_disable)
 				continue;
 			si_llvm_emit_clipvertex(bld_base, pos_args, outputs[i].values);
 			continue;
@@ -2492,7 +2493,8 @@ static void si_copy_tcs_inputs(struct lp_build_tgsi_context *bld_base)
 	lds_base = get_tcs_in_current_patch_offset(ctx);
 	lds_base = LLVMBuildAdd(gallivm->builder, lds_base, lds_vertex_offset, "");
 
-	inputs = ctx->shader->key.mono.u.ff_tcs_inputs_to_copy;
+	inputs = ctx->shader->key.mono.u.ff_tcs_inputs_to_copy[0] |
+		 ((uint64_t)ctx->shader->key.mono.u.ff_tcs_inputs_to_copy[1] << 32);
 	while (inputs) {
 		unsigned i = u_bit_scan64(&inputs);
 
@@ -5283,7 +5285,10 @@ static void si_dump_shader_key(unsigned processor, const struct si_shader *shade
 					      "part.tcs.ls_prolog", f);
 		}
 		fprintf(f, "  part.tcs.epilog.prim_mode = %u\n", key->part.tcs.epilog.prim_mode);
-		fprintf(f, "  mono.u.ff_tcs_inputs_to_copy = 0x%"PRIx64"\n", key->mono.u.ff_tcs_inputs_to_copy);
+		fprintf(f, "  mono.u.ff_tcs_inputs_to_copy[0] = 0x%x\n",
+			key->mono.u.ff_tcs_inputs_to_copy[0]);
+		fprintf(f, "  mono.u.ff_tcs_inputs_to_copy[1] = 0x%x\n",
+			key->mono.u.ff_tcs_inputs_to_copy[1]);
 		break;
 
 	case PIPE_SHADER_TESS_EVAL:
@@ -5335,8 +5340,9 @@ static void si_dump_shader_key(unsigned processor, const struct si_shader *shade
 	     processor == PIPE_SHADER_TESS_EVAL ||
 	     processor == PIPE_SHADER_VERTEX) &&
 	    !key->as_es && !key->as_ls) {
-		fprintf(f, "  opt.hw_vs.kill_outputs = 0x%"PRIx64"\n", key->opt.hw_vs.kill_outputs);
-		fprintf(f, "  opt.hw_vs.clip_disable = %u\n", key->opt.hw_vs.clip_disable);
+		fprintf(f, "  opt.kill_outputs[0] = 0x%x\n", key->opt.kill_outputs[0]);
+		fprintf(f, "  opt.kill_outputs[1] = 0x%x\n", key->opt.kill_outputs[1]);
+		fprintf(f, "  opt.clip_disable = %u\n", key->opt.clip_disable);
 	}
 }
 

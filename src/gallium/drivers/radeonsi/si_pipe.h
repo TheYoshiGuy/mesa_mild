@@ -128,8 +128,8 @@ struct si_sampler_view {
 	uint32_t			state[8];
 	uint32_t			fmask_state[8];
 	const struct legacy_surf_level	*base_level_info;
-	unsigned			base_level;
-	unsigned			block_width;
+	ubyte				base_level;
+	ubyte				block_width;
 	bool is_stencil_sampler;
 	bool dcc_incompatible;
 };
@@ -166,17 +166,17 @@ struct si_images_info {
 struct si_framebuffer {
 	struct r600_atom		atom;
 	struct pipe_framebuffer_state	state;
-	unsigned			nr_samples;
-	unsigned			log_samples;
-	unsigned			compressed_cb_mask;
 	unsigned			colorbuf_enabled_4bit;
 	unsigned			spi_shader_col_format;
 	unsigned			spi_shader_col_format_alpha;
 	unsigned			spi_shader_col_format_blend;
 	unsigned			spi_shader_col_format_blend_alpha;
-	unsigned			color_is_int8;
-	unsigned			color_is_int10;
-	unsigned			dirty_cbufs;
+	ubyte				nr_samples:5; /* at most 16xAA */
+	ubyte				log_samples:3; /* at most 4 = 16xAA */
+	ubyte				compressed_cb_mask;
+	ubyte				color_is_int8;
+	ubyte				color_is_int10;
+	ubyte				dirty_cbufs;
 	bool				dirty_zsbuf;
 	bool				any_dst_linear;
 	bool				do_update_surf_dirtiness;
@@ -237,19 +237,19 @@ struct si_context {
 	void				*custom_blend_eliminate_fastclear;
 	void				*custom_blend_dcc_decompress;
 	struct si_screen		*screen;
+	LLVMTargetMachineRef		tm; /* only non-threaded compilation */
+	struct si_shader_ctx_state	fixed_func_tcs_shader;
 
 	struct radeon_winsys_cs		*ce_ib;
 	struct radeon_winsys_cs		*ce_preamble_ib;
 	struct r600_resource		*ce_ram_saved_buffer;
-	unsigned			ce_ram_saved_offset;
-	unsigned			total_ce_ram_allocated;
-	bool				ce_need_synchronization;
 	struct u_suballocator		*ce_suballocator;
+	unsigned			ce_ram_saved_offset;
+	uint16_t			total_ce_ram_allocated;
+	bool				ce_need_synchronization:1;
 
-	struct si_shader_ctx_state	fixed_func_tcs_shader;
-	LLVMTargetMachineRef		tm; /* only non-threaded compilation */
-	bool				gfx_flush_in_progress;
-	bool				compute_is_busy;
+	bool				gfx_flush_in_progress:1;
+	bool				compute_is_busy:1;
 
 	/* Atoms (direct states). */
 	union si_state_atoms		atoms;
@@ -290,7 +290,7 @@ struct si_context {
 	struct si_cs_shader_state	cs_shader_state;
 
 	/* shader information */
-	struct si_vertex_element	*vertex_elements;
+	struct si_vertex_elements	*vertex_elements;
 	unsigned			sprite_coord_enable;
 	bool				flatshade;
 	bool				do_update_shaders;
@@ -300,7 +300,7 @@ struct si_context {
 	struct si_descriptors		descriptors[SI_NUM_DESCS];
 	unsigned			descriptors_dirty;
 	unsigned			shader_pointers_dirty;
-	unsigned			compressed_tex_shader_mask;
+	unsigned			shader_needs_decompress_mask;
 	struct si_buffer_resources	rw_buffers;
 	struct si_buffer_resources	const_and_shader_buffers[SI_NUM_SHADERS];
 	struct si_textures_info		samplers[SI_NUM_SHADERS];
@@ -327,19 +327,20 @@ struct si_context {
 	bool				smoothing_enabled;
 
 	/* DB render state. */
-	bool			dbcb_depth_copy_enabled;
-	bool			dbcb_stencil_copy_enabled;
-	unsigned		dbcb_copy_sample;
-	bool			db_flush_depth_inplace;
-	bool			db_flush_stencil_inplace;
-	bool			db_depth_clear;
-	bool			db_depth_disable_expclear;
-	bool			db_stencil_clear;
-	bool			db_stencil_disable_expclear;
 	unsigned		ps_db_shader_control;
-	bool			occlusion_queries_disabled;
+	unsigned		dbcb_copy_sample;
+	bool			dbcb_depth_copy_enabled:1;
+	bool			dbcb_stencil_copy_enabled:1;
+	bool			db_flush_depth_inplace:1;
+	bool			db_flush_stencil_inplace:1;
+	bool			db_depth_clear:1;
+	bool			db_depth_disable_expclear:1;
+	bool			db_stencil_clear:1;
+	bool			db_stencil_disable_expclear:1;
+	bool			occlusion_queries_disabled:1;
 
 	/* Emitted draw state. */
+	bool			gs_tri_strip_adj_fix:1;
 	int			last_index_size;
 	int			last_base_vertex;
 	int			last_start_instance;
@@ -355,7 +356,6 @@ struct si_context {
 	unsigned		current_vs_state;
 	unsigned		last_vs_state;
 	enum pipe_prim_type	current_rast_prim; /* primitive type after TES, GS */
-	bool			gs_tri_strip_adj_fix;
 
 	/* Scratch buffer */
 	struct r600_atom	scratch_state;

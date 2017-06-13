@@ -567,8 +567,8 @@ static bool depth_needs_decompression(struct r600_texture *rtex,
 		!r600_can_sample_zs(rtex, sview->is_stencil_sampler));
 }
 
-static void si_update_compressed_tex_shader_mask(struct si_context *sctx,
-						 unsigned shader)
+static void si_update_shader_needs_decompress_mask(struct si_context *sctx,
+						   unsigned shader)
 {
 	struct si_textures_info *samplers = &sctx->samplers[shader];
 	unsigned shader_bit = 1 << shader;
@@ -576,9 +576,9 @@ static void si_update_compressed_tex_shader_mask(struct si_context *sctx,
 	if (samplers->needs_depth_decompress_mask ||
 	    samplers->needs_color_decompress_mask ||
 	    sctx->images[shader].needs_color_decompress_mask)
-		sctx->compressed_tex_shader_mask |= shader_bit;
+		sctx->shader_needs_decompress_mask |= shader_bit;
 	else
-		sctx->compressed_tex_shader_mask &= ~shader_bit;
+		sctx->shader_needs_decompress_mask &= ~shader_bit;
 }
 
 static void si_set_sampler_views(struct pipe_context *ctx,
@@ -630,11 +630,11 @@ static void si_set_sampler_views(struct pipe_context *ctx,
 		}
 	}
 
-	si_update_compressed_tex_shader_mask(sctx, shader);
+	si_update_shader_needs_decompress_mask(sctx, shader);
 }
 
 static void
-si_samplers_update_compressed_colortex_mask(struct si_textures_info *samplers)
+si_samplers_update_needs_color_decompress_mask(struct si_textures_info *samplers)
 {
 	unsigned mask = samplers->views.enabled_mask;
 
@@ -854,11 +854,11 @@ si_set_shader_images(struct pipe_context *pipe,
 			si_set_shader_image(ctx, shader, slot, NULL, false);
 	}
 
-	si_update_compressed_tex_shader_mask(ctx, shader);
+	si_update_shader_needs_decompress_mask(ctx, shader);
 }
 
 static void
-si_images_update_compressed_colortex_mask(struct si_images_info *images)
+si_images_update_needs_color_decompress_mask(struct si_images_info *images)
 {
 	unsigned mask = images->enabled_mask;
 
@@ -1006,7 +1006,7 @@ static void si_vertex_buffers_begin_new_cs(struct si_context *sctx)
 	int i;
 
 	for (i = 0; i < count; i++) {
-		int vb = sctx->vertex_elements->elements[i].vertex_buffer_index;
+		int vb = sctx->vertex_elements->vertex_buffer_index[i];
 
 		if (vb >= ARRAY_SIZE(sctx->vertex_buffer))
 			continue;
@@ -1027,7 +1027,7 @@ static void si_vertex_buffers_begin_new_cs(struct si_context *sctx)
 
 bool si_upload_vertex_buffer_descriptors(struct si_context *sctx)
 {
-	struct si_vertex_element *velems = sctx->vertex_elements;
+	struct si_vertex_elements *velems = sctx->vertex_elements;
 	struct si_descriptors *desc = &sctx->vertex_buffers;
 	unsigned i, count;
 	unsigned desc_list_byte_size;
@@ -1065,11 +1065,10 @@ bool si_upload_vertex_buffer_descriptors(struct si_context *sctx)
 	assert(count <= SI_MAX_ATTRIBS);
 
 	for (i = 0; i < count; i++) {
-		struct pipe_vertex_element *ve = &velems->elements[i];
 		struct pipe_vertex_buffer *vb;
 		struct r600_resource *rbuffer;
 		unsigned offset;
-		unsigned vbo_index = ve->vertex_buffer_index;
+		unsigned vbo_index = velems->vertex_buffer_index[i];
 		uint32_t *desc = &ptr[i*4];
 
 		vb = &sctx->vertex_buffer[vbo_index];
@@ -1079,7 +1078,7 @@ bool si_upload_vertex_buffer_descriptors(struct si_context *sctx)
 			continue;
 		}
 
-		offset = vb->buffer_offset + ve->src_offset;
+		offset = vb->buffer_offset + velems->src_offset[i];
 		va = rbuffer->gpu_address + offset;
 
 		/* Fill in T# buffer resource description */
@@ -1577,14 +1576,14 @@ static void si_set_polygon_stipple(struct pipe_context *ctx,
 
 /* CMASK can be enabled (for fast clear) and disabled (for texture export)
  * while the texture is bound, possibly by a different context. In that case,
- * call this function to update compressed_colortex_masks.
+ * call this function to update needs_*_decompress_masks.
  */
-void si_update_compressed_colortex_masks(struct si_context *sctx)
+void si_update_needs_color_decompress_masks(struct si_context *sctx)
 {
 	for (int i = 0; i < SI_NUM_SHADERS; ++i) {
-		si_samplers_update_compressed_colortex_mask(&sctx->samplers[i]);
-		si_images_update_compressed_colortex_mask(&sctx->images[i]);
-		si_update_compressed_tex_shader_mask(sctx, i);
+		si_samplers_update_needs_color_decompress_mask(&sctx->samplers[i]);
+		si_images_update_needs_color_decompress_mask(&sctx->images[i]);
+		si_update_shader_needs_decompress_mask(sctx, i);
 	}
 }
 
@@ -1637,7 +1636,7 @@ static void si_rebind_buffer(struct pipe_context *ctx, struct pipe_resource *buf
 	/* Vertex buffers. */
 	if (rbuffer->bind_history & PIPE_BIND_VERTEX_BUFFER) {
 		for (i = 0; i < num_elems; i++) {
-			int vb = sctx->vertex_elements->elements[i].vertex_buffer_index;
+			int vb = sctx->vertex_elements->vertex_buffer_index[i];
 
 			if (vb >= ARRAY_SIZE(sctx->vertex_buffer))
 				continue;
@@ -1823,7 +1822,7 @@ void si_update_all_texture_descriptors(struct si_context *sctx)
 					    samplers->views[i], true);
 		}
 
-		si_update_compressed_tex_shader_mask(sctx, shader);
+		si_update_shader_needs_decompress_mask(sctx, shader);
 	}
 }
 

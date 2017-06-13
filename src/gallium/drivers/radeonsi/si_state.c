@@ -695,7 +695,7 @@ static void si_emit_clip_regs(struct si_context *sctx, struct r600_atom *atom)
 	unsigned culldist_mask = vs_sel->culldist_mask;
 	unsigned total_mask;
 
-	if (vs->key.opt.hw_vs.clip_disable) {
+	if (vs->key.opt.clip_disable) {
 		assert(!info->culldist_writemask);
 		clipdist_mask = 0;
 		culldist_mask = 0;
@@ -870,6 +870,15 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 		S_028814_POLYMODE_FRONT_PTYPE(si_translate_fill(state->fill_front)) |
 		S_028814_POLYMODE_BACK_PTYPE(si_translate_fill(state->fill_back)));
 
+	if (!rs->uses_poly_offset)
+		return rs;
+
+	rs->pm4_poly_offset = CALLOC(3, sizeof(struct si_pm4_state));
+	if (!rs->pm4_poly_offset) {
+		FREE(rs);
+		return NULL;
+	}
+
 	/* Precalculate polygon offset states for 16-bit, 24-bit, and 32-bit zbuffers. */
 	for (i = 0; i < 3; i++) {
 		struct si_pm4_state *pm4 = &rs->pm4_poly_offset[i];
@@ -965,10 +974,13 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 static void si_delete_rs_state(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
+	struct si_state_rasterizer *rs = (struct si_state_rasterizer *)state;
 
 	if (sctx->queued.named.rasterizer == state)
 		si_pm4_bind_state(sctx, poly_offset, NULL);
-	si_pm4_delete_state(sctx, rasterizer, (struct si_state_rasterizer *)state);
+
+	FREE(rs->pm4_poly_offset);
+	si_pm4_delete_state(sctx, rasterizer, rs);
 }
 
 /*
@@ -1085,7 +1097,8 @@ static void *si_create_dsa_state(struct pipe_context *ctx,
 	}
 
 	si_pm4_set_reg(pm4, R_028800_DB_DEPTH_CONTROL, db_depth_control);
-	si_pm4_set_reg(pm4, R_02842C_DB_STENCIL_CONTROL, db_stencil_control);
+	if (state->stencil[0].enabled)
+		si_pm4_set_reg(pm4, R_02842C_DB_STENCIL_CONTROL, db_stencil_control);
 	if (state->depth.bounds_test) {
 		si_pm4_set_reg(pm4, R_028020_DB_DEPTH_BOUNDS_MIN, fui(state->depth.bounds_min));
 		si_pm4_set_reg(pm4, R_028024_DB_DEPTH_BOUNDS_MAX, fui(state->depth.bounds_max));
@@ -3703,7 +3716,7 @@ static void *si_create_vertex_elements(struct pipe_context *ctx,
 				       const struct pipe_vertex_element *elements)
 {
 	struct si_screen *sscreen = (struct si_screen*)ctx->screen;
-	struct si_vertex_element *v = CALLOC_STRUCT(si_vertex_element);
+	struct si_vertex_elements *v = CALLOC_STRUCT(si_vertex_elements);
 	bool used[SI_NUM_VERTEX_BUFFERS] = {};
 	int i;
 
@@ -3727,8 +3740,10 @@ static void *si_create_vertex_elements(struct pipe_context *ctx,
 			return NULL;
 		}
 
-		if (elements[i].instance_divisor)
+		if (elements[i].instance_divisor) {
 			v->uses_instance_divisors = true;
+			v->instance_divisors[i] = elements[i].instance_divisor;
+		}
 
 		if (!used[vbo_index]) {
 			v->first_vb_use_mask |= 1 << i;
@@ -3743,6 +3758,8 @@ static void *si_create_vertex_elements(struct pipe_context *ctx,
 		memcpy(swizzle, desc->swizzle, sizeof(swizzle));
 
 		v->format_size[i] = desc->block.bits / 8;
+		v->src_offset[i] = elements[i].src_offset;
+		v->vertex_buffer_index[i] = vbo_index;
 
 		/* The hardware always treats the 2-bit alpha channel as
 		 * unsigned, so a shader workaround is needed. The affected
@@ -3835,16 +3852,14 @@ static void *si_create_vertex_elements(struct pipe_context *ctx,
 				   S_008F0C_NUM_FORMAT(num_format) |
 				   S_008F0C_DATA_FORMAT(data_format);
 	}
-	memcpy(v->elements, elements, sizeof(struct pipe_vertex_element) * count);
-
 	return v;
 }
 
 static void si_bind_vertex_elements(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_vertex_element *old = sctx->vertex_elements;
-	struct si_vertex_element *v = (struct si_vertex_element*)state;
+	struct si_vertex_elements *old = sctx->vertex_elements;
+	struct si_vertex_elements *v = (struct si_vertex_elements*)state;
 
 	sctx->vertex_elements = v;
 	sctx->vertex_buffers_dirty = true;
