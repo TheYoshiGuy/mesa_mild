@@ -1,7 +1,10 @@
 #!/bin/bash
 
 # Settings 
-flavor="amd-only"
+flavor="amd-only"  # "amd-only" or ""  
+fragment="master" # "master" or "tag" or "commit" or "branch"
+
+
 
 # either empty ("") or amd-only
 # amd-only build for both amdgpu and radeon kernel driver
@@ -62,7 +65,7 @@ echo "Starting to clone repositories"
 
 for (( i=0; i < ${#GIT_REPOSITORIES[@]}; i++)); do 
 echo Cloning ${GIT_REPOSITORIES[$i]}
-git clone ${GIT_REPOSITORIES[$i]}  -b master ${GIT_NAMES[$i]}
+git clone ${GIT_REPOSITORIES[$i]}  ${GIT_NAMES[$i]}
 done
 
 echo "Retrieving PKGBUILD for libdrm and mesa"
@@ -76,7 +79,7 @@ pkgbuilddir="$mesasource/pkgbuild"
 
 PKGBUILD_NAME=( "PKGBUILD.${pckflavor}libdrm64" "PKGBUILD.${pckflavor}libdrm32" "PKGBUILD.${pckflavor}mesa64" "PKGBUILD.${pckflavor}mesa32" )
 PKGBUILD_DEST=( PKGBUILD/libdrm64 PKGBUILD/libdrm32 PKGBUILD/mesa64 PKGBUILD/mesa32 )
-PKGBUILD_URL=( "git+file://$drmsource" "git+file://$drmsource" "git+file://$mesasource"  "git+file://$mesasource" )
+PKGBUILD_URL=( "git+file://${drmsource}" "git+file://${drmsource}" "git+file://${mesasource}#${fragment}"  "git+file://${mesasource}#${fragment}" )
 
 for (( i=0; i < ${#PKGBUILD_DEST[@]}; i++ )); do
   echo "copying  $pkgbuilddir/${PKGBUILD_NAME[$i]} to ${PKGBUILD_DEST[$i]}/PKGBUILD"
