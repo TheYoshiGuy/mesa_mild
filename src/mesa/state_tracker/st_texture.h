@@ -259,6 +259,11 @@ st_texture_image_copy(struct pipe_context *pipe,
 extern struct pipe_resource *
 st_create_color_map_texture(struct gl_context *ctx);
 
+void
+st_destroy_bound_texture_handles(struct st_context *st);
+
+void
+st_destroy_bound_image_handles(struct st_context *st);
 
 bool
 st_etc_fallback(struct st_context *st, struct gl_texture_image *texImage);
@@ -268,9 +273,32 @@ st_convert_image(const struct st_context *st, const struct gl_image_unit *u,
                  struct pipe_image_view *img);
 
 void
+st_convert_image_from_unit(const struct st_context *st,
+                           struct pipe_image_view *img,
+                           GLuint imgUnit);
+
+void
 st_convert_sampler(const struct st_context *st,
                    const struct gl_texture_object *texobj,
                    const struct gl_sampler_object *msamp,
                    struct pipe_sampler_state *sampler);
+
+void
+st_convert_sampler_from_unit(const struct st_context *st,
+                             struct pipe_sampler_state *sampler,
+                             GLuint texUnit);
+
+GLboolean
+st_update_single_texture(struct st_context *st,
+                         struct pipe_sampler_view **sampler_view,
+                         GLuint texUnit, unsigned glsl_version);
+
+void
+st_make_bound_samplers_resident(struct st_context *st,
+                                struct gl_program *prog);
+
+void
+st_make_bound_images_resident(struct st_context *st,
+                              struct gl_program *prog);
 
 #endif

@@ -27,6 +27,7 @@
 #include "sid.h"
 
 #include "radeon/radeon_uvd.h"
+#include "util/hash_table.h"
 #include "util/u_memory.h"
 #include "util/u_suballoc.h"
 #include "util/u_tests.h"
@@ -94,6 +95,14 @@ static void si_destroy_context(struct pipe_context *context)
 	r600_resource_reference(&sctx->last_trace_buf, NULL);
 	radeon_clear_saved_cs(&sctx->last_gfx);
 
+	pb_slabs_deinit(&sctx->bindless_descriptor_slabs);
+	util_dynarray_fini(&sctx->bindless_descriptors);
+
+	_mesa_hash_table_destroy(sctx->tex_handles, NULL);
+	_mesa_hash_table_destroy(sctx->img_handles, NULL);
+
+	util_dynarray_fini(&sctx->resident_tex_handles);
+	util_dynarray_fini(&sctx->resident_img_handles);
 	FREE(sctx);
 }
 
@@ -316,6 +325,24 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 	sctx->tm = si_create_llvm_target_machine(sscreen);
 
+	/* Create a slab allocator for all bindless descriptors. */
+	if (!pb_slabs_init(&sctx->bindless_descriptor_slabs, 6, 6, 1, sctx,
+			   si_bindless_descriptor_can_reclaim_slab,
+			   si_bindless_descriptor_slab_alloc,
+			   si_bindless_descriptor_slab_free))
+		goto fail;
+
+	util_dynarray_init(&sctx->bindless_descriptors, NULL);
+
+	/* Bindless handles. */
+	sctx->tex_handles = _mesa_hash_table_create(NULL, _mesa_hash_pointer,
+						    _mesa_key_pointer_equal);
+	sctx->img_handles = _mesa_hash_table_create(NULL, _mesa_hash_pointer,
+						    _mesa_key_pointer_equal);
+
+	util_dynarray_init(&sctx->resident_tex_handles, NULL);
+	util_dynarray_init(&sctx->resident_img_handles, NULL);
+
 	return &sctx->b.b;
 fail:
 	fprintf(stderr, "radeonsi: Failed to create a context.\n");
@@ -455,6 +482,9 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_DOUBLES:
 	case PIPE_CAP_TGSI_TEX_TXF_LZ:
 	case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
+	case PIPE_CAP_BINDLESS_TEXTURE:
+		return 1;
+
 	case PIPE_CAP_INT64:
 	case PIPE_CAP_INT64_DIVMOD:
 	case PIPE_CAP_TGSI_CLOCK:

@@ -22,6 +22,7 @@
  */
 
 #include "si_pipe.h"
+#include "si_compute.h"
 #include "util/u_format.h"
 #include "util/u_surface.h"
 
@@ -631,6 +632,64 @@ static void si_check_render_feedback_images(struct si_context *sctx,
 	}
 }
 
+static void si_check_render_feedback_resident_textures(struct si_context *sctx)
+{
+	unsigned num_resident_tex_handles;
+	unsigned i;
+
+	num_resident_tex_handles = sctx->resident_tex_handles.size /
+				   sizeof(struct si_texture_handle *);
+
+	for (i = 0; i < num_resident_tex_handles; i++) {
+		struct si_texture_handle *tex_handle =
+			*util_dynarray_element(&sctx->resident_tex_handles,
+					       struct si_texture_handle *, i);
+		struct pipe_sampler_view *view;
+		struct r600_texture *tex;
+
+		view = tex_handle->view;
+		if (view->texture->target == PIPE_BUFFER)
+			continue;
+
+		tex = (struct r600_texture *)view->texture;
+
+		si_check_render_feedback_texture(sctx, tex,
+						 view->u.tex.first_level,
+						 view->u.tex.last_level,
+						 view->u.tex.first_layer,
+						 view->u.tex.last_layer);
+	}
+}
+
+static void si_check_render_feedback_resident_images(struct si_context *sctx)
+{
+	unsigned num_resident_img_handles;
+	unsigned i;
+
+	num_resident_img_handles = sctx->resident_img_handles.size /
+				   sizeof(struct si_image_handle *);
+
+	for (i = 0; i < num_resident_img_handles; i++) {
+		struct si_image_handle *img_handle =
+			*util_dynarray_element(&sctx->resident_img_handles,
+					       struct si_image_handle *, i);
+		struct pipe_image_view *view;
+		struct r600_texture *tex;
+
+		view = &img_handle->view;
+		if (view->resource->target == PIPE_BUFFER)
+			continue;
+
+		tex = (struct r600_texture *)view->resource;
+
+		si_check_render_feedback_texture(sctx, tex,
+						 view->u.tex.level,
+						 view->u.tex.level,
+						 view->u.tex.first_layer,
+						 view->u.tex.last_layer);
+	}
+}
+
 static void si_check_render_feedback(struct si_context *sctx)
 {
 
@@ -641,7 +700,66 @@ static void si_check_render_feedback(struct si_context *sctx)
 		si_check_render_feedback_images(sctx, &sctx->images[i]);
 		si_check_render_feedback_textures(sctx, &sctx->samplers[i]);
 	}
+
+	si_check_render_feedback_resident_images(sctx);
+	si_check_render_feedback_resident_textures(sctx);
+
 	sctx->need_check_render_feedback = false;
+}
+
+static void si_decompress_resident_textures(struct si_context *sctx)
+{
+	unsigned num_resident_tex_handles;
+	unsigned i;
+
+	num_resident_tex_handles = sctx->resident_tex_handles.size /
+				   sizeof(struct si_texture_handle *);
+
+	for (i = 0; i < num_resident_tex_handles; i++) {
+		struct si_texture_handle *tex_handle =
+			*util_dynarray_element(&sctx->resident_tex_handles,
+					       struct si_texture_handle *, i);
+		struct pipe_sampler_view *view = tex_handle->view;
+		struct si_sampler_view *sview = (struct si_sampler_view *)view;
+		struct r600_texture *tex = (struct r600_texture *)view->texture;
+
+		if (view->texture->target == PIPE_BUFFER)
+			continue;
+
+		if (tex_handle->needs_color_decompress)
+			si_decompress_color_texture(sctx, tex, view->u.tex.first_level,
+						    view->u.tex.last_level);
+
+		if (tex_handle->needs_depth_decompress)
+			si_decompress_depth(sctx, tex,
+				sview->is_stencil_sampler ? PIPE_MASK_S : PIPE_MASK_Z,
+				view->u.tex.first_level, view->u.tex.last_level,
+				0, util_max_layer(&tex->resource.b.b, view->u.tex.first_level));
+	}
+}
+
+static void si_decompress_resident_images(struct si_context *sctx)
+{
+	unsigned num_resident_img_handles;
+	unsigned i;
+
+	num_resident_img_handles = sctx->resident_img_handles.size /
+				   sizeof(struct si_image_handle *);
+
+	for (i = 0; i < num_resident_img_handles; i++) {
+		struct si_image_handle *img_handle =
+			*util_dynarray_element(&sctx->resident_img_handles,
+					       struct si_image_handle *, i);
+		struct pipe_image_view *view = &img_handle->view;
+		struct r600_texture *tex = (struct r600_texture *)view->resource;
+
+		if (view->resource->target == PIPE_BUFFER)
+			continue;
+
+		if (img_handle->needs_color_decompress)
+			si_decompress_color_texture(sctx, tex, view->u.tex.level,
+						    view->u.tex.level);
+	}
 }
 
 static void si_decompress_textures(struct si_context *sctx, unsigned shader_mask)
@@ -672,6 +790,18 @@ static void si_decompress_textures(struct si_context *sctx, unsigned shader_mask
 		if (sctx->images[i].needs_color_decompress_mask) {
 			si_decompress_image_color_textures(sctx, &sctx->images[i]);
 		}
+	}
+
+	if (shader_mask & u_bit_consecutive(0, SI_NUM_GRAPHICS_SHADERS)) {
+		if (sctx->uses_bindless_samplers)
+			si_decompress_resident_textures(sctx);
+		if (sctx->uses_bindless_images)
+			si_decompress_resident_images(sctx);
+	} else if (shader_mask & (1 << PIPE_SHADER_COMPUTE)) {
+		if (sctx->cs_shader_state.program->uses_bindless_samplers)
+			si_decompress_resident_textures(sctx);
+		if (sctx->cs_shader_state.program->uses_bindless_images)
+			si_decompress_resident_images(sctx);
 	}
 
 	si_check_render_feedback(sctx);

@@ -30,6 +30,8 @@
 #include "si_pm4.h"
 #include "radeon/r600_pipe_common.h"
 
+#include "pipebuffer/pb_slab.h"
+
 #define SI_NUM_GRAPHICS_SHADERS (PIPE_SHADER_TESS_EVAL+1)
 #define SI_NUM_SHADERS (PIPE_SHADER_COMPUTE+1)
 
@@ -326,6 +328,7 @@ bool si_upload_graphics_shader_descriptors(struct si_context *sctx);
 bool si_upload_compute_shader_descriptors(struct si_context *sctx);
 void si_release_all_descriptors(struct si_context *sctx);
 void si_all_descriptors_begin_new_cs(struct si_context *sctx);
+void si_all_resident_buffers_begin_new_cs(struct si_context *sctx);
 void si_upload_const_buffer(struct si_context *sctx, struct r600_resource **rbuffer,
 			    const uint8_t *ptr, unsigned size, uint32_t *const_offset);
 void si_update_all_texture_descriptors(struct si_context *sctx);
@@ -340,6 +343,12 @@ void si_set_active_descriptors(struct si_context *sctx, unsigned desc_idx,
 			       uint64_t new_active_mask);
 void si_set_active_descriptors_for_shader(struct si_context *sctx,
 					  struct si_shader_selector *sel);
+bool si_bindless_descriptor_can_reclaim_slab(void *priv,
+					     struct pb_slab_entry *entry);
+struct pb_slab *si_bindless_descriptor_slab_alloc(void *priv, unsigned heap,
+						  unsigned entry_size,
+						  unsigned group_index);
+void si_bindless_descriptor_slab_free(void *priv, struct pb_slab *pslab);
 
 /* si_state.c */
 struct si_shader_selector;
