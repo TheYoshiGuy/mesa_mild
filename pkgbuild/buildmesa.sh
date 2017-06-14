@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Settings 
-flavor=""  # "amd-only" or ""  
-fragment="tag=mild-17.1.2" # "master" or "tag" or "commit" or "branch"
+# Settings
+flavor=""  # "amd-only" or ""
+fragment="branch=master" #  or "tag=" or "commit=" or "branch="
 
 
 
 # either empty ("") or amd-only
 # amd-only build for both amdgpu and radeon kernel driver
-# empty is suitable for amd and intel igd 
+# empty is suitable for amd and intel igd
 
 pckflavor=""
 [ -z ${flavor} ]  || pckflavor="${flavor}."
@@ -89,13 +89,11 @@ for (( i=0; i < ${#PKGBUILD_DEST[@]}; i++ )); do
 done
 
 #SETTING ENVIRONMENT
-export CFLAGS="-O2 -march=native"
-export CXXFLAGS=$CFLAGS
 
 for directory in  ${PKGBUILD_DEST[*]}; do
   echo "building in $directory"
   cd $directory
-  makepkg -sCcf 
+  makepkg -sCcf
   cd ..;cd ..
 done
 
@@ -105,26 +103,4 @@ echo "To install run "
 find ./ -name "*xz" -exec echo "sudo pacman -Udd {} --force" \; | sort 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+ 

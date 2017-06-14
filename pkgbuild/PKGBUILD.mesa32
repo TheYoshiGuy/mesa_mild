@@ -37,7 +37,11 @@ build () {
   export LLVM_CONFIG=/usr/bin/llvm-config32
 
   cd mesa
-  ./autogen.sh  --build=i686-pc-linux-gnu --host=i686-pc-linux-gnu --target=i686-pc-linux-gnu --libdir=/usr/lib32 --prefix=/usr --sysconfdir=/etc --with-dri-driverdir=/usr/lib32/xorg/modules/dri --with-gallium-drivers=radeonsi,swrast --with-dri-drivers="i915" --with-platforms=x11,drm,wayland,surfaceless --with-vulkan-drivers=radeon,intel --enable-texture-float -enable-nine --enable-gbm --enable-glx-tls --with-va-libdir=/usr/lib32/dri --enable-vpdau --disable-xvmc --enable-gles2 --disable-gles1 --enable-lmsensors --enable-gallium-extra-hud  -with-gnu-ld  --with-clang-libdir=/usr/lib/ --disable-libunwind
+  ./autogen.sh  --build=i686-pc-linux-gnu --host=i686-pc-linux-gnu --target=i686-pc-linux-gnu \
+  --libdir=/usr/lib32 --prefix=/usr --sysconfdir=/etc --with-dri-driverdir=/usr/lib32/xorg/modules/dri \
+  --with-gallium-drivers=radeonsi,swrast --with-dri-drivers="i915,i965" --with-platforms=x11,drm,wayland,surfaceless --with-vulkan-drivers=radeon,intel \
+  --enable-texture-float -enable-nine --enable-gbm --enable-glx-tls --with-va-libdir=/usr/lib32/dri --enable-vpdau --disable-xvmc --enable-gles2 --disable-gles1 \
+  -with-gnu-ld  --with-clang-libdir=/usr/lib/ --disable-libunwind
 
 # Used configure settings
 #

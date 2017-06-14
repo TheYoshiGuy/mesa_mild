@@ -42,7 +42,7 @@ build () {
   ./autogen.sh --prefix=/usr \
                --sysconfdir=/etc \
                --with-dri-driverdir=/usr/lib/xorg/modules/dri \
-               --with-dri-drivers="i915"\
+               --with-dri-drivers="i915,i965"\
                --with-gallium-drivers=radeonsi,swrast \
                --with-egl-platforms=x11,drm,wayland,surfaceless \
                --enable-texture-float \
@@ -51,12 +51,10 @@ build () {
                --enable-opencl \
                --enable-opencl-icd \
                --enable-glx-tls \
-               --enable-lmsensors \
                --with-gnu-ld \
                --enable-va \
                --enable-llvm \
                --enable-dri3 \
-               --enable-gallium-extra-hud \
                --with-vulkan-drivers=radeon,intel \
                --enable-egl --disable-gles1  --enable-gles2 --enable-shared-glapi --disable-libunwind
 
