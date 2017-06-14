@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Settings 
-flavor="amd-only"  # "amd-only" or ""  
-fragment="master" # "master" or "tag" or "commit" or "branch"
+flavor=""  # "amd-only" or ""  
+fragment="tag=mild-17.1.2" # "master" or "tag" or "commit" or "branch"
 
 
 
@@ -10,7 +10,8 @@ fragment="master" # "master" or "tag" or "commit" or "branch"
 # amd-only build for both amdgpu and radeon kernel driver
 # empty is suitable for amd and intel igd 
 
-pckflavor="${flavor}."
+pckflavor=""
+[ -z ${flavor} ]  || pckflavor="${flavor}."
 
 
 function die {
