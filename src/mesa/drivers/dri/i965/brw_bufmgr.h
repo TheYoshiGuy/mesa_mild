@@ -152,17 +152,35 @@ struct brw_bo *brw_bo_alloc(struct brw_bufmgr *bufmgr, const char *name,
  *  I915_TILING_NONE
  *  I915_TILING_X
  *  I915_TILING_Y
+ */
+struct brw_bo *brw_bo_alloc_tiled(struct brw_bufmgr *bufmgr,
+                                  const char *name,
+                                  uint64_t size,
+                                  uint32_t tiling_mode,
+                                  uint32_t pitch,
+                                  unsigned flags);
+
+/**
+ * Allocate a tiled buffer object.
+ *
+ * Alignment for tiled objects is set automatically; the 'flags'
+ * argument provides a hint about how the object will be used initially.
+ *
+ * Valid tiling formats are:
+ *  I915_TILING_NONE
+ *  I915_TILING_X
+ *  I915_TILING_Y
  *
  * Note the tiling format may be rejected; callers should check the
  * 'tiling_mode' field on return, as well as the pitch value, which
  * may have been rounded up to accommodate for tiling restrictions.
  */
-struct brw_bo *brw_bo_alloc_tiled(struct brw_bufmgr *bufmgr,
-                                  const char *name,
-                                  int x, int y, int cpp,
-                                  uint32_t tiling_mode,
-                                  uint32_t *pitch,
-                                  unsigned flags);
+struct brw_bo *brw_bo_alloc_tiled_2d(struct brw_bufmgr *bufmgr,
+                                     const char *name,
+                                     int x, int y, int cpp,
+                                     uint32_t tiling_mode,
+                                     uint32_t *pitch,
+                                     unsigned flags);
 
 /** Takes a reference on a buffer object */
 void brw_bo_reference(struct brw_bo *bo);

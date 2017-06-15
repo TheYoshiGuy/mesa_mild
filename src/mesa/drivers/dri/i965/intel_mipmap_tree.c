@@ -333,6 +333,9 @@ intel_miptree_create_layout(struct brw_context *brw,
    mt->msaa_layout = INTEL_MSAA_LAYOUT_NONE;
    mt->refcount = 1;
 
+   if (brw->gen == 6 && format == MESA_FORMAT_S_UINT8)
+      layout_flags |= MIPTREE_LAYOUT_GEN6_HIZ_STENCIL;
+
    int depth_multiply = 1;
    if (num_samples > 1) {
       /* Adjust width/height/depth for MSAA */
@@ -463,8 +466,7 @@ intel_miptree_create_layout(struct brw_context *brw,
          intel_miptree_wants_hiz_buffer(brw, mt)))) {
       uint32_t stencil_flags = MIPTREE_LAYOUT_ACCELERATED_UPLOAD;
       if (brw->gen == 6) {
-         stencil_flags |= MIPTREE_LAYOUT_GEN6_HIZ_STENCIL |
-                          MIPTREE_LAYOUT_TILING_ANY;
+         stencil_flags |= MIPTREE_LAYOUT_TILING_ANY;
       }
 
       mt->stencil_mt = intel_miptree_create(brw,
@@ -655,16 +657,16 @@ miptree_create(struct brw_context *brw,
 
    if (format == MESA_FORMAT_S_UINT8) {
       /* Align to size of W tile, 64x64. */
-      mt->bo = brw_bo_alloc_tiled(brw->bufmgr, "miptree",
-                                  ALIGN(mt->total_width, 64),
-                                  ALIGN(mt->total_height, 64),
-                                  mt->cpp, mt->tiling, &mt->pitch,
-                                  alloc_flags);
+      mt->bo = brw_bo_alloc_tiled_2d(brw->bufmgr, "miptree",
+                                     ALIGN(mt->total_width, 64),
+                                     ALIGN(mt->total_height, 64),
+                                     mt->cpp, mt->tiling, &mt->pitch,
+                                     alloc_flags);
    } else {
-      mt->bo = brw_bo_alloc_tiled(brw->bufmgr, "miptree",
-                                  mt->total_width, mt->total_height,
-                                  mt->cpp, mt->tiling, &mt->pitch,
-                                  alloc_flags);
+      mt->bo = brw_bo_alloc_tiled_2d(brw->bufmgr, "miptree",
+                                     mt->total_width, mt->total_height,
+                                     mt->cpp, mt->tiling, &mt->pitch,
+                                     alloc_flags);
    }
 
    if (layout_flags & MIPTREE_LAYOUT_FOR_SCANOUT)
@@ -705,9 +707,9 @@ intel_miptree_create(struct brw_context *brw,
 
       mt->tiling = I915_TILING_X;
       brw_bo_unreference(mt->bo);
-      mt->bo = brw_bo_alloc_tiled(brw->bufmgr, "miptree",
-                                  mt->total_width, mt->total_height, mt->cpp,
-                                  mt->tiling, &mt->pitch, alloc_flags);
+      mt->bo = brw_bo_alloc_tiled_2d(brw->bufmgr, "miptree",
+                                     mt->total_width, mt->total_height, mt->cpp,
+                                     mt->tiling, &mt->pitch, alloc_flags);
    }
 
    mt->offset = 0;
@@ -1593,13 +1595,8 @@ intel_miptree_alloc_non_msrt_mcs(struct brw_context *brw,
    const uint32_t alloc_flags =
       is_lossless_compressed ? 0 : BO_ALLOC_FOR_RENDER;
 
-   /* ISL has stricter set of alignment rules then the drm allocator.
-    * Therefore one can pass the ISL dimensions in terms of bytes instead of
-    * trying to recalculate based on different format block sizes.
-    */
-   buf->bo = brw_bo_alloc_tiled(brw->bufmgr, "ccs-miptree",
-                                buf->pitch, buf->size / buf->pitch,
-                                1, I915_TILING_Y, &buf->pitch, alloc_flags);
+   buf->bo = brw_bo_alloc_tiled(brw->bufmgr, "ccs-miptree", buf->size,
+                                I915_TILING_Y, buf->pitch, alloc_flags);
    if (!buf->bo) {
       free(buf);
       free(aux_state);
@@ -1731,10 +1728,10 @@ intel_gen7_hiz_buf_create(struct brw_context *brw,
       hz_height = DIV_ROUND_UP(hz_qpitch * Z0, 2 * 8) * 8;
    }
 
-   buf->aux_base.bo = brw_bo_alloc_tiled(brw->bufmgr, "hiz",
-                                         hz_width, hz_height, 1,
-                                         I915_TILING_Y, &buf->aux_base.pitch,
-                                         BO_ALLOC_FOR_RENDER);
+   buf->aux_base.bo = brw_bo_alloc_tiled_2d(brw->bufmgr, "hiz",
+                                            hz_width, hz_height, 1,
+                                            I915_TILING_Y, &buf->aux_base.pitch,
+                                            BO_ALLOC_FOR_RENDER);
    if (!buf->aux_base.bo) {
       free(buf);
       return NULL;
@@ -1821,10 +1818,10 @@ intel_gen8_hiz_buf_create(struct brw_context *brw,
       hz_height = DIV_ROUND_UP(buf->aux_base.qpitch, 2 * 8) * 8 * Z0;
    }
 
-   buf->aux_base.bo = brw_bo_alloc_tiled(brw->bufmgr, "hiz",
-                                         hz_width, hz_height, 1,
-                                         I915_TILING_Y, &buf->aux_base.pitch,
-                                         BO_ALLOC_FOR_RENDER);
+   buf->aux_base.bo = brw_bo_alloc_tiled_2d(brw->bufmgr, "hiz",
+                                            hz_width, hz_height, 1,
+                                            I915_TILING_Y, &buf->aux_base.pitch,
+                                            BO_ALLOC_FOR_RENDER);
    if (!buf->aux_base.bo) {
       free(buf);
       return NULL;

@@ -749,7 +749,6 @@ struct brw_context
    bool has_negative_rhw_bug;
    bool has_pln;
    bool no_simd8;
-   bool use_rep_send;
 
    /**
     * Some versions of Gen hardware don't do centroid interpolation correctly
@@ -965,22 +964,10 @@ struct brw_context
 
    struct {
       struct brw_stage_state base;
-
-      /**
-       * True if the 3DSTATE_HS command most recently emitted to the 3D
-       * pipeline enabled the HS; false otherwise.
-       */
-      bool enabled;
    } tcs;
 
    struct {
       struct brw_stage_state base;
-
-      /**
-       * True if the 3DSTATE_DS command most recently emitted to the 3D
-       * pipeline enabled the DS; false otherwise.
-       */
-      bool enabled;
    } tes;
 
    struct {
@@ -1653,7 +1640,8 @@ void brw_fini_pipe_control(struct brw_context *brw);
 void brw_emit_pipe_control_flush(struct brw_context *brw, uint32_t flags);
 void brw_emit_pipe_control_write(struct brw_context *brw, uint32_t flags,
                                  struct brw_bo *bo, uint32_t offset,
-                                 uint32_t imm_lower, uint32_t imm_upper);
+                                 uint64_t imm);
+void brw_emit_end_of_pipe_sync(struct brw_context *brw, uint32_t flags);
 void brw_emit_mi_flush(struct brw_context *brw);
 void brw_emit_post_sync_nonzero_flush(struct brw_context *brw);
 void brw_emit_depth_stall_flushes(struct brw_context *brw);

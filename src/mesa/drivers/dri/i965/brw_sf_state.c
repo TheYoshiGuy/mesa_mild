@@ -39,6 +39,7 @@
 #include "brw_context.h"
 #include "brw_state.h"
 #include "brw_defines.h"
+#include "brw_util.h"
 
 static void upload_sf_unit( struct brw_context *brw )
 {
@@ -123,53 +124,25 @@ static void upload_sf_unit( struct brw_context *brw )
    }
 
    /* _NEW_LINE */
-   sf->sf6.line_width =
-      CLAMP(ctx->Line.Width, 1.0f, ctx->Const.MaxLineWidth) * (1<<1);
+   sf->sf6.line_width = U_FIXED(brw_get_line_width(brw), 1);
 
-   sf->sf6.line_endcap_aa_region_width = 1;
-   if (ctx->Line.SmoothFlag)
+   if (ctx->Line.SmoothFlag) {
       sf->sf6.aa_enable = 1;
-   else if (sf->sf6.line_width <= 0x2)
-       sf->sf6.line_width = 0;
+      sf->sf6.line_endcap_aa_region_width = 1;
+   }
 
-   /* _NEW_BUFFERS */
-   if (!render_to_fbo) {
-      /* Rendering to an OpenGL window */
-      sf->sf6.point_rast_rule = BRW_RASTRULE_UPPER_RIGHT;
-   }
-   else {
-      /* If rendering to an FBO, the pixel coordinate system is
-       * inverted with respect to the normal OpenGL coordinate
-       * system, so BRW_RASTRULE_LOWER_RIGHT is correct.
-       * But this value is listed as "Reserved, but not seen as useful"
-       * in Intel documentation (page 212, "Point Rasterization Rule",
-       * section 7.4 "SF Pipeline State Summary", of document
-       * "Intel® 965 Express Chipset Family and Intel® G35 Express
-       * Chipset Graphics Controller Programmer's Reference Manual,
-       * Volume 2: 3D/Media", Revision 1.0b as of January 2008,
-       * available at
-       *     https://01.org/linuxgraphics/documentation/hardware-specification-prms
-       * at the time of this writing).
-       *
-       * It does work on at least some devices, if not all;
-       * if devices that don't support it can be identified,
-       * the likely failure case is that points are rasterized
-       * incorrectly, which is no worse than occurs without
-       * the value, so we're using it here.
-       */
-      sf->sf6.point_rast_rule = BRW_RASTRULE_LOWER_RIGHT;
-   }
-   /* XXX clamp max depends on AA vs. non-AA */
+   sf->sf6.point_rast_rule = BRW_RASTRULE_UPPER_RIGHT;
 
    /* _NEW_POINT */
    sf->sf7.sprite_point = ctx->Point.PointSprite;
-   sf->sf7.point_size = CLAMP(rintf(CLAMP(ctx->Point.Size,
-                                          ctx->Point.MinSize,
-                                          ctx->Point.MaxSize)), 1.0f, 255.0f) *
-                        (1<<3);
-   /* _NEW_PROGRAM | _NEW_POINT */
-   sf->sf7.use_point_size_state = !(ctx->VertexProgram.PointSizeEnabled ||
-				    ctx->Point._Attenuated);
+
+   float point_sz;
+   point_sz = CLAMP(ctx->Point.Size, ctx->Point.MinSize, ctx->Point.MaxSize);
+   point_sz = CLAMP(point_sz, 0.125f, 255.875f);
+   sf->sf7.point_size = U_FIXED(point_sz, 3);
+
+   /* _NEW_PROGRAM | _NEW_POINT, BRW_NEW_VUE_MAP_GEOM_OUT */
+   sf->sf7.use_point_size_state = use_state_point_size(brw);
    sf->sf7.aa_line_distance_mode = brw->is_g4x || brw->gen == 5;
 
    /* might be BRW_NEW_PRIMITIVE if we have to adjust pv for polygons:
@@ -220,6 +193,7 @@ const struct brw_tracked_state brw_sf_unit = {
                BRW_NEW_PROGRAM_CACHE |
                BRW_NEW_SF_PROG_DATA |
                BRW_NEW_SF_VP |
+               BRW_NEW_VUE_MAP_GEOM_OUT |
                BRW_NEW_URB_FENCE,
    },
    .emit = upload_sf_unit,

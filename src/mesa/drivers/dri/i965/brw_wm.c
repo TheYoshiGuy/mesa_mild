@@ -106,6 +106,9 @@ brw_wm_debug_recompile(struct brw_context *brw, struct gl_program *prog,
                       old_key->alpha_test_func, key->alpha_test_func);
    found |= key_debug(brw, "mrt alpha test reference value",
                       old_key->alpha_test_ref, key->alpha_test_ref);
+   found |= key_debug(brw, "force dual color blending",
+                      old_key->force_dual_color_blend,
+                      key->force_dual_color_blend);
 
    found |= brw_debug_recompile_sampler_key(brw, &old_key->tex, &key->tex);
 
@@ -188,7 +191,7 @@ brw_codegen_wm_prog(struct brw_context *brw,
    program = brw_compile_fs(brw->screen->compiler, brw, mem_ctx,
                             key, &prog_data, fp->program.nir,
                             &fp->program, st_index8, st_index16,
-                            true, brw->use_rep_send, vue_map,
+                            true, false, vue_map,
                             &program_size, &error_str);
 
    if (program == NULL) {

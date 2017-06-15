@@ -1,7 +1,4 @@
-# Mesa 3-D graphics library
-#
-# Copyright (C) 2010-2011 Chia-I Wu <olvaffe@gmail.com>
-# Copyright (C) 2010-2011 LunarG Inc.
+# Copyright (C) 2014 Emil Velikov <emil.l.velikov@gmail.com>
 #
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the "Software"),
@@ -30,15 +27,7 @@ include $(CLEAR_VARS)
 
 LOCAL_SRC_FILES := $(C_SOURCES)
 
-LOCAL_C_INCLUDES := $(LOCAL_PATH)/include
-
-LOCAL_MODULE := libmesa_pipe_svga
-
-LOCAL_STATIC_LIBRARIES += libmesa_git_sha1
+LOCAL_MODULE := libmesa_winsys_pl111
 
 include $(GALLIUM_COMMON_MK)
 include $(BUILD_STATIC_LIBRARY)
-
-ifneq ($(HAVE_GALLIUM_VMWGFX),)
-$(eval GALLIUM_LIBS += $(LOCAL_MODULE) libmesa_winsys_svga)
-endif
