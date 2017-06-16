@@ -59,14 +59,41 @@ B) If everything goes well you have now a mesa with four new options of configur
 -    enable "Allow more type of primitives in glDrawArray"
 -    enable "Special handling of mesa_uniform when location = -1"
 -    enable "Bypass some validation related to VBO when using core profile"
--    
 -
 -Save or close application and it's best if you reboot now.
+
+There are tunables that you may want to set in case you're using an  intel gpu.
+Some applications will detect GPU and will act accordingly, with mesa, it's often unnecessary and could lead to garbled displays and/or crashes.
+
+You can setup different values here some examples
+
+
+# CEMU will recognize GPU as generic (you can use any strings)
+HMESA_VENDOR_OVERRIDE="MYGPU inc."
+HMESA_RENDERER_OVERRIDE="MESA"
+
+# CEMU will recognize GPU as AMD
+HMESA_VENDOR_OVERRIDE="AMD inc."
+HMESA_RENDERER_OVERRIDE="Radeon HD R9-270X"
+
+If you do not setup these values, mesa will use the normal one
+
+
 -
 -To launch CEMU (if installed for instance in /cemu/cemu1.8.0)
 -Open a terminal
--# cd /cemu/cemu1.8.0
--# MESA_GL_VERSION_OVERRIDE=4.5 wine64 Cemu.exe
+
+# cd /cemu/cemu1.8.0
+# MESA_GL_VERSION_OVERRIDE=4.5 wine64 Cemu.exe
+
+If you have an intel's GPU
+
+# HMESA_VENDOR_OVERRIDE="My GPU" HMESA_RENDERER_OVERRIDE="MESA" MESA_GL_VERSION_OVERRIDE=4.5 wine64 cemu/Cemu.exe
+
+
+
+I start to upload in repository
+
 -
--- Check MESA_NO_ERROR is not set (unless you stick to a stable 17.1) 
+-- Check MESA_NO_ERROR is not set (unless you stick to a stable 17.1)
 -
