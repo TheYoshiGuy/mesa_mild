@@ -117,7 +117,12 @@ _mesa_GetString( GLenum name )
 
    if (!ctx)
       return NULL;
-
+   const char *env_vendor = getenv("HMESA_VENDOR_OVERRIDE");
+   if ((name == GL_VENDOR) && env_vendor)
+      return (const GLubyte*) env_vendor;
+   const char *env_renderer = getenv("HMESA_RENDERER_OVERRIDE");
+   if ((name == GL_RENDERER) && env_renderer)
+      return (const GLubyte*) env_renderer;
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, NULL);
 
    /* this is a required driver function */
