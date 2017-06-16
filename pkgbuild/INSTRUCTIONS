@@ -1,0 +1,130 @@
+ INSTRUCTIONS
+
+Why this ?
+
+Many people are trying to run Cemu ( http://cemu.info ) on various GNU/Linux distribution over WINE ( https://www.winehq.org/ ), and as they have either AMD’s GPU or Intel IGD, they encounter a crash before as they start application or soon after.
+
+Essentialy there are two ways of using OpenGL nowadays, one is there for ensuring a smooth transition from legacy practices, a smooth transition from a long time ago.
+
+Hardware vendors doesn’t all the time respect standards, so some of them still support this way of doing things.
+
+Mesa developpers are working hard to provide an excellent support, and they’re successful doing it, however some applications that are disrespectful with standards, can give you an hard time, when you try to make them work.
+
+The problem is that Cemu is using an old and rather legacy way of intialising and using OPENGL. :
+
+    It tries to get a list of available OpenGL’s extension in a wrong way.
+
+    It tries to draw quads but this should not be supported anymore.
+
+    Sometimes it tries to get informations from shaders, also in a legacy way
+
+    Sometimes it change codepathes to work aroung drivers issues. Because drivers are known to be broken somehow.
+
+This version of mesa, was made to overcome most of these issue, and as such allow to use Cemu with mesa drivers.
+Requirements
+
+
+
+Mesa has a strong requirement about LLVM (5.0) and LIBDRM ( 2.4.81 ), plus it’s always a good idea, to have a recent kernel.
+How to install
+Applies to everyone
+
+
+
+This is a normal git repository, so basically any way you use to build mesa from sources, will work.
+For archlinux based distribution
+
+
+As not everyone know how to build mesa from sources, or using pkgbuild, there is some script available here :
+
+https://raw.githubusercontent.com/mikakev1/mesa_mild_compatibility/master/pkgbuild/buildmesa.sh
+
+
+Inspect the content, tune to your need, and run it if it helps.
+
+Basically this script will ensure you have everything you need, perform update, download dependencies, some of them will be built, and it will build mesa.
+
+
+After it’ll provide you with the command line you’ll need to type to install it.
+
+
+Result
+
+
+
+You’ll be provided with new tunable, for dri (check /etc/drirc), available in a GUI (driconf), and a couple of environement variable that you may want to use incase you own an intel GPU, and want to use it.
+
+Namely they’re :
+
+DRICONF
+
+    Always allow glGetString(GL_EXTENSIONS)
+
+    Allow more types of primitives in glDrawArrays
+
+    Special handling of mesa_uniform when location is  -1
+
+    Bypass some validation related to VBO when using core profile
+
+
+
+Environment variable :
+
+    HMESA_VENDOR_OVERRIDE – To allow to force a vendor’s name
+
+    HMESA_RENDERER_OVERRIDE – To force the hardware/driver’s name
+
+How to use
+Applies to ALL :
+
+
+
+Set in driconf :
+
+    Always allow glGetString(GL_EXTENSIONS)
+
+    Allow more types of primitives in glDrawArrays
+
+    Special handling of mesa_uniform when location is  -1
+
+    Bypass some validation related to VBO when using core profile
+
+    Force GLSLextension behavior to ‘warn’
+
+
+
+Check that this is disabled in driconf :
+
+    Allow a higher compat profile (version 3.1+) for apps that request it
+
+    Enable offloading GL driver work to a separate thread
+
+
+
+Check that MESA_NO_ERROR is not set in the environment
+
+Set in the environment :
+
+    MESA_GL_VERSION_OVERRIDE=4.5
+
+
+
+Special handling of intel’s IGD :
+
+
+
+Cemu has a workaround for intel IGD, that is activated if it detects an intel IGD, and you don’t want it.
+
+Set in environment
+
+    HMESA_VENDOR_OVERRIDE=MESA
+
+    HMESA_RENDERER_OVERRIDE=MESA
+
+Finally
+
+
+
+You can run CEMU as you would normaly.
+
+
