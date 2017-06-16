@@ -837,6 +837,11 @@ dnl is not valid for that platform.
 if test "x$android" = xno; then
     test -z "$PTHREAD_LIBS" && PTHREAD_LIBS="-lpthread"
 fi
+dnl According to the manual when using pthreads, one should add -pthread to
+dnl both compile and link-time arguments.
+dnl In practise that should be sufficient for all platforms, since any
+dnl platforms build with GCC and Clang support the flag.
+PTHREAD_LIBS="$PTHREAD_LIBS -pthread"
 
 dnl pthread-stubs is mandatory on BSD platforms, due to the nature of the
 dnl project. Even then there's a notable issue as described in the project README
@@ -851,8 +856,6 @@ esac
 
 if test "x$pthread_stubs_possible" = xyes; then
     PKG_CHECK_MODULES(PTHREADSTUBS, pthread-stubs >= 0.4)
-    AC_SUBST(PTHREADSTUBS_CFLAGS)
-    AC_SUBST(PTHREADSTUBS_LIBS)
 fi
 
 dnl SELinux awareness.
