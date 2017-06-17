@@ -787,7 +787,7 @@ static void GeometryShaderStage(
     tlsGsContext.PrimitiveID = primID;
 
     uint32_t numVertsPerPrim = NumVertsPerPrim(pa.binTopology, true);
-    simdvector attrib[MAX_ATTRIBUTES];
+    simdvector attrib[MAX_NUM_VERTS_PER_PRIM];
 
     // assemble all attributes for the input primitive
     for (uint32_t slot = 0; slot < pState->numInputAttribs; ++slot)
@@ -916,10 +916,10 @@ static void GeometryShaderStage(
                 }
 
 #if USE_SIMD16_FRONTEND
-                PA_STATE_CUT gsPa(pDC, pBase, numEmittedVerts, reinterpret_cast<simd16mask *>(pCutBuffer), numEmittedVerts, numAttribs, pState->outputTopology, processCutVerts);
+                PA_STATE_CUT gsPa(pDC, pBase, numEmittedVerts, SWR_VTX_NUM_SLOTS, reinterpret_cast<simd16mask *>(pCutBuffer), numEmittedVerts, numAttribs, pState->outputTopology, processCutVerts);
 
 #else
-                PA_STATE_CUT gsPa(pDC, pBase, numEmittedVerts, pCutBuffer, numEmittedVerts, numAttribs, pState->outputTopology, processCutVerts);
+                PA_STATE_CUT gsPa(pDC, pBase, numEmittedVerts, SWR_VTX_NUM_SLOTS, pCutBuffer, numEmittedVerts, numAttribs, pState->outputTopology, processCutVerts);
 
 #endif
                 while (gsPa.GetNextStreamOutput())
@@ -948,74 +948,13 @@ static void GeometryShaderStage(
                             if (HasRastT::value && state.soState.streamToRasterizer == stream)
                             {
 #if USE_SIMD16_FRONTEND
-                                simd16scalari vPrimId;
-                                // pull primitiveID from the GS output if available
-                                if (state.gsState.emitsPrimitiveID)
-                                {
-                                    simd16vector primIdAttrib[3];
-                                    gsPa.Assemble_simd16(VERTEX_PRIMID_SLOT, primIdAttrib);
-                                    vPrimId = _simd16_castps_si(primIdAttrib[state.frontendState.topologyProvokingVertex].x);
-                                }
-                                else
-                                {
-                                    vPrimId = _simd16_set1_epi32(pPrimitiveId[inputPrim]);
-                                }
-
-                                // use viewport array index if GS declares it as an output attribute. Otherwise use index 0.
-                                simd16scalari vViewPortIdx;
-                                if (state.gsState.emitsViewportArrayIndex)
-                                {
-                                    simd16vector vpiAttrib[3];
-                                    gsPa.Assemble_simd16(VERTEX_VIEWPORT_ARRAY_INDEX_SLOT, vpiAttrib);
-
-                                    // OOB indices => forced to zero.
-                                    simd16scalari vNumViewports = _simd16_set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
-                                    simd16scalari vClearMask = _simd16_cmplt_epi32(_simd16_castps_si(vpiAttrib[0].x), vNumViewports);
-                                    vpiAttrib[0].x = _simd16_and_ps(_simd16_castsi_ps(vClearMask), vpiAttrib[0].x);
-
-                                    vViewPortIdx = _simd16_castps_si(vpiAttrib[0].x);
-                                }
-                                else
-                                {
-                                    vViewPortIdx = _simd16_set1_epi32(0);
-                                }
+                                simd16scalari vPrimId = _simd16_set1_epi32(pPrimitiveId[inputPrim]);
 
                                 gsPa.useAlternateOffset = false;
-                                pfnClipFunc(pDC, gsPa, workerId, attrib_simd16, GenMask(gsPa.NumPrims()), vPrimId, vViewPortIdx);
+                                pfnClipFunc(pDC, gsPa, workerId, attrib_simd16, GenMask(gsPa.NumPrims()), vPrimId);
 #else
-                                simdscalari vPrimId;
-                                // pull primitiveID from the GS output if available
-                                if (state.gsState.emitsPrimitiveID)
-                                {
-                                    simdvector primIdAttrib[3];
-                                    gsPa.Assemble(VERTEX_PRIMID_SLOT, primIdAttrib);
-                                    vPrimId = _simd_castps_si(primIdAttrib[state.frontendState.topologyProvokingVertex].x);
-                                }
-                                else
-                                {
-                                    vPrimId = _simd_set1_epi32(pPrimitiveId[inputPrim]);
-                                }
-
-                                // use viewport array index if GS declares it as an output attribute. Otherwise use index 0.
-                                simdscalari vViewPortIdx;
-                                if (state.gsState.emitsViewportArrayIndex)
-                                {
-                                    simdvector vpiAttrib[3];
-                                    gsPa.Assemble(VERTEX_VIEWPORT_ARRAY_INDEX_SLOT, vpiAttrib);
-
-                                    // OOB indices => forced to zero.
-                                    simdscalari vNumViewports = _simd_set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
-                                    simdscalari vClearMask = _simd_cmplt_epi32(_simd_castps_si(vpiAttrib[0].x), vNumViewports);
-                                    vpiAttrib[0].x = _simd_and_ps(_simd_castsi_ps(vClearMask), vpiAttrib[0].x);
-
-                                    vViewPortIdx = _simd_castps_si(vpiAttrib[0].x);
-                                }
-                                else
-                                {
-                                    vViewPortIdx = _simd_set1_epi32(0);
-                                }
-
-                                pfnClipFunc(pDC, gsPa, workerId, attrib, GenMask(gsPa.NumPrims()), vPrimId, vViewPortIdx);
+                                simdscalari vPrimId = _simd_set1_epi32(pPrimitiveId[inputPrim]);
+                                pfnClipFunc(pDC, gsPa, workerId, attrib, GenMask(gsPa.NumPrims()), vPrimId);
 #endif
                             }
                         }
@@ -1301,6 +1240,7 @@ static void TessellationStages(
             dsContext.pOutputData,
             dsContext.vectorStride,
 #endif
+            SWR_VTX_NUM_SLOTS,
             tsState.numDsOutputAttribs,
             tsData.ppIndices,
             tsData.NumPrimitives,
@@ -1363,10 +1303,10 @@ static void TessellationStages(
                     SWR_ASSERT(pfnClipFunc);
 #if USE_SIMD16_FRONTEND
                     tessPa.useAlternateOffset = false;
-                    pfnClipFunc(pDC, tessPa, workerId, prim_simd16, GenMask(numPrims), primID, _simd16_set1_epi32(0));
+                    pfnClipFunc(pDC, tessPa, workerId, prim_simd16, GenMask(numPrims), primID);
 #else
                     pfnClipFunc(pDC, tessPa, workerId, prim,
-                        GenMask(tessPa.NumPrims()), _simd_set1_epi32(dsContext.PrimitiveID), _simd_set1_epi32(0));
+                        GenMask(tessPa.NumPrims()), _simd_set1_epi32(dsContext.PrimitiveID));
 #endif
                 }
             }
@@ -1498,36 +1438,36 @@ void ProcessDraw(
         pSoPrimData = (uint32_t*)pDC->pArena->AllocAligned(4096, 16);
     }
 
-    const uint32_t vertexCount = NumVertsPerPrim(state.topology, state.gsState.gsEnable);
+    const uint32_t vertexCount = NumVertsPerPrim(state.topology, true);
+#if USE_SIMD16_FRONTEND
+    uint32_t simdVertexSizeBytes = state.frontendState.vsVertexSize * sizeof(simd16vector);
+#else
+    uint32_t simdVertexSizeBytes = state.frontendState.vsVertexSize * sizeof(simdvector);
+#endif
 
     SWR_ASSERT(vertexCount <= MAX_NUM_VERTS_PER_PRIM);
 
+    // Compute storage requirements for vertex store
+    // TODO: allocation needs to be rethought for better cut support
+    uint32_t numVerts = vertexCount + 2; // Need extra space for PA state machine
+    uint32_t vertexStoreSize = numVerts * simdVertexSizeBytes;
+
     // grow the vertex store for the PA as necessary
-    if (gVertexStoreSize < vertexCount)
+    if (gVertexStoreSize < vertexStoreSize)
     {
         if (pVertexStore != nullptr)
         {
             AlignedFree(pVertexStore);
         }
 
-        while (gVertexStoreSize < vertexCount)
-        {
-#if USE_SIMD16_FRONTEND
-            gVertexStoreSize += 4;  // grow in chunks of 4 simd16vertex
-#else
-            gVertexStoreSize += 8;  // grow in chunks of 8 simdvertex
-#endif
-        }
-
-        SWR_ASSERT(gVertexStoreSize <= MAX_NUM_VERTS_PER_PRIM);
-
-        pVertexStore = reinterpret_cast<PA_STATE::SIMDVERTEX *>(AlignedMalloc(gVertexStoreSize * sizeof(pVertexStore[0]), 64));
+        pVertexStore = reinterpret_cast<PA_STATE::SIMDVERTEX *>(AlignedMalloc(vertexStoreSize, 64));
+        gVertexStoreSize = vertexStoreSize;
 
         SWR_ASSERT(pVertexStore != nullptr);
     }
 
     // choose primitive assembler
-    PA_FACTORY<IsIndexedT, IsCutIndexEnabledT> paFactory(pDC, state.topology, work.numVerts, pVertexStore, gVertexStoreSize);
+    PA_FACTORY<IsIndexedT, IsCutIndexEnabledT> paFactory(pDC, state.topology, work.numVerts, pVertexStore, numVerts, state.frontendState.vsVertexSize);
     PA_STATE& pa = paFactory.GetPA();
 
 #if USE_SIMD16_FRONTEND
@@ -1725,7 +1665,7 @@ void ProcessDraw(
                                     SWR_ASSERT(pDC->pState->pfnProcessPrims_simd16);
 
                                     pa.useAlternateOffset = false;
-                                    pDC->pState->pfnProcessPrims_simd16(pDC, pa, workerId, prim_simd16, GenMask(numPrims), primID, _simd16_setzero_si());
+                                    pDC->pState->pfnProcessPrims_simd16(pDC, pa, workerId, prim_simd16, GenMask(numPrims), primID);
                                 }
                             }
                         }
@@ -1750,11 +1690,7 @@ void ProcessDraw(
     }
 
 #else
-    simdvertex          vin;
     SWR_VS_CONTEXT      vsContext;
-
-    vsContext.pVin = &vin;
-
     SWR_FETCH_CONTEXT   fetchInfo = { 0 };
 
     fetchInfo.pStreams = &state.vertexBuffers[0];
@@ -1810,6 +1746,7 @@ void ProcessDraw(
             }
 
             simdvertex& vout = pa.GetNextVsOutput();
+            vsContext.pVin = &vout;
             vsContext.pVout = &vout;
 
             if (i < endVertex)
@@ -1817,7 +1754,7 @@ void ProcessDraw(
 
                 // 1. Execute FS/VS for a single SIMD.
                 AR_BEGIN(FEFetchShader, pDC->drawId);
-                state.pfnFetchFunc(fetchInfo, vin);
+                state.pfnFetchFunc(fetchInfo, vout);
                 AR_END(FEFetchShader, 0);
 
                 // forward fetch generated vertex IDs to the vertex shader
@@ -1890,7 +1827,7 @@ void ProcessDraw(
                                     SWR_ASSERT(pDC->pState->pfnProcessPrims);
 
                                     pDC->pState->pfnProcessPrims(pDC, pa, workerId, prim,
-                                        GenMask(pa.NumPrims()), pa.GetPrimID(work.startPrimID), _simd_set1_epi32(0));
+                                        GenMask(pa.NumPrims()), pa.GetPrimID(work.startPrimID));
                                 }
                             }
                         }

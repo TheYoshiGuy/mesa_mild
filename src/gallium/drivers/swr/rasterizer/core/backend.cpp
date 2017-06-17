@@ -386,7 +386,10 @@ void ProcessStoreTileBE(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTile
 
         if (pHotTile->state == HOTTILE_DIRTY || pHotTile->state == HOTTILE_RESOLVED)
         {
-            pHotTile->state = (HOTTILE_STATE)pDesc->postStoreTileState;
+            if (!(pDesc->postStoreTileState == (SWR_TILE_STATE)HOTTILE_DIRTY && pHotTile->state == HOTTILE_RESOLVED))
+            {
+                pHotTile->state = (HOTTILE_STATE)pDesc->postStoreTileState;
+            }
         }
     }
     AR_END(BEStoreTiles, 1);
@@ -593,6 +596,10 @@ void BackendSingleSample(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint3
                             pDepthBuffer, depthPassMask, vCoverageMask, pStencilBuffer, stencilPassMask);
                         goto Endtile;
                     }
+                } else {
+                    // for early z, consolidate discards from shader
+                    // into depthPassMask
+                    depthPassMask = _simd_and_ps(depthPassMask, vCoverageMask);
                 }
 
                 uint32_t statMask = _simd_movemask_ps(depthPassMask);

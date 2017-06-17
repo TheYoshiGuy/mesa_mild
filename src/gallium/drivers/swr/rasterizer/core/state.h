@@ -28,7 +28,7 @@
 #pragma once
 
 #include "common/formats.h"
-#include "common/simdintrin.h"
+#include "common/intrin.h"
 #include <functional>
 #include <algorithm>
 
@@ -175,23 +175,21 @@ enum SWR_OUTER_TESSFACTOR_ID
 /////////////////////////////////////////////////////////////////////////
 /// simdvertex
 /// @brief Defines a vertex element that holds all the data for SIMD vertices.
-///        Contains position in clip space, hardcoded to attribute 0,
-///        space for up to 32 attributes, as well as any SGV values generated
-///        by the pipeline
+///        Contains space for position, SGV, and 32 generic attributes
 /////////////////////////////////////////////////////////////////////////
 enum SWR_VTX_SLOTS
 {
-    VERTEX_POSITION_SLOT             = 0,
-    VERTEX_POSITION_END_SLOT         = 0,
-    VERTEX_ATTRIB_START_SLOT         = ( 1 + VERTEX_POSITION_END_SLOT),
-    VERTEX_ATTRIB_END_SLOT           = (32 + VERTEX_POSITION_END_SLOT),
-    VERTEX_RTAI_SLOT                 = (33 + VERTEX_POSITION_END_SLOT), // GS writes RenderTargetArrayIndex here
-    VERTEX_PRIMID_SLOT               = (34 + VERTEX_POSITION_END_SLOT), // GS writes PrimId here
-    VERTEX_CLIPCULL_DIST_LO_SLOT     = (35 + VERTEX_POSITION_END_SLOT), // VS writes lower 4 clip/cull dist
-    VERTEX_CLIPCULL_DIST_HI_SLOT     = (36 + VERTEX_POSITION_END_SLOT), // VS writes upper 4 clip/cull dist
-    VERTEX_POINT_SIZE_SLOT           = (37 + VERTEX_POSITION_END_SLOT), // VS writes point size here
-    VERTEX_VIEWPORT_ARRAY_INDEX_SLOT = (38 + VERTEX_POSITION_END_SLOT),
-    SWR_VTX_NUM_SLOTS                 = VERTEX_VIEWPORT_ARRAY_INDEX_SLOT,
+    VERTEX_SGV_SLOT                 = 0,
+        VERTEX_SGV_RTAI_COMP        = 0,
+        VERTEX_SGV_VAI_COMP         = 1,
+        VERTEX_SGV_POINT_SIZE_COMP  = 2,
+    VERTEX_POSITION_SLOT            = 1,
+    VERTEX_POSITION_END_SLOT        = 1,
+    VERTEX_CLIPCULL_DIST_LO_SLOT    = (1 + VERTEX_POSITION_END_SLOT), // VS writes lower 4 clip/cull dist
+    VERTEX_CLIPCULL_DIST_HI_SLOT    = (2 + VERTEX_POSITION_END_SLOT), // VS writes upper 4 clip/cull dist
+    VERTEX_ATTRIB_START_SLOT        = (3 + VERTEX_POSITION_END_SLOT),
+    VERTEX_ATTRIB_END_SLOT          = (34 + VERTEX_POSITION_END_SLOT),
+    SWR_VTX_NUM_SLOTS               = (1 + VERTEX_ATTRIB_END_SLOT)
 };
 
 // SoAoSoA
@@ -343,7 +341,6 @@ struct SWR_PS_CONTEXT
                                 // OUT: result color per rendertarget
 
     uint32_t frontFace;                 // IN: front- 1, back- 0
-    uint32_t primID;                    // IN: primitive ID
     uint32_t sampleIndex;               // IN: sampleIndex
     uint32_t renderTargetArrayIndex;    // IN: render target array index from GS
     uint32_t rasterizerSampleCount;     // IN: sample count used by the rasterizer
@@ -713,15 +710,6 @@ struct SWR_GS_STATE
     // instance count
     uint32_t instanceCount;
 
-    // geometry shader emits renderTargetArrayIndex
-    bool emitsRenderTargetArrayIndex;
-
-    // geometry shader emits PrimitiveID
-    bool emitsPrimitiveID;
-
-    // geometry shader emits ViewportArrayIndex
-    bool emitsViewportArrayIndex;
-
     // if true, geometry shader emits a single stream, with separate cut buffer.
     // if false, geometry shader emits vertices for multiple streams to the stream buffer, with a separate StreamID buffer
     // to map vertices to streams
@@ -807,6 +795,13 @@ enum SWR_MULTISAMPLE_COUNT
     SWR_MULTISAMPLE_TYPE_COUNT
 };
 
+INLINE uint32_t GetNumSamples(SWR_MULTISAMPLE_COUNT sampleCount) // @llvm_func_start
+{
+    static const uint32_t sampleCountLUT[SWR_MULTISAMPLE_TYPE_COUNT] {1, 2, 4, 8, 16};
+    assert(sampleCount < SWR_MULTISAMPLE_TYPE_COUNT);
+    return sampleCountLUT[sampleCount];
+} // @llvm_func_end
+
 struct SWR_BLEND_STATE
 {
     // constant blend factor color in RGBA float
@@ -862,6 +857,10 @@ struct SWR_FRONTEND_STATE
         uint32_t bits;
     } provokingVertex;
     uint32_t topologyProvokingVertex; // provoking vertex for the draw topology
+
+    // Size of a vertex in simdvector units. Should be sized to the 
+    // maximum of the input/output of the vertex shader.
+    uint32_t vsVertexSize;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -956,43 +955,13 @@ public:
     INLINE const __m128i& TileSampleOffsetsX() const { return tileSampleOffsetsX; }; // @llvm_func
     INLINE const __m128i& TileSampleOffsetsY() const { return tileSampleOffsetsY; }; // @llvm_func
     
-    INLINE void PrecalcSampleData(int numSamples)   // @llvm_func_start
-    {                                                                      
-        for(int i = 0; i < numSamples; i++)
-        {
-            _vXi[i] = _mm_set1_epi32(_xi[i]);
-            _vYi[i] = _mm_set1_epi32(_yi[i]);
-            _vX[i] = _simd_set1_ps(_x[i]);
-            _vY[i] = _simd_set1_ps(_y[i]);
-        }
-        // precalculate the raster tile BB for the rasterizer.
-        CalcTileSampleOffsets(numSamples);                                 
-    } // @llvm_func_end
-
+    INLINE void PrecalcSampleData(int numSamples); //@llvm_func
 
 private:
     template <typename MaskT>
-    INLINE __m128i expandThenBlend4(uint32_t* min, uint32_t* max) // @llvm_func_start
-    {
-        __m128i vMin = _mm_set1_epi32(*min);
-        __m128i vMax = _mm_set1_epi32(*max);
-        return _simd_blend4_epi32<MaskT::value>(vMin, vMax);
-    }  // @llvm_func_end
+    INLINE __m128i expandThenBlend4(uint32_t* min, uint32_t* max); // @llvm_func
+    INLINE void CalcTileSampleOffsets(int numSamples);   // @llvm_func
 
-    INLINE void CalcTileSampleOffsets(int numSamples)   // @llvm_func_start
-    {
-        auto minXi = std::min_element(std::begin(_xi), &_xi[numSamples]);
-        auto maxXi = std::max_element(std::begin(_xi), &_xi[numSamples]);
-        using xMask = std::integral_constant<int, 0xA>;
-        // BR(max),    BL(min),    UR(max),    UL(min)
-        tileSampleOffsetsX = expandThenBlend4<xMask>(minXi, maxXi);
-
-        auto minYi = std::min_element(std::begin(_yi), &_yi[numSamples]);
-        auto maxYi = std::max_element(std::begin(_yi), &_yi[numSamples]);
-        using yMask = std::integral_constant<int, 0xC>;
-        // BR(max),    BL(min),    UR(max),    UL(min)
-        tileSampleOffsetsY = expandThenBlend4<yMask>(minYi, maxYi);
-    };  // @llvm_func_end
     // scalar sample values
     uint32_t _xi[SWR_MAX_NUM_MULTISAMPLES];
     uint32_t _yi[SWR_MAX_NUM_MULTISAMPLES];
@@ -1005,8 +974,7 @@ private:
     simdscalar _vX[SWR_MAX_NUM_MULTISAMPLES];
     simdscalar _vY[SWR_MAX_NUM_MULTISAMPLES];
     __m128i tileSampleOffsetsX;
-    __m128i tileSampleOffsetsY;    
-
+    __m128i tileSampleOffsetsY;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -1076,6 +1044,9 @@ struct SWR_BACKEND_STATE
                                         // setting up attributes for the backend, otherwise
                                         // all attributes up to numAttributes will be sent
     SWR_ATTRIB_SWIZZLE swizzleMap[32];
+
+    bool readRenderTargetArrayIndex;    // Forward render target array index from last FE stage to the backend
+    bool readViewportArrayIndex;        // Read viewport array index from last FE stage during binning
 };
 
 

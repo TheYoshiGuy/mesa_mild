@@ -404,12 +404,18 @@ BuilderSWR::swr_gs_llvm_emit_vertex(const struct lp_build_tgsi_gs_iface *gs_base
 
     for (uint32_t attrib = 0; attrib < iface->num_outputs; ++attrib) {
        uint32_t attribSlot = attrib;
-       if (iface->info->output_semantic_name[attrib] == TGSI_SEMANTIC_PSIZE)
-          attribSlot = VERTEX_POINT_SIZE_SLOT;
-       else if (iface->info->output_semantic_name[attrib] == TGSI_SEMANTIC_PRIMID)
-          attribSlot = VERTEX_PRIMID_SLOT;
-       else if (iface->info->output_semantic_name[attrib] == TGSI_SEMANTIC_LAYER)
-          attribSlot = VERTEX_RTAI_SLOT;
+       uint32_t sgvChannel = 0;
+       if (iface->info->output_semantic_name[attrib] == TGSI_SEMANTIC_PSIZE) {
+          attribSlot = VERTEX_SGV_SLOT;
+          sgvChannel = VERTEX_SGV_POINT_SIZE_COMP;
+       } else if (iface->info->output_semantic_name[attrib] == TGSI_SEMANTIC_LAYER) {
+          attribSlot = VERTEX_SGV_SLOT;
+          sgvChannel = VERTEX_SGV_RTAI_COMP;
+       } else if (iface->info->output_semantic_name[attrib] == TGSI_SEMANTIC_POSITION) {
+          attribSlot = VERTEX_POSITION_SLOT;
+       } else {
+          attribSlot = VERTEX_ATTRIB_START_SLOT + attrib - 1;
+       }
 
 #if USE_SIMD16_FRONTEND
        Value *vOffsetsAttrib =
@@ -426,13 +432,21 @@ BuilderSWR::swr_gs_llvm_emit_vertex(const struct lp_build_tgsi_gs_iface *gs_base
           ADD(vOffsetsAttrib, MUL(vSimdSlot, VIMMED1((uint32_t)sizeof(float))));
 
        for (uint32_t channel = 0; channel < 4; ++channel) {
-          Value *vData = LOAD(unwrap(outputs[attrib][channel]));
           Value *vPtrs = GEP(pStream, vOffsetsAttrib);
+          Value *vData;
 
-          vPtrs = BITCAST(vPtrs,
-                          VectorType::get(PointerType::get(mFP32Ty, 0), 8));
+          if (attribSlot == VERTEX_SGV_SLOT)
+             vData = LOAD(unwrap(outputs[attrib][0]));
+          else
+             vData = LOAD(unwrap(outputs[attrib][channel]));
 
-          MASKED_SCATTER(vData, vPtrs, 32, vMask1);
+          if (attribSlot != VERTEX_SGV_SLOT ||
+              sgvChannel == channel) {
+             vPtrs = BITCAST(vPtrs,
+                             VectorType::get(PointerType::get(mFP32Ty, 0), 8));
+
+             MASKED_SCATTER(vData, vPtrs, 32, vMask1);
+          }
 
 #if USE_SIMD16_FRONTEND
           vOffsetsAttrib =
@@ -533,10 +547,6 @@ BuilderSWR::CompileGS(struct swr_context *ctx, swr_jit_gs_key &key)
    pGS->maxNumVerts = info->properties[TGSI_PROPERTY_GS_MAX_OUTPUT_VERTICES];
    pGS->instanceCount = info->properties[TGSI_PROPERTY_GS_INVOCATIONS];
 
-   pGS->emitsRenderTargetArrayIndex = info->writes_layer;
-   pGS->emitsPrimitiveID = info->writes_primid;
-   pGS->emitsViewportArrayIndex = info->writes_viewport_index;
-
    // XXX: single stream for now...
    pGS->isSingleStream = true;
    pGS->singleStreamID = 0;
@@ -600,8 +610,15 @@ BuilderSWR::CompileGS(struct swr_context *ctx, swr_jit_gs_key &key)
       ubyte semantic_name = info->input_semantic_name[slot];
       ubyte semantic_idx = info->input_semantic_index[slot];
 
-      unsigned vs_slot =
-         locate_linkage(semantic_name, semantic_idx, &ctx->vs->info.base) + 1;
+      unsigned vs_slot = locate_linkage(semantic_name, semantic_idx, &ctx->vs->info.base);
+
+      vs_slot += VERTEX_ATTRIB_START_SLOT;
+
+      if (ctx->vs->info.base.output_semantic_name[0] == TGSI_SEMANTIC_POSITION)
+         vs_slot--;
+
+      if (semantic_name == TGSI_SEMANTIC_POSITION)
+         vs_slot = VERTEX_POSITION_SLOT;
 
       STORE(C(vs_slot), vtxAttribMap, {0, slot});
       mapConstants.push_back(C(vs_slot));
@@ -792,11 +809,24 @@ BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
          if (!outputs[attrib][channel])
             continue;
 
-         Value *val = LOAD(unwrap(outputs[attrib][channel]));
+         Value *val;
+         uint32_t outSlot;
 
-         uint32_t outSlot = attrib;
-         if (swr_vs->info.base.output_semantic_name[attrib] == TGSI_SEMANTIC_PSIZE)
-            outSlot = VERTEX_POINT_SIZE_SLOT;
+         if (swr_vs->info.base.output_semantic_name[attrib] == TGSI_SEMANTIC_PSIZE) {
+            if (channel != VERTEX_SGV_POINT_SIZE_COMP)
+               continue;
+            val = LOAD(unwrap(outputs[attrib][0]));
+            outSlot = VERTEX_SGV_SLOT;
+         } else if (swr_vs->info.base.output_semantic_name[attrib] == TGSI_SEMANTIC_POSITION) {
+            val = LOAD(unwrap(outputs[attrib][channel]));
+            outSlot = VERTEX_POSITION_SLOT;
+         } else {
+            val = LOAD(unwrap(outputs[attrib][channel]));
+            outSlot = VERTEX_ATTRIB_START_SLOT + attrib;
+            if (swr_vs->info.base.output_semantic_name[0] == TGSI_SEMANTIC_POSITION)
+               outSlot--;
+         }
+
          WriteVS(val, pVsCtx, vtxOutput, outSlot, channel);
       }
    }
@@ -807,8 +837,8 @@ BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
 
       unsigned cv = 0;
       if (swr_vs->info.base.writes_clipvertex) {
-         cv = 1 + locate_linkage(TGSI_SEMANTIC_CLIPVERTEX, 0,
-                                 &swr_vs->info.base);
+         cv = locate_linkage(TGSI_SEMANTIC_CLIPVERTEX, 0,
+                             &swr_vs->info.base);
       } else {
          for (int i = 0; i < PIPE_MAX_SHADER_OUTPUTS; i++) {
             if (swr_vs->info.base.output_semantic_name[i] == TGSI_SEMANTIC_POSITION &&
@@ -827,8 +857,8 @@ BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
          // clip distance overrides user clip planes
          if ((swr_vs->info.base.clipdist_writemask & clip_mask & (1 << val)) ||
              ((swr_vs->info.base.culldist_writemask << swr_vs->info.base.num_written_clipdistance) & (1 << val))) {
-            unsigned cv = 1 + locate_linkage(TGSI_SEMANTIC_CLIPDIST, val < 4 ? 0 : 1,
-                                             &swr_vs->info.base);
+            unsigned cv = locate_linkage(TGSI_SEMANTIC_CLIPDIST, val < 4 ? 0 : 1,
+                                         &swr_vs->info.base);
             if (val < 4) {
                LLVMValueRef dist = LLVMBuildLoad(gallivm->builder, outputs[cv][val], "");
                WriteVS(unwrap(dist), pVsCtx, vtxOutput, VERTEX_CLIPCULL_DIST_LO_SLOT, val);
@@ -897,7 +927,7 @@ locate_linkage(ubyte name, ubyte index, struct tgsi_shader_info *info)
    for (int i = 0; i < PIPE_MAX_SHADER_OUTPUTS; i++) {
       if ((info->output_semantic_name[i] == name)
           && (info->output_semantic_index[i] == index)) {
-         return i - 1; // position is not part of the linkage
+         return i;
       }
    }
 
@@ -1043,23 +1073,23 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_fs_key &key)
          inputs[attrib][3] =
             wrap(LOAD(pPS, {0, SWR_PS_CONTEXT_vOneOverW, PixelPositions_center}, "vOneOverW"));
          continue;
-      } else if (semantic_name == TGSI_SEMANTIC_PRIMID) {
-         Value *primID = LOAD(pPS, {0, SWR_PS_CONTEXT_primID}, "primID");
-         inputs[attrib][0] = wrap(VECTOR_SPLAT(JM()->mVWidth, primID));
-         inputs[attrib][1] = wrap(VIMMED1(0));
-         inputs[attrib][2] = wrap(VIMMED1(0));
-         inputs[attrib][3] = wrap(VIMMED1(0));
-         continue;
       }
 
       unsigned linkedAttrib =
-         locate_linkage(semantic_name, semantic_idx, pPrevShader);
+         locate_linkage(semantic_name, semantic_idx, pPrevShader) - 1;
 
-      if (semantic_name == TGSI_SEMANTIC_GENERIC &&
+      uint32_t extraAttribs = 0;
+      if (semantic_name == TGSI_SEMANTIC_PRIMID && !ctx->gs) {
+         /* non-gs generated primID - need to grab from swizzleMap override */
+         linkedAttrib = pPrevShader->num_outputs - 1;
+         swr_fs->constantMask |= 1 << linkedAttrib;
+         extraAttribs++;
+      } else if (semantic_name == TGSI_SEMANTIC_GENERIC &&
           key.sprite_coord_enable & (1 << semantic_idx)) {
          /* we add an extra attrib to the backendState in swr_update_derived. */
-         linkedAttrib = pPrevShader->num_outputs - 1;
+         linkedAttrib = pPrevShader->num_outputs + extraAttribs - 1;
          swr_fs->pointSpriteMask |= (1 << linkedAttrib);
+         extraAttribs++;
       } else if (linkedAttrib == 0xFFFFFFFF) {
          inputs[attrib][0] = wrap(VIMMED1(0.0f));
          inputs[attrib][1] = wrap(VIMMED1(0.0f));
@@ -1082,7 +1112,7 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_fs_key &key)
       Value *offset = NULL;
       if (semantic_name == TGSI_SEMANTIC_COLOR && key.light_twoside) {
          bcolorAttrib = locate_linkage(
-               TGSI_SEMANTIC_BCOLOR, semantic_idx, pPrevShader);
+               TGSI_SEMANTIC_BCOLOR, semantic_idx, pPrevShader) - 1;
          /* Neither front nor back colors were available. Nothing to load. */
          if (bcolorAttrib == 0xFFFFFFFF && linkedAttrib == 0xFFFFFFFF)
             continue;

@@ -39,7 +39,7 @@
 #include "core/arena.h"
 #include "core/fifo.hpp"
 #include "core/knobs.h"
-#include "common/simdintrin.h"
+#include "common/intrin.h"
 #include "core/threads.h"
 #include "ringbuffer.h"
 #include "archrast/archrast.h"
@@ -62,7 +62,6 @@ struct TRI_FLAGS
     uint32_t coverageMask : (SIMD_TILE_X_DIM * SIMD_TILE_Y_DIM);
     uint32_t reserved : 32 - 1 - 1 - (SIMD_TILE_X_DIM * SIMD_TILE_Y_DIM);
     float pointSize;
-    uint32_t primID;
     uint32_t renderTargetArrayIndex;
     uint32_t viewportIndex;
 };
@@ -215,12 +214,12 @@ struct PA_STATE;
 
 // function signature for pipeline stages that execute after primitive assembly
 typedef void(*PFN_PROCESS_PRIMS)(DRAW_CONTEXT *pDC, PA_STATE& pa, uint32_t workerId, simdvector prims[], 
-    uint32_t primMask, simdscalari primID, simdscalari viewportIdx);
+    uint32_t primMask, simdscalari primID);
 
 #if ENABLE_AVX512_SIMD16
 // function signature for pipeline stages that execute after primitive assembly
 typedef void(SIMDAPI *PFN_PROCESS_PRIMS_SIMD16)(DRAW_CONTEXT *pDC, PA_STATE& pa, uint32_t workerId, simd16vector prims[],
-    uint32_t primMask, simd16scalari primID, simd16scalari viewportIdx);
+    uint32_t primMask, simd16scalari primID);
 
 #endif
 OSALIGNLINE(struct) API_STATE
