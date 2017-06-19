@@ -307,6 +307,8 @@ enum intel_aux_disable {
  */
 struct intel_miptree_aux_buffer
 {
+   struct isl_surf surf;
+
    /**
     * Buffer object containing the pixel data.
     *
@@ -352,23 +354,11 @@ struct intel_miptree_aux_buffer
     */
    uint32_t qpitch;
 };
-/**
- * The HiZ buffer requires extra attributes on earlier GENs. This is easily
- * contained within an intel_mipmap_tree. To make sure we do not abuse this, we
- * keep the hiz datastructure separate.
- */
-struct intel_miptree_hiz_buffer
-{
-   struct intel_miptree_aux_buffer aux_base;
-
-   /**
-    * Hiz miptree. Used only by Gen6.
-    */
-   struct intel_mipmap_tree *mt;
-};
 
 struct intel_mipmap_tree
 {
+   struct isl_surf surf;
+
    /**
     * Buffer object containing the surface.
     *
@@ -573,7 +563,7 @@ struct intel_mipmap_tree
     * To determine if hiz is enabled, do not check this pointer. Instead, use
     * intel_miptree_slice_has_hiz().
     */
-   struct intel_miptree_hiz_buffer *hiz_buf;
+   struct intel_miptree_aux_buffer *hiz_buf;
 
    /**
     * \brief Maps miptree slices to their current aux state
@@ -735,19 +725,10 @@ mesa_format
 intel_lower_compressed_format(struct brw_context *brw, mesa_format format);
 
 /** \brief Assert that the level and layer are valid for the miptree. */
-static inline void
+void
 intel_miptree_check_level_layer(const struct intel_mipmap_tree *mt,
                                 uint32_t level,
-                                uint32_t layer)
-{
-   (void) mt;
-   (void) level;
-   (void) layer;
-
-   assert(level >= mt->first_level);
-   assert(level <= mt->last_level);
-   assert(layer < mt->level[level].depth);
-}
+                                uint32_t layer);
 
 void intel_miptree_reference(struct intel_mipmap_tree **dst,
                              struct intel_mipmap_tree *src);
@@ -778,11 +759,10 @@ void
 intel_miptree_get_isl_surf(struct brw_context *brw,
                            const struct intel_mipmap_tree *mt,
                            struct isl_surf *surf);
-void
-intel_miptree_get_aux_isl_surf(struct brw_context *brw,
-                               const struct intel_mipmap_tree *mt,
-                               struct isl_surf *surf,
-                               enum isl_aux_usage *usage);
+
+enum isl_aux_usage
+intel_miptree_get_aux_isl_usage(const struct brw_context *brw,
+                                const struct intel_mipmap_tree *mt);
 
 void
 intel_get_image_dims(struct gl_texture_image *image,
@@ -812,6 +792,13 @@ void intel_miptree_set_level_info(struct intel_mipmap_tree *mt,
 void intel_miptree_set_image_offset(struct intel_mipmap_tree *mt,
                                     GLuint level,
                                     GLuint img, GLuint x, GLuint y);
+
+void
+intel_miptree_copy_slice(struct brw_context *brw,
+                         struct intel_mipmap_tree *src_mt,
+                         unsigned src_level, unsigned src_layer,
+                         struct intel_mipmap_tree *dst_mt,
+                         unsigned dst_level, unsigned dst_layer);
 
 void
 intel_miptree_copy_teximage(struct brw_context *brw,

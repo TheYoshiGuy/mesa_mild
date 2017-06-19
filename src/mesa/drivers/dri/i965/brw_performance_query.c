@@ -468,29 +468,6 @@ snapshot_statistics_registers(struct brw_context *brw,
 }
 
 /**
- * Emit an MI_REPORT_PERF_COUNT command packet.
- *
- * This asks the GPU to write a report of the current OA counter
- * values into @bo at the given offset and containing the given
- * @report_id which we can cross-reference when parsing the report.
- */
-static void
-emit_mi_report_perf_count(struct brw_context *brw,
-                          struct brw_bo *bo,
-                          uint32_t offset_in_bytes,
-                          uint32_t report_id)
-{
-   assert(offset_in_bytes % 64 == 0);
-
-   BEGIN_BATCH(3);
-   OUT_BATCH(GEN6_MI_REPORT_PERF_COUNT);
-   OUT_RELOC(bo, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-             offset_in_bytes);
-   OUT_BATCH(report_id);
-   ADVANCE_BATCH();
-}
-
-/**
  * Add a query to the global list of "unaccumulated queries."
  *
  * Queries are tracked here until all the associated OA reports have
@@ -1001,8 +978,8 @@ brw_begin_perf_query(struct gl_context *ctx,
       brw->perfquery.next_query_start_report_id += 2;
 
       /* Take a starting OA counter snapshot. */
-      emit_mi_report_perf_count(brw, obj->oa.bo, 0,
-                                obj->oa.begin_report_id);
+      brw->vtbl.emit_mi_report_perf_count(brw, obj->oa.bo, 0,
+                                          obj->oa.begin_report_id);
       ++brw->perfquery.n_active_oa_queries;
 
       /* No already-buffered samples can possibly be associated with this query
@@ -1081,9 +1058,9 @@ brw_end_perf_query(struct gl_context *ctx,
        */
       if (!obj->oa.results_accumulated) {
          /* Take an ending OA counter snapshot. */
-         emit_mi_report_perf_count(brw, obj->oa.bo,
-                                   MI_RPC_BO_END_OFFSET_BYTES,
-                                   obj->oa.begin_report_id + 1);
+         brw->vtbl.emit_mi_report_perf_count(brw, obj->oa.bo,
+                                             MI_RPC_BO_END_OFFSET_BYTES,
+                                             obj->oa.begin_report_id + 1);
       }
 
       --brw->perfquery.n_active_oa_queries;
@@ -1397,6 +1374,7 @@ add_basic_stat_reg(struct brw_perf_query_info *query,
 static void
 init_pipeline_statistic_query_registers(struct brw_context *brw)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct brw_perf_query_info *query = append_query_info(brw);
 
    query->kind = PIPELINE_STATS;
@@ -1412,7 +1390,7 @@ init_pipeline_statistic_query_registers(struct brw_context *brw)
    add_basic_stat_reg(query, VS_INVOCATION_COUNT,
                       "N vertex shader invocations");
 
-   if (brw->gen == 6) {
+   if (devinfo->gen == 6) {
       add_stat_reg(query, GEN6_SO_PRIM_STORAGE_NEEDED, 1, 1,
                    "SO_PRIM_STORAGE_NEEDED",
                    "N geometry shader stream-out primitives (total)");
@@ -1461,7 +1439,7 @@ init_pipeline_statistic_query_registers(struct brw_context *brw)
    add_basic_stat_reg(query, CL_PRIMITIVES_COUNT,
                       "N primitives leaving clipping");
 
-   if (brw->is_haswell || brw->gen == 8)
+   if (devinfo->is_haswell || devinfo->gen == 8)
       add_stat_reg(query, PS_INVOCATION_COUNT, 1, 4,
                    "N fragment shader invocations",
                    "N fragment shader invocations");
@@ -1471,7 +1449,7 @@ init_pipeline_statistic_query_registers(struct brw_context *brw)
 
    add_basic_stat_reg(query, PS_DEPTH_COUNT, "N z-pass fragments");
 
-   if (brw->gen >= 7)
+   if (devinfo->gen >= 7)
       add_basic_stat_reg(query, CS_INVOCATION_COUNT,
                          "N compute shader invocations");
 

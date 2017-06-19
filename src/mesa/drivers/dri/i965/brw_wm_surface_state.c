@@ -137,20 +137,24 @@ brw_emit_surface_state(struct brw_context *brw,
    union isl_color_value clear_color = { .u32 = { 0, 0, 0, 0 } };
 
    struct brw_bo *aux_bo;
-   struct isl_surf *aux_surf = NULL, aux_surf_s;
+   struct isl_surf *aux_surf = NULL;
    uint64_t aux_offset = 0;
    enum isl_aux_usage aux_usage = ISL_AUX_USAGE_NONE;
    if ((mt->mcs_buf || intel_miptree_sample_with_hiz(brw, mt)) &&
        !(flags & INTEL_AUX_BUFFER_DISABLED)) {
-      intel_miptree_get_aux_isl_surf(brw, mt, &aux_surf_s, &aux_usage);
-      aux_surf = &aux_surf_s;
+      aux_usage = intel_miptree_get_aux_isl_usage(brw, mt);
 
       if (mt->mcs_buf) {
+         aux_surf = &mt->mcs_buf->surf;
+
+         assert(mt->mcs_buf->offset == 0);
          aux_bo = mt->mcs_buf->bo;
          aux_offset = mt->mcs_buf->bo->offset64 + mt->mcs_buf->offset;
       } else {
-         aux_bo = mt->hiz_buf->aux_base.bo;
-         aux_offset = mt->hiz_buf->aux_base.bo->offset64;
+         aux_surf = &mt->hiz_buf->surf;
+
+         aux_bo = mt->hiz_buf->bo;
+         aux_offset = mt->hiz_buf->bo->offset64;
       }
 
       /* We only really need a clear color if we also have an auxiliary
@@ -1009,7 +1013,8 @@ gen4_update_renderbuffer_surface(struct brw_context *brw,
 	  * miptree and render into that.
 	  */
 	 intel_renderbuffer_move_to_temp(brw, irb, false);
-	 mt = irb->mt;
+	 assert(irb->align_wa_mt);
+	 mt = irb->align_wa_mt;
       }
    }
 

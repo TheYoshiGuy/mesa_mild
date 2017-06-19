@@ -132,7 +132,7 @@ blorp_surf_for_miptree(struct brw_context *brw,
                        uint32_t safe_aux_usage,
                        unsigned *level,
                        unsigned start_layer, unsigned num_layers,
-                       struct isl_surf tmp_surfs[2])
+                       struct isl_surf tmp_surfs[1])
 {
    if (mt->msaa_layout == INTEL_MSAA_LAYOUT_UMS ||
        mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS) {
@@ -148,8 +148,13 @@ blorp_surf_for_miptree(struct brw_context *brw,
          intel_miptree_check_level_layer(mt, *level, start_layer + i);
    }
 
-   intel_miptree_get_isl_surf(brw, mt, &tmp_surfs[0]);
-   surf->surf = &tmp_surfs[0];
+   if (mt->surf.size > 0) {
+      surf->surf = &mt->surf;
+   } else {
+      intel_miptree_get_isl_surf(brw, mt, &tmp_surfs[0]);
+      surf->surf = &tmp_surfs[0];
+   }
+
    surf->addr = (struct blorp_address) {
       .buffer = mt->bo,
       .offset = mt->offset,
@@ -158,8 +163,13 @@ blorp_surf_for_miptree(struct brw_context *brw,
       .write_domain = is_render_target ? I915_GEM_DOMAIN_RENDER : 0,
    };
 
-   struct isl_surf *aux_surf = &tmp_surfs[1];
-   intel_miptree_get_aux_isl_surf(brw, mt, aux_surf, &surf->aux_usage);
+   surf->aux_usage = intel_miptree_get_aux_isl_usage(brw, mt);
+
+   struct isl_surf *aux_surf = NULL;
+   if (mt->mcs_buf)
+      aux_surf = &mt->mcs_buf->surf;
+   else if (mt->hiz_buf)
+      aux_surf = &mt->hiz_buf->surf;
 
    if (wants_resolve) {
       bool supports_aux = surf->aux_usage != ISL_AUX_USAGE_NONE &&
@@ -198,8 +208,8 @@ blorp_surf_for_miptree(struct brw_context *brw,
       } else {
          assert(surf->aux_usage == ISL_AUX_USAGE_HIZ);
 
-         surf->aux_addr.buffer = mt->hiz_buf->aux_base.bo;
-         surf->aux_addr.offset = mt->hiz_buf->aux_base.offset;
+         surf->aux_addr.buffer = mt->hiz_buf->bo;
+         surf->aux_addr.offset = mt->hiz_buf->offset;
       }
    } else {
       surf->aux_addr = (struct blorp_address) {
@@ -344,12 +354,12 @@ brw_blorp_blit_miptrees(struct brw_context *brw,
                          (1 << ISL_AUX_USAGE_CCS_D);
    }
 
-   struct isl_surf tmp_surfs[4];
+   struct isl_surf tmp_surfs[2];
    struct blorp_surf src_surf, dst_surf;
    blorp_surf_for_miptree(brw, &src_surf, src_mt, false, true, src_usage_flags,
                           &src_level, src_layer, 1, &tmp_surfs[0]);
    blorp_surf_for_miptree(brw, &dst_surf, dst_mt, true, true, dst_usage_flags,
-                          &dst_level, dst_layer, 1, &tmp_surfs[2]);
+                          &dst_level, dst_layer, 1, &tmp_surfs[1]);
 
    struct isl_swizzle src_isl_swizzle = {
       .r = swizzle_to_scs(GET_SWZ(src_swizzle, 0)),
@@ -389,7 +399,7 @@ brw_blorp_copy_miptrees(struct brw_context *brw,
        dst_mt->num_samples, _mesa_get_format_name(dst_mt->format), dst_mt,
        dst_level, dst_layer, dst_x, dst_y);
 
-   struct isl_surf tmp_surfs[4];
+   struct isl_surf tmp_surfs[2];
    struct blorp_surf src_surf, dst_surf;
    blorp_surf_for_miptree(brw, &src_surf, src_mt, false, true,
                           (1 << ISL_AUX_USAGE_MCS) |
@@ -398,7 +408,7 @@ brw_blorp_copy_miptrees(struct brw_context *brw,
    blorp_surf_for_miptree(brw, &dst_surf, dst_mt, true, true,
                           (1 << ISL_AUX_USAGE_MCS) |
                           (1 << ISL_AUX_USAGE_CCS_E),
-                          &dst_level, dst_layer, 1, &tmp_surfs[2]);
+                          &dst_level, dst_layer, 1, &tmp_surfs[1]);
 
    struct blorp_batch batch;
    blorp_batch_init(&brw->blorp, &batch, brw, 0);
@@ -1023,7 +1033,7 @@ brw_blorp_resolve_color(struct brw_context *brw, struct intel_mipmap_tree *mt,
 
    const mesa_format format = _mesa_get_srgb_format_linear(mt->format);
 
-   struct isl_surf isl_tmp[2];
+   struct isl_surf isl_tmp[1];
    struct blorp_surf surf;
    blorp_surf_for_miptree(brw, &surf, mt, true, false, 0,
                           &level, layer, 1 /* num_layers */,
