@@ -125,13 +125,13 @@ blorp_emit_wm_state(struct blorp_batch *batch,
       }
 
       if (prog_data) {
-         wm.DispatchGRFStartRegisterForURBData =
+         wm.DispatchGRFStartRegisterForConstantSetupData0 =
             prog_data->base.dispatch_grf_start_reg;
          wm.SetupURBEntryReadLength = prog_data->num_varying_inputs * 2;
          wm.SetupURBEntryReadOffset = 0;
 
          wm.DepthCoefficientURBReadOffset = 1;
-         wm.PixelShaderKillPixel = prog_data->uses_kill;
+         wm.PixelShaderKillsPixel = prog_data->uses_kill;
          wm.ThreadDispatchEnable = true;
          wm.EarlyDepthTestEnable = true;
 
@@ -139,9 +139,9 @@ blorp_emit_wm_state(struct blorp_batch *batch,
          wm._16PixelDispatchEnable = prog_data->dispatch_16;
 
 #if GEN_GEN == 4
-         wm.KernelStartPointer =
+         wm.KernelStartPointer0 =
             instruction_state_address(batch, params->wm_prog_kernel);
-         wm.GRFRegisterCount = prog_data->reg_blocks_0;
+         wm.GRFRegisterCount0 = prog_data->reg_blocks_0;
 #else
          wm.KernelStartPointer0 = params->wm_prog_kernel;
          wm.GRFRegisterCount0 = prog_data->reg_blocks_0;
