@@ -344,10 +344,6 @@ si_decompress_depth(struct si_context *sctx,
 		}
 	}
 
-	assert(!tex->tc_compatible_htile || levels_z == 0);
-	assert(!tex->tc_compatible_htile || levels_s == 0 ||
-	       !r600_can_sample_zs(tex, true));
-
 	/* We may have to allocate the flushed texture here when called from
 	 * si_decompress_subresource.
 	 */
@@ -384,10 +380,38 @@ si_decompress_depth(struct si_context *sctx,
 	}
 
 	if (inplace_planes) {
-		si_blit_decompress_zs_in_place(
-			sctx, tex,
-			levels_z, levels_s,
-			first_layer, last_layer);
+		if (!tex->tc_compatible_htile) {
+			si_blit_decompress_zs_in_place(
+						sctx, tex,
+						levels_z, levels_s,
+						first_layer, last_layer);
+		}
+
+		/* Only in-place decompression needs to flush DB caches, or
+		 * when we don't decompress but TC-compatible planes are dirty.
+		 */
+		sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_DB |
+				 SI_CONTEXT_INV_GLOBAL_L2 |
+				 SI_CONTEXT_INV_VMEM_L1;
+
+		/* If we flush DB caches for TC-compatible depth, the dirty
+		 * state becomes 0 for the whole mipmap tree and all planes.
+		 * (there is nothing else to flush)
+		 */
+		if (tex->tc_compatible_htile) {
+			if (r600_can_sample_zs(tex, false))
+				tex->dirty_level_mask = 0;
+			if (r600_can_sample_zs(tex, true))
+				tex->stencil_dirty_level_mask = 0;
+		}
+	}
+	/* set_framebuffer_state takes care of coherency for single-sample.
+	 * The DB->CB copy uses CB for the final writes.
+	 */
+	if (copy_planes && tex->resource.b.b.nr_samples > 1) {
+		sctx->b.flags |= SI_CONTEXT_INV_VMEM_L1 |
+				 SI_CONTEXT_INV_GLOBAL_L2 |
+				 SI_CONTEXT_FLUSH_AND_INV_CB;
 	}
 }
 
@@ -471,9 +495,18 @@ static void si_blit_decompress_color(struct pipe_context *ctx,
 			surf_tmpl.u.tex.last_layer = layer;
 			cbsurf = ctx->create_surface(ctx, &rtex->resource.b.b, &surf_tmpl);
 
+			/* Required before and after FMASK and DCC_DECOMPRESS. */
+			if (custom_blend == sctx->custom_blend_fmask_decompress ||
+			    custom_blend == sctx->custom_blend_dcc_decompress)
+				sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_CB;
+
 			si_blitter_begin(ctx, SI_DECOMPRESS);
 			util_blitter_custom_color(sctx->blitter, cbsurf, custom_blend);
 			si_blitter_end(ctx);
+
+			if (custom_blend == sctx->custom_blend_fmask_decompress ||
+			    custom_blend == sctx->custom_blend_dcc_decompress)
+				sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_CB;
 
 			pipe_surface_reference(&cbsurf, NULL);
 		}
@@ -487,6 +520,10 @@ static void si_blit_decompress_color(struct pipe_context *ctx,
 
 	sctx->decompression_enabled = false;
 	sctx->framebuffer.do_update_surf_dirtiness = old_update_dirtiness;
+
+	sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_CB |
+			 SI_CONTEXT_INV_GLOBAL_L2 |
+			 SI_CONTEXT_INV_VMEM_L1;
 }
 
 static void
@@ -1135,6 +1172,29 @@ void si_resource_copy_region(struct pipe_context *ctx,
 	pipe_sampler_view_reference(&src_view, NULL);
 }
 
+static void si_do_CB_resolve(struct si_context *sctx,
+			     const struct pipe_blit_info *info,
+			     struct pipe_resource *dst,
+			     unsigned dst_level, unsigned dst_z,
+			     enum pipe_format format)
+{
+	/* Required before and after CB_RESOLVE. */
+	sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_CB;
+
+	si_blitter_begin(&sctx->b.b, SI_COLOR_RESOLVE |
+			 (info->render_condition_enable ? 0 : SI_DISABLE_RENDER_COND));
+	util_blitter_custom_resolve_color(sctx->blitter, dst, dst_level, dst_z,
+					  info->src.resource, info->src.box.z,
+					  ~0, sctx->custom_blend_resolve,
+					  format);
+	si_blitter_end(&sctx->b.b);
+
+	/* Flush caches for possible texturing. */
+	sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_CB |
+			 SI_CONTEXT_INV_GLOBAL_L2 |
+			 SI_CONTEXT_INV_VMEM_L1;
+}
+
 static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 				     const struct pipe_blit_info *info)
 {
@@ -1145,7 +1205,6 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 	unsigned dst_width = u_minify(info->dst.resource->width0, info->dst.level);
 	unsigned dst_height = u_minify(info->dst.resource->height0, info->dst.level);
 	enum pipe_format format = info->src.format;
-	unsigned sample_mask = ~0;
 	struct pipe_resource *tmp, templ;
 	struct pipe_blit_info blit;
 
@@ -1212,15 +1271,8 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 		}
 
 		/* Resolve directly from src to dst. */
-		si_blitter_begin(ctx, SI_COLOR_RESOLVE |
-				 (info->render_condition_enable ? 0 : SI_DISABLE_RENDER_COND));
-		util_blitter_custom_resolve_color(sctx->blitter,
-						  info->dst.resource, info->dst.level,
-						  info->dst.box.z,
-						  info->src.resource, info->src.box.z,
-						  sample_mask, sctx->custom_blend_resolve,
-						  format);
-		si_blitter_end(ctx);
+		si_do_CB_resolve(sctx, info, info->dst.resource,
+				 info->dst.level, info->dst.box.z, format);
 		return true;
 	}
 
@@ -1254,13 +1306,7 @@ resolve_to_temp:
 	assert(src->surface.micro_tile_mode == rtmp->surface.micro_tile_mode);
 
 	/* resolve */
-	si_blitter_begin(ctx, SI_COLOR_RESOLVE |
-			 (info->render_condition_enable ? 0 : SI_DISABLE_RENDER_COND));
-	util_blitter_custom_resolve_color(sctx->blitter, tmp, 0, 0,
-					  info->src.resource, info->src.box.z,
-					  sample_mask, sctx->custom_blend_resolve,
-					  format);
-	si_blitter_end(ctx);
+	si_do_CB_resolve(sctx, info, tmp, 0, 0, format);
 
 	/* blit */
 	blit = *info;
@@ -1352,11 +1398,15 @@ static boolean si_generate_mipmap(struct pipe_context *ctx,
 	rtex->dirty_level_mask &= ~u_bit_consecutive(base_level + 1,
 						     last_level - base_level);
 
+	sctx->generate_mipmap_for_depth = rtex->is_depth;
+
 	si_blitter_begin(ctx, SI_BLIT | SI_DISABLE_RENDER_COND);
 	util_blitter_generate_mipmap(sctx->blitter, tex, format,
 				     base_level, last_level,
 				     first_layer, last_layer);
 	si_blitter_end(ctx);
+
+	sctx->generate_mipmap_for_depth = false;
 	return true;
 }
 

@@ -2350,7 +2350,7 @@ _mesa_meta_Bitmap(struct gl_context *ctx,
     * Check if swrast fallback is needed.
     */
    if (ctx->_ImageTransferState ||
-       ctx->FragmentProgram._Enabled ||
+       _mesa_arb_fragment_program_enabled(ctx) ||
        ctx->Fog.Enabled ||
        ctx->Texture._MaxEnabledTexImageUnit != -1 ||
        width > tex->MaxSize ||
@@ -3064,6 +3064,11 @@ decompress_texture_image(struct gl_context *ctx,
    if (width > decompress_fbo->Width || height > decompress_fbo->Height) {
       _mesa_renderbuffer_storage(ctx, decompress_fbo->rb, rbFormat,
                                  width, height, 0);
+
+      /* Do the full completeness check to recompute
+       * ctx->DrawBuffer->Width/Height.
+       */
+      ctx->DrawBuffer->_Status = GL_FRAMEBUFFER_UNDEFINED;
       status = _mesa_check_framebuffer_status(ctx, ctx->DrawBuffer);
       if (status != GL_FRAMEBUFFER_COMPLETE) {
          /* If the framebuffer isn't complete then we'll leave

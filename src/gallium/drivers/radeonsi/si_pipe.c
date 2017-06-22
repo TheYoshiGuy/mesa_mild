@@ -64,6 +64,7 @@ static void si_destroy_context(struct pipe_context *context)
 	free(sctx->border_color_table);
 	r600_resource_reference(&sctx->scratch_buffer, NULL);
 	r600_resource_reference(&sctx->compute_scratch_buffer, NULL);
+	r600_resource_reference(&sctx->wait_mem_scratch, NULL);
 
 	si_pm4_free_state(sctx, sctx->init_config, ~0);
 	if (sctx->init_config_gs_rings)
@@ -204,10 +205,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	    sscreen->b.chip_class != SI &&
 	    /* These can't use CE due to a power gating bug in the kernel. */
 	    sscreen->b.family != CHIP_CARRIZO &&
-	    sscreen->b.family != CHIP_STONEY &&
-	    /* Some CE bug is causing green screen corruption w/ MPV video
-	     * playback and occasional corruption w/ 3D. */
-	    sscreen->b.chip_class != GFX9) {
+	    sscreen->b.family != CHIP_STONEY) {
 		sctx->ce_ib = ws->cs_add_const_ib(sctx->b.gfx.cs);
 		if (!sctx->ce_ib)
 			goto fail;
@@ -271,6 +269,23 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 	/* these must be last */
 	si_begin_new_cs(sctx);
+
+	if (sctx->b.chip_class >= GFX9) {
+		sctx->wait_mem_scratch = (struct r600_resource*)
+			pipe_buffer_create(screen, 0, PIPE_USAGE_DEFAULT, 4);
+		if (!sctx->wait_mem_scratch)
+			goto fail;
+
+		/* Initialize the memory. */
+		struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
+		radeon_emit(cs, PKT3(PKT3_WRITE_DATA, 3, 0));
+		radeon_emit(cs, S_370_DST_SEL(V_370_MEMORY_SYNC) |
+			    S_370_WR_CONFIRM(1) |
+			    S_370_ENGINE_SEL(V_370_ME));
+		radeon_emit(cs, sctx->wait_mem_scratch->gpu_address);
+		radeon_emit(cs, sctx->wait_mem_scratch->gpu_address >> 32);
+		radeon_emit(cs, sctx->wait_mem_number);
+	}
 
 	/* CIK cannot unbind a constant buffer (S_BUFFER_LOAD doesn't skip loads
 	 * if NUM_RECORDS == 0). We need to use a dummy buffer instead. */
@@ -1010,8 +1025,10 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 		(sscreen->b.debug_flags & DBG_MONOLITHIC_SHADERS) != 0;
 
 	sscreen->b.barrier_flags.cp_to_L2 = SI_CONTEXT_INV_SMEM_L1 |
-					    SI_CONTEXT_INV_VMEM_L1 |
-					    SI_CONTEXT_INV_GLOBAL_L2;
+					    SI_CONTEXT_INV_VMEM_L1;
+	if (sscreen->b.chip_class <= VI)
+		sscreen->b.barrier_flags.cp_to_L2 |= SI_CONTEXT_INV_GLOBAL_L2;
+
 	sscreen->b.barrier_flags.compute_to_L2 = SI_CONTEXT_CS_PARTIAL_FLUSH;
 
 	if (debug_get_bool_option("RADEON_DUMP_SHADERS", false))

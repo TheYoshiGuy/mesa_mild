@@ -263,6 +263,8 @@ struct si_context {
 	struct si_screen		*screen;
 	LLVMTargetMachineRef		tm; /* only non-threaded compilation */
 	struct si_shader_ctx_state	fixed_func_tcs_shader;
+	struct r600_resource		*wait_mem_scratch;
+	unsigned			wait_mem_number;
 
 	struct radeon_winsys_cs		*ce_ib;
 	struct radeon_winsys_cs		*ce_preamble_ib;
@@ -362,6 +364,7 @@ struct si_context {
 	bool			db_stencil_clear:1;
 	bool			db_stencil_disable_expclear:1;
 	bool			occlusion_queries_disabled:1;
+	bool			generate_mipmap_for_depth:1;
 
 	/* Emitted draw state. */
 	bool			gs_tri_strip_adj_fix:1;

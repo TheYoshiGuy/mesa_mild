@@ -774,6 +774,13 @@ struct brw_context
     */
    bool needs_unlit_centroid_workaround;
 
+   /** Derived stencil states. */
+   bool stencil_enabled;
+   bool stencil_two_sided;
+   bool stencil_write_enabled;
+   /** Derived polygon state. */
+   bool polygon_front_bit; /**< 0=GL_CCW, 1=GL_CW */
+
    struct isl_device isl_dev;
 
    struct blorp_context blorp;

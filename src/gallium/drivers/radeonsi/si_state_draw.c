@@ -861,9 +861,10 @@ void si_emit_cache_flush(struct si_context *sctx)
 	uint32_t flush_cb_db = rctx->flags & (SI_CONTEXT_FLUSH_AND_INV_CB |
 					      SI_CONTEXT_FLUSH_AND_INV_DB);
 
-	if (rctx->flags & (SI_CONTEXT_FLUSH_AND_INV_CB |
-			   SI_CONTEXT_FLUSH_AND_INV_DB))
-		sctx->b.num_fb_cache_flushes++;
+	if (rctx->flags & SI_CONTEXT_FLUSH_AND_INV_CB)
+		sctx->b.num_cb_cache_flushes++;
+	if (rctx->flags & SI_CONTEXT_FLUSH_AND_INV_DB)
+		sctx->b.num_db_cache_flushes++;
 
 	/* SI has a bug that it always flushes ICACHE and KCACHE if either
 	 * bit is set. An alternative way is to write SQC_CACHES, but that
@@ -953,9 +954,8 @@ void si_emit_cache_flush(struct si_context *sctx)
 	 * wait for idle on GFX9. We have to use a TS event.
 	 */
 	if (sctx->b.chip_class >= GFX9 && flush_cb_db) {
-		struct r600_resource *rbuf = NULL;
 		uint64_t va;
-		unsigned offset = 0, tc_flags, cb_db_event;
+		unsigned tc_flags, cb_db_event;
 
 		/* Set the CB/DB flush event. */
 		switch (flush_cb_db) {
@@ -971,22 +971,15 @@ void si_emit_cache_flush(struct si_context *sctx)
 		}
 
 		/* TC    | TC_WB         = invalidate L2 data
-		 * TC_MD | TC_WB         = invalidate L2 metadata
+		 * TC_MD | TC_WB         = invalidate L2 metadata (DCC, etc.)
 		 * TC    | TC_WB | TC_MD = invalidate L2 data & metadata
-		 *
-		 * The metadata cache must always be invalidated for coherency
-		 * between CB/DB and shaders. (metadata = HTILE, CMASK, DCC)
-		 *
-		 * TC must be invalidated on GFX9 only if the CB/DB surface is
-		 * not pipe-aligned. If the surface is RB-aligned, it might not
-		 * strictly be pipe-aligned since RB alignment takes precendence.
 		 */
-		tc_flags = EVENT_TC_WB_ACTION_ENA |
-			   EVENT_TC_MD_ACTION_ENA;
+		tc_flags = 0;
 
 		/* Ideally flush TC together with CB/DB. */
 		if (rctx->flags & SI_CONTEXT_INV_GLOBAL_L2) {
 			tc_flags |= EVENT_TC_ACTION_ENA |
+				    EVENT_TC_WB_ACTION_ENA |
 				    EVENT_TCL1_ACTION_ENA;
 
 			/* Clear the flags. */
@@ -996,14 +989,15 @@ void si_emit_cache_flush(struct si_context *sctx)
 			sctx->b.num_L2_invalidates++;
 		}
 
-		/* Allocate memory for the fence. */
-		u_suballocator_alloc(rctx->allocator_zeroed_memory, 4, 4,
-				     &offset, (struct pipe_resource**)&rbuf);
-		va = rbuf->gpu_address + offset;
+		/* Do the flush (enqueue the event and wait for it). */
+		va = sctx->wait_mem_scratch->gpu_address;
+		sctx->wait_mem_number++;
 
 		r600_gfx_write_event_eop(rctx, cb_db_event, tc_flags, 1,
-					 rbuf, va, 0, 1);
-		r600_gfx_wait_fence(rctx, va, 1, 0xffffffff);
+					 sctx->wait_mem_scratch, va,
+					 sctx->wait_mem_number - 1,
+					 sctx->wait_mem_number);
+		r600_gfx_wait_fence(rctx, va, sctx->wait_mem_number, 0xffffffff);
 	}
 
 	/* Make sure ME is idle (it executes most packets) before continuing.
@@ -1319,15 +1313,18 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		/* Add the buffer size for memory checking in need_cs_space. */
 		r600_context_add_resource_size(ctx, indirect->buffer);
 
-		if (r600_resource(indirect->buffer)->TC_L2_dirty) {
-			sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
-			r600_resource(indirect->buffer)->TC_L2_dirty = false;
-		}
+		/* Indirect buffers use TC L2 on GFX9, but not older hw. */
+		if (sctx->b.chip_class <= VI) {
+			if (r600_resource(indirect->buffer)->TC_L2_dirty) {
+				sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
+				r600_resource(indirect->buffer)->TC_L2_dirty = false;
+			}
 
-		if (indirect->indirect_draw_count &&
-		    r600_resource(indirect->indirect_draw_count)->TC_L2_dirty) {
-			sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
-			r600_resource(indirect->indirect_draw_count)->TC_L2_dirty = false;
+			if (indirect->indirect_draw_count &&
+			    r600_resource(indirect->indirect_draw_count)->TC_L2_dirty) {
+				sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
+				r600_resource(indirect->indirect_draw_count)->TC_L2_dirty = false;
+			}
 		}
 	}
 
@@ -1401,11 +1398,9 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 			struct pipe_surface *surf = sctx->framebuffer.state.zsbuf;
 			struct r600_texture *rtex = (struct r600_texture *)surf->texture;
 
-			if (!rtex->tc_compatible_htile)
-				rtex->dirty_level_mask |= 1 << surf->u.tex.level;
+			rtex->dirty_level_mask |= 1 << surf->u.tex.level;
 
-			if (rtex->surface.flags & RADEON_SURF_SBUFFER &&
-			    (!rtex->tc_compatible_htile || !rtex->can_sample_s))
+			if (rtex->surface.flags & RADEON_SURF_SBUFFER)
 				rtex->stencil_dirty_level_mask |= 1 << surf->u.tex.level;
 		}
 		if (sctx->framebuffer.compressed_cb_mask) {

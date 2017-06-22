@@ -31,6 +31,7 @@
 #include "main/context.h"
 #include "main/enums.h"
 #include "main/macros.h"
+#include "main/state.h"
 
 #include "brw_context.h"
 #if GEN_GEN == 6
@@ -1117,7 +1118,7 @@ genX(calculate_attr_overrides)(const struct brw_context *brw,
          genX(get_attr_override)(&attribute,
                                  &brw->vue_map_geom_out,
                                  *urb_entry_read_offset, attr,
-                                 brw->ctx.VertexProgram._TwoSideEnabled,
+                                 _mesa_vertex_program_two_side_enabled(ctx),
                                  &max_source_attr);
       }
 
@@ -1182,7 +1183,7 @@ genX(upload_depth_stencil_state)(struct brw_context *brw)
          wmds.DepthTestFunction = intel_translate_compare_func(depth->Func);
       }
 
-      if (stencil->_Enabled) {
+      if (brw->stencil_enabled) {
          wmds.StencilTestEnable = true;
          wmds.StencilWriteMask = stencil->WriteMask[0] & 0xff;
          wmds.StencilTestMask = stencil->ValueMask[0] & 0xff;
@@ -1196,9 +1197,9 @@ genX(upload_depth_stencil_state)(struct brw_context *brw)
          wmds.StencilPassDepthFailOp =
             intel_translate_stencil_op(stencil->ZFailFunc[0]);
 
-         wmds.StencilBufferWriteEnable = stencil->_WriteEnabled;
+         wmds.StencilBufferWriteEnable = brw->stencil_write_enabled;
 
-         if (stencil->_TestTwoSide) {
+         if (brw->stencil_two_sided) {
             wmds.DoubleSidedStencilEnable = true;
             wmds.BackfaceStencilWriteMask = stencil->WriteMask[b] & 0xff;
             wmds.BackfaceStencilTestMask = stencil->ValueMask[b] & 0xff;
@@ -1273,7 +1274,7 @@ genX(upload_clip_state)(struct brw_context *brw)
 #endif
 
 #if GEN_GEN == 7
-      clip.FrontWinding = ctx->Polygon._FrontBit == _mesa_is_user_fbo(fb);
+      clip.FrontWinding = brw->polygon_front_bit == _mesa_is_user_fbo(fb);
 
       if (ctx->Polygon.CullFlag) {
          switch (ctx->Polygon.CullFaceMode) {
@@ -1440,7 +1441,7 @@ genX(upload_sf)(struct brw_context *brw)
 
 #if GEN_GEN <= 7
       /* _NEW_POLYGON */
-      sf.FrontWinding = ctx->Polygon._FrontBit == render_to_fbo;
+      sf.FrontWinding = brw->polygon_front_bit == render_to_fbo;
 #if GEN_GEN >= 6
       sf.GlobalDepthOffsetEnableSolid = ctx->Polygon.OffsetFill;
       sf.GlobalDepthOffsetEnableWireframe = ctx->Polygon.OffsetLine;
@@ -3878,7 +3879,7 @@ genX(upload_raster)(struct brw_context *brw)
    struct gl_point_attrib *point = &ctx->Point;
 
    brw_batch_emit(brw, GENX(3DSTATE_RASTER), raster) {
-      if (polygon->_FrontBit == render_to_fbo)
+      if (brw->polygon_front_bit == render_to_fbo)
          raster.FrontWinding = CounterClockwise;
 
       if (polygon->CullFlag) {

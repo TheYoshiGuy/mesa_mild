@@ -34,6 +34,7 @@
 #include "main/mtypes.h"
 #include "main/enums.h"
 #include "main/fbobject.h"
+#include "main/state.h"
 
 #include "intel_batchbuffer.h"
 
@@ -152,8 +153,7 @@ brw_upload_sf_prog(struct brw_context *brw)
    }
 
    /* _NEW_LIGHT | _NEW_PROGRAM */
-   key.do_twoside_color = ((ctx->Light.Enabled && ctx->Light.Model.TwoSide) ||
-                           ctx->VertexProgram._TwoSideEnabled);
+   key.do_twoside_color = _mesa_vertex_program_two_side_enabled(ctx);
 
    /* _NEW_POLYGON */
    if (key.do_twoside_color) {
@@ -161,7 +161,7 @@ brw_upload_sf_prog(struct brw_context *brw)
        * face orientation, just as we invert the viewport in
        * sf_unit_create_from_key().
        */
-      key.frontface_ccw = ctx->Polygon._FrontBit == render_to_fbo;
+      key.frontface_ccw = brw->polygon_front_bit == render_to_fbo;
    }
 
    if (!brw_search_cache(&brw->cache, BRW_CACHE_SF_PROG,
