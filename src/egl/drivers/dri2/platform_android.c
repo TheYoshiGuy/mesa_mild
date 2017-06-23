@@ -64,9 +64,7 @@ static const struct droid_yuv_format droid_yuv_formats[] = {
 static int
 get_fourcc_yuv(int native, int is_ycrcb, int chroma_step)
 {
-   int i;
-
-   for (i = 0; i < ARRAY_SIZE(droid_yuv_formats); ++i)
+   for (int i = 0; i < ARRAY_SIZE(droid_yuv_formats); ++i)
       if (droid_yuv_formats[i].native == native &&
           droid_yuv_formats[i].is_ycrcb == is_ycrcb &&
           droid_yuv_formats[i].chroma_step == chroma_step)
@@ -78,9 +76,7 @@ get_fourcc_yuv(int native, int is_ycrcb, int chroma_step)
 static bool
 is_yuv(int native)
 {
-   int i;
-
-   for (i = 0; i < ARRAY_SIZE(droid_yuv_formats); ++i)
+   for (int i = 0; i < ARRAY_SIZE(droid_yuv_formats); ++i)
       if (droid_yuv_formats[i].native == native)
          return true;
 
@@ -299,9 +295,8 @@ droid_free_local_buffers(struct dri2_egl_surface *dri2_surf)
 {
    struct dri2_egl_display *dri2_dpy =
       dri2_egl_display(dri2_surf->base.Resource.Display);
-   int i;
 
-   for (i = 0; i < ARRAY_SIZE(dri2_surf->local_buffers); i++) {
+   for (int i = 0; i < ARRAY_SIZE(dri2_surf->local_buffers); i++) {
       if (dri2_surf->local_buffers[i]) {
          dri2_dpy->dri2->releaseBuffer(dri2_dpy->dri_screen,
                dri2_surf->local_buffers[i]);
@@ -951,10 +946,10 @@ static int
 droid_get_buffers_parse_attachments(struct dri2_egl_surface *dri2_surf,
                                     unsigned int *attachments, int count)
 {
-   int num_buffers = 0, i;
+   int num_buffers = 0;
 
    /* fill dri2_surf->buffers */
-   for (i = 0; i < count * 2; i += 2) {
+   for (int i = 0; i < count * 2; i += 2) {
       __DRIbuffer *buf, *local;
 
       assert(num_buffers < ARRAY_SIZE(dri2_surf->buffers));
@@ -1039,42 +1034,60 @@ droid_add_configs_for_visuals(_EGLDriver *drv, _EGLDisplay *dpy)
       { HAL_PIXEL_FORMAT_RGB_565,   { 0x0000f800, 0x000007e0, 0x0000001f, 0x00000000 } },
       { HAL_PIXEL_FORMAT_BGRA_8888, { 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000 } },
    };
-   EGLint config_attrs[] = {
-     EGL_NATIVE_VISUAL_ID,   0,
-     EGL_NATIVE_VISUAL_TYPE, 0,
-     EGL_FRAMEBUFFER_TARGET_ANDROID, EGL_TRUE,
-     EGL_RECORDABLE_ANDROID, EGL_TRUE,
-     EGL_NONE
-   };
+
    unsigned int format_count[ARRAY_SIZE(visuals)] = { 0 };
-   int count, i, j;
+   int config_count = 0;
 
-   count = 0;
-   for (i = 0; dri2_dpy->driver_configs[i]; i++) {
-      const EGLint surface_type = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
-      struct dri2_egl_config *dri2_conf;
+   /* The nesting of loops is significant here. Also significant is the order
+    * of the HAL pixel formats. Many Android apps (such as Google's official
+    * NDK GLES2 example app), and even portions the core framework code (such
+    * as SystemServiceManager in Nougat), incorrectly choose their EGLConfig.
+    * They neglect to match the EGLConfig's EGL_NATIVE_VISUAL_ID against the
+    * window's native format, and instead choose the first EGLConfig whose
+    * channel sizes match those of the native window format while ignoring the
+    * channel *ordering*.
+    *
+    * We can detect such buggy clients in logcat when they call
+    * eglCreateSurface, by detecting the mismatch between the EGLConfig's
+    * format and the window's format.
+    *
+    * As a workaround, we generate EGLConfigs such that all EGLConfigs for HAL
+    * pixel format i precede those for HAL pixel format i+1. In my
+    * (chadversary) testing on Android Nougat, this was good enough to pacify
+    * the buggy clients.
+    */
+   for (int i = 0; i < ARRAY_SIZE(visuals); i++) {
+      for (int j = 0; dri2_dpy->driver_configs[j]; j++) {
+         const EGLint surface_type = EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
 
-      for (j = 0; j < ARRAY_SIZE(visuals); j++) {
-         config_attrs[1] = visuals[j].format;
-         config_attrs[3] = visuals[j].format;
+         const EGLint config_attrs[] = {
+           EGL_NATIVE_VISUAL_ID,   visuals[i].format,
+           EGL_NATIVE_VISUAL_TYPE, visuals[i].format,
+           EGL_FRAMEBUFFER_TARGET_ANDROID, EGL_TRUE,
+           EGL_RECORDABLE_ANDROID, EGL_TRUE,
+           EGL_NONE
+         };
 
-         dri2_conf = dri2_add_config(dpy, dri2_dpy->driver_configs[i],
-               count + 1, surface_type, config_attrs, visuals[j].rgba_masks);
+         struct dri2_egl_config *dri2_conf =
+            dri2_add_config(dpy, dri2_dpy->driver_configs[j],
+                            config_count + 1, surface_type, config_attrs,
+                            visuals[i].rgba_masks);
          if (dri2_conf) {
-            count++;
-            format_count[j]++;
+            if (dri2_conf->base.ConfigID == config_count + 1)
+               config_count++;
+            format_count[i]++;
          }
       }
    }
 
-   for (i = 0; i < ARRAY_SIZE(format_count); i++) {
+   for (int i = 0; i < ARRAY_SIZE(format_count); i++) {
       if (!format_count[i]) {
          _eglLog(_EGL_DEBUG, "No DRI config supports native format 0x%x",
                  visuals[i].format);
       }
    }
 
-   return (count != 0);
+   return (config_count != 0);
 }
 
 static int

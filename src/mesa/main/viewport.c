@@ -85,6 +85,32 @@ struct gl_depthrange_inputs {
    GLdouble Near, Far;          /**< Depth buffer range */
 };
 
+static void
+viewport(struct gl_context *ctx, GLint x, GLint y, GLsizei width,
+         GLsizei height)
+{
+   /* The GL_ARB_viewport_array spec says:
+    *
+    *     "Viewport sets the parameters for all viewports to the same values
+    *     and is equivalent (assuming no errors are generated) to:
+    *
+    *     for (uint i = 0; i < MAX_VIEWPORTS; i++)
+    *         ViewportIndexedf(i, 1, (float)x, (float)y, (float)w, (float)h);"
+    *
+    * Set all of the viewports supported by the implementation, but only
+    * signal the driver once at the end.
+    */
+   for (unsigned i = 0; i < ctx->Const.MaxViewports; i++)
+      set_viewport_no_notify(ctx, i, x, y, width, height);
+
+   if (ctx->Driver.Viewport) {
+      /* Many drivers will use this call to check for window size changes
+       * and reallocate the z/stencil/accum/etc buffers if needed.
+       */
+      ctx->Driver.Viewport(ctx);
+   }
+}
+
 /**
  * Set the viewport.
  * \sa Called via glViewport() or display list execution.
@@ -93,9 +119,15 @@ struct gl_depthrange_inputs {
  * parameters.
  */
 void GLAPIENTRY
+_mesa_Viewport_no_error(GLint x, GLint y, GLsizei width, GLsizei height)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   viewport(ctx, x, y, width, height);
+}
+
+void GLAPIENTRY
 _mesa_Viewport(GLint x, GLint y, GLsizei width, GLsizei height)
 {
-   unsigned i;
    GET_CURRENT_CONTEXT(ctx);
    FLUSH_VERTICES(ctx, 0);
 
@@ -108,26 +140,7 @@ _mesa_Viewport(GLint x, GLint y, GLsizei width, GLsizei height)
       return;
    }
 
-   /* The GL_ARB_viewport_array spec says:
-    *
-    *     "Viewport sets the parameters for all viewports to the same values
-    *     and is equivalent (assuming no errors are generated) to:
-    *
-    *     for (uint i = 0; i < MAX_VIEWPORTS; i++)
-    *         ViewportIndexedf(i, 1, (float)x, (float)y, (float)w, (float)h);"
-    *
-    * Set all of the viewports supported by the implementation, but only
-    * signal the driver once at the end.
-    */
-   for (i = 0; i < ctx->Const.MaxViewports; i++)
-      set_viewport_no_notify(ctx, i, x, y, width, height);
-
-   if (ctx->Driver.Viewport) {
-      /* Many drivers will use this call to check for window size changes
-       * and reallocate the z/stencil/accum/etc buffers if needed.
-       */
-      ctx->Driver.Viewport(ctx);
-   }
+   viewport(ctx, x, y, width, height);
 }
 
 
@@ -153,6 +166,28 @@ _mesa_set_viewport(struct gl_context *ctx, unsigned idx, GLfloat x, GLfloat y,
        */
       ctx->Driver.Viewport(ctx);
    }
+}
+
+static void
+viewport_array(struct gl_context *ctx, GLuint first, GLsizei count,
+               const struct gl_viewport_inputs *inputs)
+{
+   for (GLsizei i = 0; i < count; i++) {
+      set_viewport_no_notify(ctx, i + first, inputs[i].X, inputs[i].Y,
+                             inputs[i].Width, inputs[i].Height);
+   }
+
+   if (ctx->Driver.Viewport)
+      ctx->Driver.Viewport(ctx);
+}
+
+void GLAPIENTRY
+_mesa_ViewportArrayv_no_error(GLuint first, GLsizei count, const GLfloat *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   const struct gl_viewport_inputs *const p = (struct gl_viewport_inputs *)v;
+   viewport_array(ctx, first, count, p);
 }
 
 void GLAPIENTRY
@@ -184,21 +219,13 @@ _mesa_ViewportArrayv(GLuint first, GLsizei count, const GLfloat *v)
       }
    }
 
-   for (i = 0; i < count; i++)
-      set_viewport_no_notify(ctx, i + first,
-                             p[i].X, p[i].Y,
-                             p[i].Width, p[i].Height);
-
-   if (ctx->Driver.Viewport)
-      ctx->Driver.Viewport(ctx);
+   viewport_array(ctx, first, count, p);
 }
 
 static void
-ViewportIndexedf(GLuint index, GLfloat x, GLfloat y,
-                 GLfloat w, GLfloat h, const char *function)
+viewport_indexed_err(struct gl_context *ctx, GLuint index, GLfloat x, GLfloat y,
+                     GLfloat w, GLfloat h, const char *function)
 {
-   GET_CURRENT_CONTEXT(ctx);
-
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "%s(%d, %f, %f, %f, %f)\n",
                   function, index, x, y, w, h);
@@ -222,16 +249,34 @@ ViewportIndexedf(GLuint index, GLfloat x, GLfloat y,
 }
 
 void GLAPIENTRY
+_mesa_ViewportIndexedf_no_error(GLuint index, GLfloat x, GLfloat y,
+                                GLfloat w, GLfloat h)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   _mesa_set_viewport(ctx, index, x, y, w, h);
+}
+
+void GLAPIENTRY
 _mesa_ViewportIndexedf(GLuint index, GLfloat x, GLfloat y,
                        GLfloat w, GLfloat h)
 {
-   ViewportIndexedf(index, x, y, w, h, "glViewportIndexedf");
+   GET_CURRENT_CONTEXT(ctx);
+   viewport_indexed_err(ctx, index, x, y, w, h, "glViewportIndexedf");
+}
+
+void GLAPIENTRY
+_mesa_ViewportIndexedfv_no_error(GLuint index, const GLfloat *v)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   _mesa_set_viewport(ctx, index, v[0], v[1], v[2], v[3]);
 }
 
 void GLAPIENTRY
 _mesa_ViewportIndexedfv(GLuint index, const GLfloat *v)
 {
-   ViewportIndexedf(index, v[0], v[1], v[2], v[3], "glViewportIndexedfv");
+   GET_CURRENT_CONTEXT(ctx);
+   viewport_indexed_err(ctx, index, v[0], v[1], v[2], v[3],
+                        "glViewportIndexedfv");
 }
 
 static void
@@ -420,40 +465,16 @@ void _mesa_init_viewport(struct gl_context *ctx)
 }
 
 
-extern void GLAPIENTRY
-_mesa_ClipControl(GLenum origin, GLenum depth)
+static void
+clip_control(struct gl_context *ctx, GLenum origin, GLenum depth)
 {
-   GET_CURRENT_CONTEXT(ctx);
-
-   if (MESA_VERBOSE&VERBOSE_API)
-      _mesa_debug(ctx, "glClipControl(%s, %s)\n",
-	          _mesa_enum_to_string(origin),
-                  _mesa_enum_to_string(depth));
-
-   ASSERT_OUTSIDE_BEGIN_END(ctx);
-
-   if (!ctx->Extensions.ARB_clip_control) {
-      _mesa_error(ctx, GL_INVALID_OPERATION, "glClipControl");
-      return;
-   }
-
-   if (origin != GL_LOWER_LEFT && origin != GL_UPPER_LEFT) {
-      _mesa_error(ctx, GL_INVALID_ENUM, "glClipControl");
-      return;
-   }
-
-   if (depth != GL_NEGATIVE_ONE_TO_ONE && depth != GL_ZERO_TO_ONE) {
-      _mesa_error(ctx, GL_INVALID_ENUM, "glClipControl");
-      return;
-   }
-
    if (ctx->Transform.ClipOrigin == origin &&
        ctx->Transform.ClipDepthMode == depth)
       return;
 
    /* Affects transform state and the viewport transform */
    FLUSH_VERTICES(ctx, ctx->DriverFlags.NewClipControl ? 0 :
-                                          _NEW_TRANSFORM | _NEW_VIEWPORT);
+                  _NEW_TRANSFORM | _NEW_VIEWPORT);
    ctx->NewDriverState |= ctx->DriverFlags.NewClipControl;
 
    if (ctx->Transform.ClipOrigin != origin) {
@@ -475,6 +496,45 @@ _mesa_ClipControl(GLenum origin, GLenum depth)
       if (ctx->Driver.DepthRange)
          ctx->Driver.DepthRange(ctx);
    }
+}
+
+
+void GLAPIENTRY
+_mesa_ClipControl_no_error(GLenum origin, GLenum depth)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   clip_control(ctx, origin, depth);
+}
+
+
+void GLAPIENTRY
+_mesa_ClipControl(GLenum origin, GLenum depth)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   if (MESA_VERBOSE & VERBOSE_API)
+      _mesa_debug(ctx, "glClipControl(%s, %s)\n",
+	          _mesa_enum_to_string(origin),
+                  _mesa_enum_to_string(depth));
+
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
+
+   if (!ctx->Extensions.ARB_clip_control) {
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glClipControl");
+      return;
+   }
+
+   if (origin != GL_LOWER_LEFT && origin != GL_UPPER_LEFT) {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glClipControl");
+      return;
+   }
+
+   if (depth != GL_NEGATIVE_ONE_TO_ONE && depth != GL_ZERO_TO_ONE) {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glClipControl");
+      return;
+   }
+
+   clip_control(ctx, origin, depth);
 }
 
 /**

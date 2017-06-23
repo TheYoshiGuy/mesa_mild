@@ -442,14 +442,13 @@ dri2_x11_process_buffers(struct dri2_egl_surface *dri2_surf,
    struct dri2_egl_display *dri2_dpy =
       dri2_egl_display(dri2_surf->base.Resource.Display);
    xcb_rectangle_t rectangle;
-   unsigned i;
 
    dri2_surf->buffer_count = count;
    dri2_surf->have_fake_front = false;
 
    /* This assumes the DRI2 buffer attachment tokens matches the
     * __DRIbuffer tokens. */
-   for (i = 0; i < count; i++) {
+   for (unsigned i = 0; i < count; i++) {
       dri2_surf->buffers[i].attachment = buffers[i].attachment;
       dri2_surf->buffers[i].name = buffers[i].name;
       dri2_surf->buffers[i].pitch = buffers[i].pitch;
@@ -730,17 +729,10 @@ dri2_x11_add_configs_for_visuals(struct dri2_egl_display *dri2_dpy,
 {
    xcb_depth_iterator_t d;
    xcb_visualtype_t *visuals;
-   int i, j, count;
-   unsigned int rgba_masks[4];
+   int config_count = 0;
    EGLint surface_type;
-   EGLint config_attrs[] = {
-	   EGL_NATIVE_VISUAL_ID,   0,
-	   EGL_NATIVE_VISUAL_TYPE, 0,
-	   EGL_NONE
-   };
 
    d = xcb_screen_allowed_depths_iterator(dri2_dpy->screen);
-   count = 0;
 
    surface_type =
       EGL_WINDOW_BIT |
@@ -754,26 +746,36 @@ dri2_x11_add_configs_for_visuals(struct dri2_egl_display *dri2_dpy,
       EGLBoolean class_added[6] = { 0, };
 
       visuals = xcb_depth_visuals(d.data);
-      for (i = 0; i < xcb_depth_visuals_length(d.data); i++) {
+
+      for (int i = 0; i < xcb_depth_visuals_length(d.data); i++) {
 	 if (class_added[visuals[i]._class])
 	    continue;
 
 	 class_added[visuals[i]._class] = EGL_TRUE;
-	 for (j = 0; dri2_dpy->driver_configs[j]; j++) {
+
+	 for (int j = 0; dri2_dpy->driver_configs[j]; j++) {
             struct dri2_egl_config *dri2_conf;
             const __DRIconfig *config = dri2_dpy->driver_configs[j];
 
-            config_attrs[1] = visuals[i].visual_id;
-            config_attrs[3] = visuals[i]._class;
+            const EGLint config_attrs[] = {
+                    EGL_NATIVE_VISUAL_ID,    visuals[i].visual_id,
+                    EGL_NATIVE_VISUAL_TYPE,  visuals[i]._class,
+                    EGL_NONE
+            };
 
-            rgba_masks[0] = visuals[i].red_mask;
-            rgba_masks[1] = visuals[i].green_mask;
-            rgba_masks[2] = visuals[i].blue_mask;
-            rgba_masks[3] = 0;
-            dri2_conf = dri2_add_config(disp, config, count + 1, surface_type,
-                                        config_attrs, rgba_masks);
+            unsigned int rgba_masks[4] = {
+               visuals[i].red_mask,
+               visuals[i].green_mask,
+               visuals[i].blue_mask,
+               0,
+            };
+
+            dri2_conf = dri2_add_config(disp, config, config_count + 1,
+                                        surface_type, config_attrs,
+                                        rgba_masks);
             if (dri2_conf)
-               count++;
+               if (dri2_conf->base.ConfigID == config_count + 1)
+                  config_count++;
 
             /* Allow a 24-bit RGB visual to match a 32-bit RGBA EGLConfig.
              * Otherwise it will only match a 32-bit RGBA visual.  On a
@@ -785,10 +787,12 @@ dri2_x11_add_configs_for_visuals(struct dri2_egl_display *dri2_dpy,
             if (d.data->depth == 24) {
                rgba_masks[3] =
                   ~(rgba_masks[0] | rgba_masks[1] | rgba_masks[2]);
-               dri2_conf = dri2_add_config(disp, config, count + 1, surface_type,
-                                           config_attrs, rgba_masks);
+               dri2_conf = dri2_add_config(disp, config, config_count + 1,
+                                           surface_type, config_attrs,
+                                           rgba_masks);
                if (dri2_conf)
-                  count++;
+                  if (dri2_conf->base.ConfigID == config_count + 1)
+                     config_count++;
             }
 	 }
       }
@@ -796,7 +800,7 @@ dri2_x11_add_configs_for_visuals(struct dri2_egl_display *dri2_dpy,
       xcb_depth_next(&d);
    }
 
-   if (!count) {
+   if (!config_count) {
       _eglLog(_EGL_WARNING, "DRI2: failed to create any config");
       return EGL_FALSE;
    }
@@ -914,12 +918,11 @@ dri2_x11_swap_buffers_region(_EGLDriver *drv, _EGLDisplay *disp,
    EGLBoolean ret;
    xcb_xfixes_region_t region;
    xcb_rectangle_t rectangles[16];
-   int i;
 
    if (numRects > (int)ARRAY_SIZE(rectangles))
       return dri2_copy_region(drv, disp, draw, dri2_surf->region);
 
-   for (i = 0; i < numRects; i++) {
+   for (int i = 0; i < numRects; i++) {
       rectangles[i].x = rects[i * 4];
       rectangles[i].y = dri2_surf->base.Height - rects[i * 4 + 1] - rects[i * 4 + 3];
       rectangles[i].width = rects[i * 4 + 2];

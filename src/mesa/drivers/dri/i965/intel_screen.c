@@ -1371,11 +1371,11 @@ intelCreateBuffer(__DRIscreen *dri_screen,
    }
 
    /* setup the hardware-based renderbuffers */
-   rb = intel_create_winsys_renderbuffer(rgbFormat, num_samples);
+   rb = intel_create_winsys_renderbuffer(screen, rgbFormat, num_samples);
    _mesa_attach_and_own_rb(fb, BUFFER_FRONT_LEFT, &rb->Base.Base);
 
    if (mesaVis->doubleBufferMode) {
-      rb = intel_create_winsys_renderbuffer(rgbFormat, num_samples);
+      rb = intel_create_winsys_renderbuffer(screen, rgbFormat, num_samples);
       _mesa_attach_and_own_rb(fb, BUFFER_BACK_LEFT, &rb->Base.Base);
    }
 
@@ -1388,10 +1388,11 @@ intelCreateBuffer(__DRIscreen *dri_screen,
       assert(mesaVis->stencilBits == 8);
 
       if (screen->devinfo.has_hiz_and_separate_stencil) {
-         rb = intel_create_private_renderbuffer(MESA_FORMAT_Z24_UNORM_X8_UINT,
+         rb = intel_create_private_renderbuffer(screen,
+                                                MESA_FORMAT_Z24_UNORM_X8_UINT,
                                                 num_samples);
          _mesa_attach_and_own_rb(fb, BUFFER_DEPTH, &rb->Base.Base);
-         rb = intel_create_private_renderbuffer(MESA_FORMAT_S_UINT8,
+         rb = intel_create_private_renderbuffer(screen, MESA_FORMAT_S_UINT8,
                                                 num_samples);
          _mesa_attach_and_own_rb(fb, BUFFER_STENCIL, &rb->Base.Base);
       } else {
@@ -1399,7 +1400,8 @@ intelCreateBuffer(__DRIscreen *dri_screen,
           * Use combined depth/stencil. Note that the renderbuffer is
           * attached to two attachment points.
           */
-         rb = intel_create_private_renderbuffer(MESA_FORMAT_Z24_UNORM_S8_UINT,
+         rb = intel_create_private_renderbuffer(screen,
+                                                MESA_FORMAT_Z24_UNORM_S8_UINT,
                                                 num_samples);
          _mesa_attach_and_own_rb(fb, BUFFER_DEPTH, &rb->Base.Base);
          _mesa_attach_and_reference_rb(fb, BUFFER_STENCIL, &rb->Base.Base);
@@ -1407,7 +1409,7 @@ intelCreateBuffer(__DRIscreen *dri_screen,
    }
    else if (mesaVis->depthBits == 16) {
       assert(mesaVis->stencilBits == 0);
-      rb = intel_create_private_renderbuffer(MESA_FORMAT_Z_UNORM16,
+      rb = intel_create_private_renderbuffer(screen, MESA_FORMAT_Z_UNORM16,
                                              num_samples);
       _mesa_attach_and_own_rb(fb, BUFFER_DEPTH, &rb->Base.Base);
    }
@@ -2289,6 +2291,8 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
 
    screen->has_exec_fence =
      intel_get_boolean(screen, I915_PARAM_HAS_EXEC_FENCE);
+
+   intel_screen_init_surface_formats(screen);
 
    return (const __DRIconfig**) intel_screen_make_configs(dri_screen);
 }

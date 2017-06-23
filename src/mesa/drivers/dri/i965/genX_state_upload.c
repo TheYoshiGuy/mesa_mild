@@ -51,11 +51,13 @@
 #include "main/fbobject.h"
 #include "main/framebuffer.h"
 #include "main/glformats.h"
+#include "main/samplerobj.h"
 #include "main/shaderapi.h"
 #include "main/stencil.h"
 #include "main/transformfeedback.h"
 #include "main/varray.h"
 #include "main/viewport.h"
+#include "util/half_float.h"
 
 UNUSED static void *
 emit_dwords(struct brw_context *brw, unsigned n)
@@ -4218,6 +4220,659 @@ genX(emit_mi_report_perf_count)(struct brw_context *brw,
 
 /* ---------------------------------------------------------------------- */
 
+/**
+ * Emit a 3DSTATE_SAMPLER_STATE_POINTERS_{VS,HS,GS,DS,PS} packet.
+ */
+static void
+genX(emit_sampler_state_pointers_xs)(struct brw_context *brw,
+                                     struct brw_stage_state *stage_state)
+{
+#if GEN_GEN >= 7
+   static const uint16_t packet_headers[] = {
+      [MESA_SHADER_VERTEX] = 43,
+      [MESA_SHADER_TESS_CTRL] = 44,
+      [MESA_SHADER_TESS_EVAL] = 45,
+      [MESA_SHADER_GEOMETRY] = 46,
+      [MESA_SHADER_FRAGMENT] = 47,
+   };
+
+   /* Ivybridge requires a workaround flush before VS packets. */
+   if (GEN_GEN == 7 && !GEN_IS_HASWELL &&
+       stage_state->stage == MESA_SHADER_VERTEX) {
+      gen7_emit_vs_workaround_flush(brw);
+   }
+
+   brw_batch_emit(brw, GENX(3DSTATE_SAMPLER_STATE_POINTERS_VS), ptr) {
+      ptr._3DCommandSubOpcode = packet_headers[stage_state->stage];
+      ptr.PointertoVSSamplerState = stage_state->sampler_offset;
+   }
+#endif
+}
+
+UNUSED static bool
+has_component(mesa_format format, int i)
+{
+   if (_mesa_is_format_color_format(format))
+      return _mesa_format_has_color_component(format, i);
+
+   /* depth and stencil have only one component */
+   return i == 0;
+}
+
+/**
+ * Upload SAMPLER_BORDER_COLOR_STATE.
+ */
+static void
+genX(upload_default_color)(struct brw_context *brw,
+                           const struct gl_sampler_object *sampler,
+                           mesa_format format, GLenum base_format,
+                           bool is_integer_format, bool is_stencil_sampling,
+                           uint32_t *sdc_offset)
+{
+   union gl_color_union color;
+
+   switch (base_format) {
+   case GL_DEPTH_COMPONENT:
+      /* GL specs that border color for depth textures is taken from the
+       * R channel, while the hardware uses A.  Spam R into all the
+       * channels for safety.
+       */
+      color.ui[0] = sampler->BorderColor.ui[0];
+      color.ui[1] = sampler->BorderColor.ui[0];
+      color.ui[2] = sampler->BorderColor.ui[0];
+      color.ui[3] = sampler->BorderColor.ui[0];
+      break;
+   case GL_ALPHA:
+      color.ui[0] = 0u;
+      color.ui[1] = 0u;
+      color.ui[2] = 0u;
+      color.ui[3] = sampler->BorderColor.ui[3];
+      break;
+   case GL_INTENSITY:
+      color.ui[0] = sampler->BorderColor.ui[0];
+      color.ui[1] = sampler->BorderColor.ui[0];
+      color.ui[2] = sampler->BorderColor.ui[0];
+      color.ui[3] = sampler->BorderColor.ui[0];
+      break;
+   case GL_LUMINANCE:
+      color.ui[0] = sampler->BorderColor.ui[0];
+      color.ui[1] = sampler->BorderColor.ui[0];
+      color.ui[2] = sampler->BorderColor.ui[0];
+      color.ui[3] = float_as_int(1.0);
+      break;
+   case GL_LUMINANCE_ALPHA:
+      color.ui[0] = sampler->BorderColor.ui[0];
+      color.ui[1] = sampler->BorderColor.ui[0];
+      color.ui[2] = sampler->BorderColor.ui[0];
+      color.ui[3] = sampler->BorderColor.ui[3];
+      break;
+   default:
+      color.ui[0] = sampler->BorderColor.ui[0];
+      color.ui[1] = sampler->BorderColor.ui[1];
+      color.ui[2] = sampler->BorderColor.ui[2];
+      color.ui[3] = sampler->BorderColor.ui[3];
+      break;
+   }
+
+   /* In some cases we use an RGBA surface format for GL RGB textures,
+    * where we've initialized the A channel to 1.0.  We also have to set
+    * the border color alpha to 1.0 in that case.
+    */
+   if (base_format == GL_RGB)
+      color.ui[3] = float_as_int(1.0);
+
+   int alignment = 32;
+   if (brw->gen >= 8) {
+      alignment = 64;
+   } else if (brw->is_haswell && (is_integer_format || is_stencil_sampling)) {
+      alignment = 512;
+   }
+
+   uint32_t *sdc = brw_state_batch(
+      brw, GENX(SAMPLER_BORDER_COLOR_STATE_length) * sizeof(uint32_t),
+      alignment, sdc_offset);
+
+   struct GENX(SAMPLER_BORDER_COLOR_STATE) state = { 0 };
+
+#define ASSIGN(dst, src) \
+   do {                  \
+      dst = src;         \
+   } while (0)
+
+#define ASSIGNu16(dst, src) \
+   do {                     \
+      dst = (uint16_t)src;  \
+   } while (0)
+
+#define ASSIGNu8(dst, src) \
+   do {                    \
+      dst = (uint8_t)src;  \
+   } while (0)
+
+#define BORDER_COLOR_ATTR(macro, _color_type, src)              \
+   macro(state.BorderColor ## _color_type ## Red, src[0]);   \
+   macro(state.BorderColor ## _color_type ## Green, src[1]);   \
+   macro(state.BorderColor ## _color_type ## Blue, src[2]);   \
+   macro(state.BorderColor ## _color_type ## Alpha, src[3]);
+
+#if GEN_GEN >= 8
+   /* On Broadwell, the border color is represented as four 32-bit floats,
+    * integers, or unsigned values, interpreted according to the surface
+    * format.  This matches the sampler->BorderColor union exactly; just
+    * memcpy the values.
+    */
+   BORDER_COLOR_ATTR(ASSIGN, 32bit, color.ui);
+#elif GEN_IS_HASWELL
+   if (is_integer_format || is_stencil_sampling) {
+      bool stencil = format == MESA_FORMAT_S_UINT8 || is_stencil_sampling;
+      const int bits_per_channel =
+         _mesa_get_format_bits(format, stencil ? GL_STENCIL_BITS : GL_RED_BITS);
+
+      /* From the Haswell PRM, "Command Reference: Structures", Page 36:
+       * "If any color channel is missing from the surface format,
+       *  corresponding border color should be programmed as zero and if
+       *  alpha channel is missing, corresponding Alpha border color should
+       *  be programmed as 1."
+       */
+      unsigned c[4] = { 0, 0, 0, 1 };
+      for (int i = 0; i < 4; i++) {
+         if (has_component(format, i))
+            c[i] = color.ui[i];
+      }
+
+      switch (bits_per_channel) {
+      case 8:
+         /* Copy RGBA in order. */
+         BORDER_COLOR_ATTR(ASSIGNu8, 8bit, c);
+         break;
+      case 10:
+         /* R10G10B10A2_UINT is treated like a 16-bit format. */
+      case 16:
+         BORDER_COLOR_ATTR(ASSIGNu16, 16bit, c);
+         break;
+      case 32:
+         if (base_format == GL_RG) {
+            /* Careful inspection of the tables reveals that for RG32 formats,
+             * the green channel needs to go where blue normally belongs.
+             */
+            state.BorderColor32bitRed = c[0];
+            state.BorderColor32bitBlue = c[1];
+            state.BorderColor32bitAlpha = 1;
+         } else {
+            /* Copy RGBA in order. */
+            BORDER_COLOR_ATTR(ASSIGN, 32bit, c);
+         }
+         break;
+      default:
+         assert(!"Invalid number of bits per channel in integer format.");
+         break;
+      }
+   } else {
+      BORDER_COLOR_ATTR(ASSIGN, Float, color.f);
+   }
+#elif GEN_GEN == 5 || GEN_GEN == 6
+   BORDER_COLOR_ATTR(UNCLAMPED_FLOAT_TO_UBYTE, Unorm, color.f);
+   BORDER_COLOR_ATTR(UNCLAMPED_FLOAT_TO_USHORT, Unorm16, color.f);
+   BORDER_COLOR_ATTR(UNCLAMPED_FLOAT_TO_SHORT, Snorm16, color.f);
+
+#define MESA_FLOAT_TO_HALF(dst, src) \
+   dst = _mesa_float_to_half(src);
+
+   BORDER_COLOR_ATTR(MESA_FLOAT_TO_HALF, Float16, color.f);
+
+#undef MESA_FLOAT_TO_HALF
+
+   state.BorderColorSnorm8Red   = state.BorderColorSnorm16Red >> 8;
+   state.BorderColorSnorm8Green = state.BorderColorSnorm16Green >> 8;
+   state.BorderColorSnorm8Blue  = state.BorderColorSnorm16Blue >> 8;
+   state.BorderColorSnorm8Alpha = state.BorderColorSnorm16Alpha >> 8;
+
+   BORDER_COLOR_ATTR(ASSIGN, Float, color.f);
+#elif GEN_GEN == 4
+   BORDER_COLOR_ATTR(ASSIGN, , color.f);
+#else
+   BORDER_COLOR_ATTR(ASSIGN, Float, color.f);
+#endif
+
+#undef ASSIGN
+#undef BORDER_COLOR_ATTR
+
+   GENX(SAMPLER_BORDER_COLOR_STATE_pack)(brw, sdc, &state);
+}
+
+static uint32_t
+translate_wrap_mode(struct brw_context *brw, GLenum wrap, bool using_nearest)
+{
+   switch (wrap) {
+   case GL_REPEAT:
+      return TCM_WRAP;
+   case GL_CLAMP:
+#if GEN_GEN >= 8
+      /* GL_CLAMP is the weird mode where coordinates are clamped to
+       * [0.0, 1.0], so linear filtering of coordinates outside of
+       * [0.0, 1.0] give you half edge texel value and half border
+       * color.
+       *
+       * Gen8+ supports this natively.
+       */
+         return TCM_HALF_BORDER;
+#endif
+
+      /* On Gen4-7.5, we clamp the coordinates in the fragment shader
+       * and set clamp_border here, which gets the result desired.
+       * We just use clamp(_to_edge) for nearest, because for nearest
+       * clamping to 1.0 gives border color instead of the desired
+       * edge texels.
+       */
+      if (using_nearest)
+         return TCM_CLAMP;
+      else
+         return TCM_CLAMP_BORDER;
+   case GL_CLAMP_TO_EDGE:
+      return TCM_CLAMP;
+   case GL_CLAMP_TO_BORDER:
+      return TCM_CLAMP_BORDER;
+   case GL_MIRRORED_REPEAT:
+      return TCM_MIRROR;
+   case GL_MIRROR_CLAMP_TO_EDGE:
+      return TCM_MIRROR_ONCE;
+   default:
+      return TCM_WRAP;
+   }
+}
+
+/**
+ * Return true if the given wrap mode requires the border color to exist.
+ */
+static bool
+wrap_mode_needs_border_color(unsigned wrap_mode)
+{
+#if GEN_GEN >= 8
+   return wrap_mode == TCM_CLAMP_BORDER ||
+          wrap_mode == TCM_HALF_BORDER;
+#else
+   return wrap_mode == TCM_CLAMP_BORDER;
+#endif
+}
+
+/**
+ * Sets the sampler state for a single unit based off of the sampler key
+ * entry.
+ */
+static void
+genX(update_sampler_state)(struct brw_context *brw,
+                           GLenum target, bool tex_cube_map_seamless,
+                           GLfloat tex_unit_lod_bias,
+                           mesa_format format, GLenum base_format,
+                           const struct gl_texture_object *texObj,
+                           const struct gl_sampler_object *sampler,
+                           uint32_t *sampler_state,
+                           uint32_t batch_offset_for_sampler_state)
+{
+   struct GENX(SAMPLER_STATE) samp_st = { 0 };
+
+   /* Select min and mip filters. */
+   switch (sampler->MinFilter) {
+   case GL_NEAREST:
+      samp_st.MinModeFilter = MAPFILTER_NEAREST;
+      samp_st.MipModeFilter = MIPFILTER_NONE;
+      break;
+   case GL_LINEAR:
+      samp_st.MinModeFilter = MAPFILTER_LINEAR;
+      samp_st.MipModeFilter = MIPFILTER_NONE;
+      break;
+   case GL_NEAREST_MIPMAP_NEAREST:
+      samp_st.MinModeFilter = MAPFILTER_NEAREST;
+      samp_st.MipModeFilter = MIPFILTER_NEAREST;
+      break;
+   case GL_LINEAR_MIPMAP_NEAREST:
+      samp_st.MinModeFilter = MAPFILTER_LINEAR;
+      samp_st.MipModeFilter = MIPFILTER_NEAREST;
+      break;
+   case GL_NEAREST_MIPMAP_LINEAR:
+      samp_st.MinModeFilter = MAPFILTER_NEAREST;
+      samp_st.MipModeFilter = MIPFILTER_LINEAR;
+      break;
+   case GL_LINEAR_MIPMAP_LINEAR:
+      samp_st.MinModeFilter = MAPFILTER_LINEAR;
+      samp_st.MipModeFilter = MIPFILTER_LINEAR;
+      break;
+   default:
+      unreachable("not reached");
+   }
+
+   /* Select mag filter. */
+   samp_st.MagModeFilter = sampler->MagFilter == GL_LINEAR ?
+      MAPFILTER_LINEAR : MAPFILTER_NEAREST;
+
+   /* Enable anisotropic filtering if desired. */
+   samp_st.MaximumAnisotropy = RATIO21;
+
+   if (sampler->MaxAnisotropy > 1.0f) {
+      if (samp_st.MinModeFilter == MAPFILTER_LINEAR)
+         samp_st.MinModeFilter = MAPFILTER_ANISOTROPIC;
+      if (samp_st.MinModeFilter == MAPFILTER_LINEAR)
+         samp_st.MagModeFilter = MAPFILTER_ANISOTROPIC;
+
+      if (sampler->MaxAnisotropy > 2.0f) {
+         samp_st.MaximumAnisotropy =
+            MIN2((sampler->MaxAnisotropy - 2) / 2, RATIO161);
+      }
+   }
+
+   /* Set address rounding bits if not using nearest filtering. */
+   if (samp_st.MinModeFilter != MAPFILTER_NEAREST) {
+      samp_st.UAddressMinFilterRoundingEnable = true;
+      samp_st.VAddressMinFilterRoundingEnable = true;
+      samp_st.RAddressMinFilterRoundingEnable = true;
+   }
+
+   if (samp_st.MagModeFilter != MAPFILTER_NEAREST) {
+      samp_st.UAddressMagFilterRoundingEnable = true;
+      samp_st.VAddressMagFilterRoundingEnable = true;
+      samp_st.RAddressMagFilterRoundingEnable = true;
+   }
+
+   bool either_nearest =
+      sampler->MinFilter == GL_NEAREST || sampler->MagFilter == GL_NEAREST;
+   unsigned wrap_s = translate_wrap_mode(brw, sampler->WrapS, either_nearest);
+   unsigned wrap_t = translate_wrap_mode(brw, sampler->WrapT, either_nearest);
+   unsigned wrap_r = translate_wrap_mode(brw, sampler->WrapR, either_nearest);
+
+   if (target == GL_TEXTURE_CUBE_MAP ||
+       target == GL_TEXTURE_CUBE_MAP_ARRAY) {
+      /* Cube maps must use the same wrap mode for all three coordinate
+       * dimensions.  Prior to Haswell, only CUBE and CLAMP are valid.
+       *
+       * Ivybridge and Baytrail seem to have problems with CUBE mode and
+       * integer formats.  Fall back to CLAMP for now.
+       */
+      if ((tex_cube_map_seamless || sampler->CubeMapSeamless) &&
+          !(GEN_GEN == 7 && !GEN_IS_HASWELL && texObj->_IsIntegerFormat)) {
+         wrap_s = TCM_CUBE;
+         wrap_t = TCM_CUBE;
+         wrap_r = TCM_CUBE;
+      } else {
+         wrap_s = TCM_CLAMP;
+         wrap_t = TCM_CLAMP;
+         wrap_r = TCM_CLAMP;
+      }
+   } else if (target == GL_TEXTURE_1D) {
+      /* There's a bug in 1D texture sampling - it actually pays
+       * attention to the wrap_t value, though it should not.
+       * Override the wrap_t value here to GL_REPEAT to keep
+       * any nonexistent border pixels from floating in.
+       */
+      wrap_t = TCM_WRAP;
+   }
+
+   samp_st.TCXAddressControlMode = wrap_s;
+   samp_st.TCYAddressControlMode = wrap_t;
+   samp_st.TCZAddressControlMode = wrap_r;
+
+   samp_st.ShadowFunction =
+      sampler->CompareMode == GL_COMPARE_R_TO_TEXTURE_ARB ?
+      intel_translate_shadow_compare_func(sampler->CompareFunc) : 0;
+
+#if GEN_GEN >= 7
+   /* Set shadow function. */
+   samp_st.AnisotropicAlgorithm =
+      samp_st.MinModeFilter == MAPFILTER_ANISOTROPIC ?
+      EWAApproximation : LEGACY;
+#endif
+
+#if GEN_GEN >= 6
+   samp_st.NonnormalizedCoordinateEnable = target == GL_TEXTURE_RECTANGLE;
+#endif
+
+   const float hw_max_lod = GEN_GEN >= 7 ? 14 : 13;
+   samp_st.MinLOD = CLAMP(sampler->MinLod, 0, hw_max_lod);
+   samp_st.MaxLOD = CLAMP(sampler->MaxLod, 0, hw_max_lod);
+   samp_st.TextureLODBias =
+      CLAMP(tex_unit_lod_bias + sampler->LodBias, -16, 15);
+
+#if GEN_GEN == 6
+   samp_st.BaseMipLevel =
+      CLAMP(texObj->MinLevel + texObj->BaseLevel, 0, hw_max_lod);
+   samp_st.MinandMagStateNotEqual =
+      samp_st.MinModeFilter != samp_st.MagModeFilter;
+#endif
+
+   /* Upload the border color if necessary.  If not, just point it at
+    * offset 0 (the start of the batch) - the color should be ignored,
+    * but that address won't fault in case something reads it anyway.
+    */
+   uint32_t border_color_offset = 0;
+   if (wrap_mode_needs_border_color(wrap_s) ||
+       wrap_mode_needs_border_color(wrap_t) ||
+       wrap_mode_needs_border_color(wrap_r)) {
+      genX(upload_default_color)(brw, sampler, format, base_format,
+                                 texObj->_IsIntegerFormat,
+                                 texObj->StencilSampling,
+                                 &border_color_offset);
+   }
+
+   samp_st.BorderColorPointer = border_color_offset;
+
+   if (GEN_GEN < 6) {
+      samp_st.BorderColorPointer += brw->batch.bo->offset64; /* reloc */
+      brw_emit_reloc(&brw->batch, batch_offset_for_sampler_state + 8,
+                     brw->batch.bo, border_color_offset,
+                     I915_GEM_DOMAIN_SAMPLER, 0);
+   }
+
+#if GEN_GEN >= 8
+   samp_st.LODPreClampMode = CLAMP_MODE_OGL;
+#else
+   samp_st.LODPreClampEnable = true;
+#endif
+
+   GENX(SAMPLER_STATE_pack)(brw, sampler_state, &samp_st);
+}
+
+static void
+update_sampler_state(struct brw_context *brw,
+                     int unit,
+                     uint32_t *sampler_state,
+                     uint32_t batch_offset_for_sampler_state)
+{
+   struct gl_context *ctx = &brw->ctx;
+   const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
+   const struct gl_texture_object *texObj = texUnit->_Current;
+   const struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
+
+   /* These don't use samplers at all. */
+   if (texObj->Target == GL_TEXTURE_BUFFER)
+      return;
+
+   struct gl_texture_image *firstImage = texObj->Image[0][texObj->BaseLevel];
+   genX(update_sampler_state)(brw, texObj->Target,
+                              ctx->Texture.CubeMapSeamless,
+                              texUnit->LodBias,
+                              firstImage->TexFormat, firstImage->_BaseFormat,
+                              texObj, sampler,
+                              sampler_state, batch_offset_for_sampler_state);
+}
+
+static void
+genX(upload_sampler_state_table)(struct brw_context *brw,
+                                 struct gl_program *prog,
+                                 struct brw_stage_state *stage_state)
+{
+   struct gl_context *ctx = &brw->ctx;
+   uint32_t sampler_count = stage_state->sampler_count;
+
+   GLbitfield SamplersUsed = prog->SamplersUsed;
+
+   if (sampler_count == 0)
+      return;
+
+   /* SAMPLER_STATE is 4 DWords on all platforms. */
+   const int dwords = GENX(SAMPLER_STATE_length);
+   const int size_in_bytes = dwords * sizeof(uint32_t);
+
+   uint32_t *sampler_state = brw_state_batch(brw,
+                                             sampler_count * size_in_bytes,
+                                             32, &stage_state->sampler_offset);
+   /* memset(sampler_state, 0, sampler_count * size_in_bytes); */
+
+   uint32_t batch_offset_for_sampler_state = stage_state->sampler_offset;
+
+   for (unsigned s = 0; s < sampler_count; s++) {
+      if (SamplersUsed & (1 << s)) {
+         const unsigned unit = prog->SamplerUnits[s];
+         if (ctx->Texture.Unit[unit]._Current) {
+            update_sampler_state(brw, unit, sampler_state,
+                                 batch_offset_for_sampler_state);
+         }
+      }
+
+      sampler_state += dwords;
+      batch_offset_for_sampler_state += size_in_bytes;
+   }
+
+   if (GEN_GEN >= 7 && stage_state->stage != MESA_SHADER_COMPUTE) {
+      /* Emit a 3DSTATE_SAMPLER_STATE_POINTERS_XS packet. */
+      genX(emit_sampler_state_pointers_xs)(brw, stage_state);
+   } else {
+      /* Flag that the sampler state table pointer has changed; later atoms
+       * will handle it.
+       */
+      brw->ctx.NewDriverState |= BRW_NEW_SAMPLER_STATE_TABLE;
+   }
+}
+
+static void
+genX(upload_fs_samplers)(struct brw_context *brw)
+{
+   /* BRW_NEW_FRAGMENT_PROGRAM */
+   struct gl_program *fs = (struct gl_program *) brw->fragment_program;
+   genX(upload_sampler_state_table)(brw, fs, &brw->wm.base);
+}
+
+static const struct brw_tracked_state genX(fs_samplers) = {
+   .dirty = {
+      .mesa = _NEW_TEXTURE,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
+             BRW_NEW_FRAGMENT_PROGRAM,
+   },
+   .emit = genX(upload_fs_samplers),
+};
+
+static void
+genX(upload_vs_samplers)(struct brw_context *brw)
+{
+   /* BRW_NEW_VERTEX_PROGRAM */
+   struct gl_program *vs = (struct gl_program *) brw->vertex_program;
+   genX(upload_sampler_state_table)(brw, vs, &brw->vs.base);
+}
+
+static const struct brw_tracked_state genX(vs_samplers) = {
+   .dirty = {
+      .mesa = _NEW_TEXTURE,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
+             BRW_NEW_VERTEX_PROGRAM,
+   },
+   .emit = genX(upload_vs_samplers),
+};
+
+#if GEN_GEN >= 6
+static void
+genX(upload_gs_samplers)(struct brw_context *brw)
+{
+   /* BRW_NEW_GEOMETRY_PROGRAM */
+   struct gl_program *gs = (struct gl_program *) brw->geometry_program;
+   if (!gs)
+      return;
+
+   genX(upload_sampler_state_table)(brw, gs, &brw->gs.base);
+}
+
+
+static const struct brw_tracked_state genX(gs_samplers) = {
+   .dirty = {
+      .mesa = _NEW_TEXTURE,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
+             BRW_NEW_GEOMETRY_PROGRAM,
+   },
+   .emit = genX(upload_gs_samplers),
+};
+#endif
+
+#if GEN_GEN >= 7
+static void
+genX(upload_tcs_samplers)(struct brw_context *brw)
+{
+   /* BRW_NEW_TESS_PROGRAMS */
+   struct gl_program *tcs = (struct gl_program *) brw->tess_ctrl_program;
+   if (!tcs)
+      return;
+
+   genX(upload_sampler_state_table)(brw, tcs, &brw->tcs.base);
+}
+
+static const struct brw_tracked_state genX(tcs_samplers) = {
+   .dirty = {
+      .mesa = _NEW_TEXTURE,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
+             BRW_NEW_TESS_PROGRAMS,
+   },
+   .emit = genX(upload_tcs_samplers),
+};
+#endif
+
+#if GEN_GEN >= 7
+static void
+genX(upload_tes_samplers)(struct brw_context *brw)
+{
+   /* BRW_NEW_TESS_PROGRAMS */
+   struct gl_program *tes = (struct gl_program *) brw->tess_eval_program;
+   if (!tes)
+      return;
+
+   genX(upload_sampler_state_table)(brw, tes, &brw->tes.base);
+}
+
+static const struct brw_tracked_state genX(tes_samplers) = {
+   .dirty = {
+      .mesa = _NEW_TEXTURE,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
+             BRW_NEW_TESS_PROGRAMS,
+   },
+   .emit = genX(upload_tes_samplers),
+};
+#endif
+
+#if GEN_GEN >= 7
+static void
+genX(upload_cs_samplers)(struct brw_context *brw)
+{
+   /* BRW_NEW_COMPUTE_PROGRAM */
+   struct gl_program *cs = (struct gl_program *) brw->compute_program;
+   if (!cs)
+      return;
+
+   genX(upload_sampler_state_table)(brw, cs, &brw->cs.base);
+}
+
+const struct brw_tracked_state genX(cs_samplers) = {
+   .dirty = {
+      .mesa = _NEW_TEXTURE,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
+             BRW_NEW_COMPUTE_PROGRAM,
+   },
+   .emit = genX(upload_cs_samplers),
+};
+#endif
+
+/* ---------------------------------------------------------------------- */
+
 void
 genX(init_atoms)(struct brw_context *brw)
 {
@@ -4245,8 +4900,8 @@ genX(init_atoms)(struct brw_context *brw)
       &brw_vs_binding_table,
       &brw_wm_binding_table,
 
-      &brw_fs_samplers,
-      &brw_vs_samplers,
+      &genX(fs_samplers),
+      &genX(vs_samplers),
 
       /* These set up state for brw_psp_urb_cbs */
       &brw_wm_unit,
@@ -4314,9 +4969,9 @@ genX(init_atoms)(struct brw_context *brw)
       &gen6_gs_binding_table,
       &brw_wm_binding_table,
 
-      &brw_fs_samplers,
-      &brw_vs_samplers,
-      &brw_gs_samplers,
+      &genX(fs_samplers),
+      &genX(vs_samplers),
+      &genX(gs_samplers),
       &gen6_sampler_state,
       &genX(multisample_state),
 
@@ -4397,11 +5052,11 @@ genX(init_atoms)(struct brw_context *brw)
       &brw_gs_binding_table,
       &brw_wm_binding_table,
 
-      &brw_fs_samplers,
-      &brw_vs_samplers,
-      &brw_tcs_samplers,
-      &brw_tes_samplers,
-      &brw_gs_samplers,
+      &genX(fs_samplers),
+      &genX(vs_samplers),
+      &genX(tcs_samplers),
+      &genX(tes_samplers),
+      &genX(gs_samplers),
       &genX(multisample_state),
 
       &genX(vs_state),
@@ -4486,11 +5141,11 @@ genX(init_atoms)(struct brw_context *brw)
       &brw_gs_binding_table,
       &brw_wm_binding_table,
 
-      &brw_fs_samplers,
-      &brw_vs_samplers,
-      &brw_tcs_samplers,
-      &brw_tes_samplers,
-      &brw_gs_samplers,
+      &genX(fs_samplers),
+      &genX(vs_samplers),
+      &genX(tcs_samplers),
+      &genX(tes_samplers),
+      &genX(gs_samplers),
       &genX(multisample_state),
 
       &genX(vs_state),
@@ -4546,7 +5201,7 @@ genX(init_atoms)(struct brw_context *brw)
       &brw_cs_abo_surfaces,
       &brw_cs_texture_surfaces,
       &brw_cs_work_groups_surface,
-      &brw_cs_samplers,
+      &genX(cs_samplers),
       &genX(cs_state),
    };
 
