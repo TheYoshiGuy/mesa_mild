@@ -1322,7 +1322,7 @@ struct pipe_resource *r600_resource_create_common(struct pipe_screen *screen,
 }
 
 bool r600_common_screen_init(struct r600_common_screen *rscreen,
-			     struct radeon_winsys *ws)
+			     struct radeon_winsys *ws, unsigned flags)
 {
 	char family_name[32] = {}, llvm_string[32] = {}, kernel_version[128] = {};
 	struct utsname uname_data;
@@ -1381,6 +1381,11 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	rscreen->debug_flags = debug_get_flags_option("R600_DEBUG", common_debug_options, 0);
 	rscreen->has_rbplus = false;
 	rscreen->rbplus_allowed = false;
+
+	/* Set the flag in debug_flags, so that the shader cache takes it
+	 * into account. */
+	if (flags & PIPE_SCREEN_ENABLE_CORRECT_TGSI_DERIVATIVES_AFTER_KILL)
+		rscreen->debug_flags |= DBG_FS_CORRECT_DERIVS_AFTER_KILL;
 
 	r600_disk_cache_create(rscreen);
 
