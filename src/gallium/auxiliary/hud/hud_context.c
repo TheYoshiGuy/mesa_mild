@@ -39,7 +39,6 @@
 
 #include "hud/hud_context.h"
 #include "hud/hud_private.h"
-#include "hud/font.h"
 
 #include "cso_cache/cso_context.h"
 #include "util/u_draw_quad.h"
@@ -57,51 +56,6 @@
 /* Control the visibility of all HUD contexts */
 static boolean huds_visible = TRUE;
 
-struct hud_context {
-   struct pipe_context *pipe;
-   struct cso_context *cso;
-
-   struct hud_batch_query_context *batch_query;
-   struct list_head pane_list;
-
-   /* states */
-   struct pipe_blend_state no_blend, alpha_blend;
-   struct pipe_depth_stencil_alpha_state dsa;
-   void *fs_color, *fs_text;
-   struct pipe_rasterizer_state rasterizer, rasterizer_aa_lines;
-   void *vs;
-   struct pipe_vertex_element velems[2];
-
-   /* font */
-   struct util_font font;
-   struct pipe_sampler_view *font_sampler_view;
-   struct pipe_sampler_state font_sampler_state;
-
-   /* VS constant buffer */
-   struct {
-      float color[4];
-      float two_div_fb_width;
-      float two_div_fb_height;
-      float translate[2];
-      float scale[2];
-      float padding[2];
-   } constants;
-   struct pipe_constant_buffer constbuf;
-
-   unsigned fb_width, fb_height;
-
-   /* vertices for text and background drawing are accumulated here and then
-    * drawn all at once */
-   struct vertex_queue {
-      float *vertices;
-      struct pipe_vertex_buffer vbuf;
-      unsigned max_num_vertices;
-      unsigned num_vertices;
-      unsigned buffer_size;
-   } text, bg, whitelines, color_prims;
-
-   bool has_srgb;
-};
 
 #ifdef PIPE_OS_UNIX
 static void
@@ -824,7 +778,8 @@ hud_pane_update_dyn_ceiling(struct hud_graph *gr, struct hud_pane *pane)
 }
 
 static struct hud_pane *
-hud_pane_create(unsigned x1, unsigned y1, unsigned x2, unsigned y2,
+hud_pane_create(struct hud_context *hud,
+                unsigned x1, unsigned y1, unsigned x2, unsigned y2,
                 unsigned period, uint64_t max_value, uint64_t ceiling,
                 boolean dyn_ceiling, boolean sort_items)
 {
@@ -833,6 +788,7 @@ hud_pane_create(unsigned x1, unsigned y1, unsigned x2, unsigned y2,
    if (!pane)
       return NULL;
 
+   pane->hud = hud;
    pane->x1 = x1;
    pane->y1 = y1;
    pane->x2 = x2;
@@ -1169,8 +1125,8 @@ hud_parse_env_var(struct hud_context *hud, const char *env)
      column_width = width > column_width ? width : column_width;
 
       if (!pane) {
-         pane = hud_pane_create(x, y, x + width, y + height, period, 10,
-                         ceiling, dyn_ceiling, sort_items);
+         pane = hud_pane_create(hud, x, y, x + width, y + height, period, 10,
+                                ceiling, dyn_ceiling, sort_items);
          if (!pane)
             return;
       }
@@ -1195,7 +1151,19 @@ hud_parse_env_var(struct hud_context *hud, const char *env)
          hud_cpu_graph_install(pane, i);
       }
       else if (strcmp(name, "API-thread-busy") == 0) {
-         hud_api_thread_busy_install(pane);
+         hud_thread_busy_install(pane, name, false);
+      }
+      else if (strcmp(name, "API-thread-offloaded-slots") == 0) {
+         hud_thread_counter_install(pane, name, HUD_COUNTER_OFFLOADED);
+      }
+      else if (strcmp(name, "API-thread-direct-slots") == 0) {
+         hud_thread_counter_install(pane, name, HUD_COUNTER_DIRECT);
+      }
+      else if (strcmp(name, "API-thread-num-syncs") == 0) {
+         hud_thread_counter_install(pane, name, HUD_COUNTER_SYNCS);
+      }
+      else if (strcmp(name, "main-thread-busy") == 0) {
+         hud_thread_busy_install(pane, name, true);
       }
 #if HAVE_GALLIUM_EXTRA_HUD
       else if (sscanf(name, "nic-rx-%s", arg_name) == 1) {
@@ -1739,4 +1707,12 @@ hud_destroy(struct hud_context *hud)
    pipe_sampler_view_reference(&hud->font_sampler_view, NULL);
    pipe_resource_reference(&hud->font.texture, NULL);
    FREE(hud);
+}
+
+void
+hud_add_queue_for_monitoring(struct hud_context *hud,
+                             struct util_queue_monitoring *queue_info)
+{
+   assert(!hud->monitored_queue);
+   hud->monitored_queue = queue_info;
 }
