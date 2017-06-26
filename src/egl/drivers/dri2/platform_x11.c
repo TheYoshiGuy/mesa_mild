@@ -111,7 +111,7 @@ swrastGetDrawableInfo(__DRIdrawable * draw,
    xcb_get_geometry_reply_t *reply;
    xcb_generic_error_t *error;
 
-   *w = *h = 0;
+   *x = *y = *w = *h = 0;
    cookie = xcb_get_geometry (dri2_dpy->conn, dri2_surf->drawable);
    reply = xcb_get_geometry_reply (dri2_dpy->conn, cookie, &error);
    if (reply == NULL)
@@ -121,6 +121,8 @@ swrastGetDrawableInfo(__DRIdrawable * draw,
       _eglLog(_EGL_WARNING, "error in xcb_get_geometry");
       free(error);
    } else {
+      *x = reply->x;
+      *y = reply->y;
       *w = reply->width;
       *h = reply->height;
    }
@@ -902,8 +904,7 @@ dri2_x11_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
 
    if (dri2_x11_swap_buffers_msc(drv, disp, draw, 0, 0, 0) == -1) {
       /* Swap failed with a window drawable. */
-      _eglError(EGL_BAD_NATIVE_WINDOW, __func__);
-      return EGL_FALSE;
+      return _eglError(EGL_BAD_NATIVE_WINDOW, __func__);
    }
    return EGL_TRUE;
 }
@@ -1070,12 +1071,7 @@ dri2_create_image_khr_pixmap(_EGLDisplay *disp, _EGLContext *ctx,
       return EGL_NO_IMAGE_KHR;
    }
 
-   if (!_eglInitImage(&dri2_img->base, disp)) {
-      free(buffers_reply);
-      free(geometry_reply);
-      free(dri2_img);
-      return EGL_NO_IMAGE_KHR;
-   }
+   _eglInitImage(&dri2_img->base, disp);
 
    stride = buffers[0].pitch / buffers[0].cpp;
    dri2_img->dri_image =
@@ -1121,10 +1117,8 @@ dri2_x11_get_sync_values(_EGLDisplay *display, _EGLSurface *surface,
    cookie = xcb_dri2_get_msc(dri2_dpy->conn, dri2_surf->drawable);
    reply = xcb_dri2_get_msc_reply(dri2_dpy->conn, cookie, NULL);
 
-   if (!reply) {
-      _eglError(EGL_BAD_ACCESS, __func__);
-      return EGL_FALSE;
-   }
+   if (!reply)
+      return _eglError(EGL_BAD_ACCESS, __func__);
 
    *ust = ((EGLuint64KHR) reply->ust_hi << 32) | reply->ust_lo;
    *msc = ((EGLuint64KHR) reply->msc_hi << 32) | reply->msc_lo;

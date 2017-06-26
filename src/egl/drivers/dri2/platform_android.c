@@ -666,10 +666,8 @@ droid_set_damage_region(_EGLDriver *drv,
       return EGL_TRUE;
 
    droid_rects = malloc(n_rects * sizeof(android_native_rect_t));
-   if (droid_rects == NULL) {
-     _eglError(EGL_BAD_ALLOC, "eglSetDamageRegionKHR");
-     return EGL_FALSE;
-   }
+   if (droid_rects == NULL)
+     return _eglError(EGL_BAD_ALLOC, "eglSetDamageRegionKHR");
 
    for (EGLint num_drects = 0; num_drects < n_rects; num_drects++) {
       EGLint i = num_drects * 4;
@@ -843,10 +841,7 @@ droid_create_image_from_name(_EGLDisplay *disp, _EGLContext *ctx,
       return NULL;
    }
 
-   if (!_eglInitImage(&dri2_img->base, disp)) {
-      free(dri2_img);
-      return NULL;
-   }
+   _eglInitImage(&dri2_img->base, disp);
 
    dri2_img->dri_image =
       dri2_dpy->image->createImageFromName(dri2_dpy->dri_screen,

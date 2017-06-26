@@ -434,10 +434,8 @@ dri2_drm_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
 
       /* Make sure we have a back buffer in case we're swapping without
        * ever rendering. */
-      if (get_back_bo(dri2_surf) < 0) {
-         _eglError(EGL_BAD_ALLOC, "dri2_swap_buffers");
-         return EGL_FALSE;
-      }
+      if (get_back_bo(dri2_surf) < 0)
+         return _eglError(EGL_BAD_ALLOC, "dri2_swap_buffers");
 
       dri2_surf->current = dri2_surf->back;
       dri2_surf->current->age = 1;
@@ -478,10 +476,7 @@ dri2_drm_create_image_khr_pixmap(_EGLDisplay *disp, _EGLContext *ctx,
       return NULL;
    }
 
-   if (!_eglInitImage(&dri2_img->base, disp)) {
-      free(dri2_img);
-      return NULL;
-   }
+   _eglInitImage(&dri2_img->base, disp);
 
    dri2_img->dri_image = dri2_dpy->image->dupImage(dri_bo->image, dri2_img);
    if (dri2_img->dri_image == NULL) {
