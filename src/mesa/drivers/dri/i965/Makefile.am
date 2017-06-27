@@ -38,6 +38,7 @@ AM_CFLAGS = \
 	-I$(top_srcdir)/src/compiler/nir \
 	-I$(top_builddir)/src/intel \
 	-I$(top_srcdir)/src/intel \
+	-I$(top_srcdir)/src/intel/drm \
 	$(DEFINES) \
 	$(VISIBILITY_CFLAGS) \
 	$(LIBDRM_CFLAGS) \
@@ -103,13 +104,22 @@ CLEANFILES = $(BUILT_SOURCES)
 
 EXTRA_DIST = \
 	brw_oa_hsw.xml \
+	brw_oa_bdw.xml \
+	brw_oa_chv.xml \
+	brw_oa_sklgt2.xml \
+	brw_oa_sklgt3.xml \
+	brw_oa_sklgt4.xml \
+	brw_oa_bxt.xml \
+	brw_oa_kblgt2.xml \
+	brw_oa_kblgt3.xml \
+	brw_oa_glk.xml \
 	brw_oa.py
 
 # Note: we avoid using a multi target rule here and outputting both the
 # .c and .h files in one go so we don't hit problems with parallel
 # make and multiple invocations of the same script trying to write
 # to the same files.
-brw_oa_hsw.h: brw_oa.py brw_oa_hsw.xml
-	$(PYTHON2) $(PYTHON_FLAGS) $(srcdir)/brw_oa.py --header=$(builddir)/brw_oa_hsw.h --chipset=hsw $(srcdir)/brw_oa_hsw.xml
-brw_oa_hsw.c: brw_oa.py brw_oa_hsw.xml
-	$(PYTHON2) $(PYTHON_FLAGS) $(srcdir)/brw_oa.py --code=$(builddir)/brw_oa_hsw.c --chipset=hsw $(srcdir)/brw_oa_hsw.xml
+brw_oa_%.h: brw_oa.py brw_oa_%.xml Makefile.am
+	$(PYTHON2) $(PYTHON_FLAGS) $(srcdir)/brw_oa.py --header=$(builddir)/brw_oa_$(*).h --chipset=$(*) $(srcdir)/brw_oa_$(*).xml
+brw_oa_%.c: brw_oa.py brw_oa_%.xml Makefile.am
+	$(PYTHON2) $(PYTHON_FLAGS) $(srcdir)/brw_oa.py --code=$(builddir)/brw_oa_$(*).c --chipset=$(*) $(srcdir)/brw_oa_$(*).xml

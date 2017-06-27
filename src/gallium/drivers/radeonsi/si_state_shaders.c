@@ -1187,10 +1187,18 @@ static void si_shader_selector_key_vs(struct si_context *sctx,
 	if (!sctx->vertex_elements)
 		return;
 
+	prolog_key->instance_divisor_is_one =
+		sctx->vertex_elements->instance_divisor_is_one;
+	prolog_key->instance_divisor_is_fetched =
+		sctx->vertex_elements->instance_divisor_is_fetched;
+
+	/* Prefer a monolithic shader to allow scheduling divisions around
+	 * VBO loads. */
+	if (prolog_key->instance_divisor_is_fetched)
+		key->opt.prefer_mono = 1;
+
 	unsigned count = MIN2(vs->info.num_inputs,
 			      sctx->vertex_elements->count);
-	memcpy(prolog_key->instance_divisors,
-	       sctx->vertex_elements->instance_divisors, count * 4);
 	memcpy(key->mono.vs_fix_fetch, sctx->vertex_elements->fix_fetch, count);
 }
 
@@ -1238,10 +1246,9 @@ static void si_shader_selector_key_hw_vs(struct si_context *sctx,
 		inputs_read = ps->inputs_read;
 	}
 
-	uint64_t kill_outputs = ~(outputs_written & inputs_read) & outputs_written;
+	uint64_t linked = outputs_written & inputs_read;
 
-	key->opt.kill_outputs[0] = kill_outputs;
-	key->opt.kill_outputs[1] = kill_outputs >> 32;
+	key->opt.kill_outputs = ~linked & outputs_written;
 }
 
 /* Compute the key for the hw shader variant */
@@ -1280,12 +1287,8 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 		key->part.tcs.epilog.tes_reads_tess_factors =
 			sctx->tes_shader.cso->info.reads_tess_factors;
 
-		if (sel == sctx->fixed_func_tcs_shader.cso) {
-			uint64_t outputs_written = sctx->vs_shader.cso->outputs_written;
-
-			key->mono.u.ff_tcs_inputs_to_copy[0] = outputs_written;
-			key->mono.u.ff_tcs_inputs_to_copy[1] = outputs_written >> 32;
-		}
+		if (sel == sctx->fixed_func_tcs_shader.cso)
+			key->mono.u.ff_tcs_inputs_to_copy = sctx->vs_shader.cso->outputs_written;
 		break;
 	case PIPE_SHADER_TESS_EVAL:
 		if (sctx->gs_shader.cso)

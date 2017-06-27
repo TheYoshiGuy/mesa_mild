@@ -378,9 +378,21 @@ struct si_shader_selector {
  * -> = merged with the next stage
  */
 
+/* Use the byte alignment for all following structure members for optimal
+ * shader key memory footprint.
+ */
+#pragma pack(push, 1)
+
 /* Common VS bits between the shader key and the prolog key. */
 struct si_vs_prolog_bits {
-	unsigned	instance_divisors[SI_MAX_ATTRIBS];
+	/* - If neither "is_one" nor "is_fetched" has a bit set, the instance
+	 *   divisor is 0.
+	 * - If "is_one" has a bit set, the instance divisor is 1.
+	 * - If "is_fetched" has a bit set, the instance divisor will be loaded
+	 *   from the constant buffer.
+	 */
+	uint16_t	instance_divisor_is_one;     /* bitmask of inputs */
+	uint16_t	instance_divisor_is_fetched; /* bitmask of inputs */
 };
 
 /* Common TCS bits between the shader key and the epilog key. */
@@ -492,8 +504,7 @@ struct si_shader_key {
 		uint8_t		vs_fix_fetch[SI_MAX_ATTRIBS];
 
 		union {
-			/* Don't use "uint64_t" in order to get 32-bit alignment. */
-			uint32_t	ff_tcs_inputs_to_copy[2]; /* for fixed-func TCS */
+			uint64_t	ff_tcs_inputs_to_copy; /* for fixed-func TCS */
 			/* When PS needs PrimID and GS is disabled. */
 			unsigned	vs_export_prim_id:1;
 		} u;
@@ -502,8 +513,7 @@ struct si_shader_key {
 	/* Optimization flags for asynchronous compilation only. */
 	struct {
 		/* For HW VS (it can be VS, TES, GS) */
-		/* Don't use "uint64_t" in order to get 32-bit alignment. */
-		uint32_t	kill_outputs[2]; /* "get_unique_index" bits */
+		uint64_t	kill_outputs; /* "get_unique_index" bits */
 		unsigned	clip_disable:1;
 
 		/* For shaders where monolithic variants have better code.
@@ -515,6 +525,9 @@ struct si_shader_key {
 		unsigned	prefer_mono:1;
 	} opt;
 };
+
+/* Restore the pack alignment to default. */
+#pragma pack(pop)
 
 struct si_shader_config {
 	unsigned			num_sgprs;
