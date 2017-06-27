@@ -1699,7 +1699,7 @@ isl_surf_get_ccs_surf(const struct isl_device *dev,
    if (ISL_DEV_GEN(dev) <= 8 && surf->dim != ISL_SURF_DIM_2D)
       return false;
 
-   if (isl_format_is_compressed(surf->format))
+   if (!isl_format_supports_rendering(dev->info, surf->format))
       return false;
 
    /* TODO: More conditions where it can fail. */
@@ -1736,14 +1736,19 @@ isl_surf_get_ccs_surf(const struct isl_device *dev,
       return false;
    }
 
+   /* Multi-LOD and multi-layer CCS isn't supported on gen7. */
+   const uint8_t levels = ISL_DEV_GEN(dev) <= 7 ? 1 : surf->levels;
+   const uint32_t array_len = ISL_DEV_GEN(dev) <= 7 ?
+                              1 : surf->logical_level0_px.array_len;
+
    return isl_surf_init(dev, ccs_surf,
                         .dim = surf->dim,
                         .format = ccs_format,
                         .width = surf->logical_level0_px.width,
                         .height = surf->logical_level0_px.height,
                         .depth = surf->logical_level0_px.depth,
-                        .levels = surf->levels,
-                        .array_len = surf->logical_level0_px.array_len,
+                        .levels = levels,
+                        .array_len = array_len,
                         .samples = 1,
                         .usage = ISL_SURF_USAGE_CCS_BIT,
                         .tiling_flags = ISL_TILING_CCS_BIT);

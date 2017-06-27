@@ -1436,10 +1436,15 @@ void anv_CmdResolveImage(
 void
 anv_image_ccs_clear(struct anv_cmd_buffer *cmd_buffer,
                     const struct anv_image *image,
-                    const struct isl_view *view,
-                    const VkImageSubresourceRange *subresourceRange)
+                    const uint32_t base_level, const uint32_t level_count,
+                    const uint32_t base_layer, uint32_t layer_count)
 {
    assert(image->type == VK_IMAGE_TYPE_3D || image->extent.depth == 1);
+
+   if (image->type == VK_IMAGE_TYPE_3D) {
+      assert(base_layer == 0);
+      assert(layer_count == anv_minify(image->extent.depth, base_level));
+   }
 
    struct blorp_batch batch;
    blorp_batch_init(&cmd_buffer->device->blorp, &batch, cmd_buffer, 0);
@@ -1466,11 +1471,8 @@ anv_image_ccs_clear(struct anv_cmd_buffer *cmd_buffer,
    cmd_buffer->state.pending_pipe_bits |=
       ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT | ANV_PIPE_CS_STALL_BIT;
 
-   const uint32_t level_count =
-      view ? view->levels : anv_get_levelCount(image, subresourceRange);
    for (uint32_t l = 0; l < level_count; l++) {
-      const uint32_t level =
-         (view ? view->base_level : subresourceRange->baseMipLevel) + l;
+      const uint32_t level = base_level + l;
 
       const VkExtent3D extent = {
          .width = anv_minify(image->extent.width, level),
@@ -1478,21 +1480,13 @@ anv_image_ccs_clear(struct anv_cmd_buffer *cmd_buffer,
          .depth = anv_minify(image->extent.depth, level),
       };
 
-      /* Blorp likes to treat 2D_ARRAY and 3D the same. */
-      uint32_t blorp_base_layer, blorp_layer_count;
-      if (view) {
-         blorp_base_layer = view->base_array_layer;
-         blorp_layer_count = view->array_len;
-      } else if (image->type == VK_IMAGE_TYPE_3D) {
-         blorp_base_layer = 0;
-         blorp_layer_count = extent.depth;
-      } else {
-         blorp_base_layer = subresourceRange->baseArrayLayer;
-         blorp_layer_count = anv_get_layerCount(image, subresourceRange);
-      }
+      if (image->type == VK_IMAGE_TYPE_3D)
+         layer_count = extent.depth;
 
+      assert(level < anv_image_aux_levels(image));
+      assert(base_layer + layer_count <= anv_image_aux_layers(image, level));
       blorp_fast_clear(&batch, &surf, surf.surf->format,
-                       level, blorp_base_layer, blorp_layer_count,
+                       level, base_layer, layer_count,
                        0, 0, extent.width, extent.height);
    }
 
@@ -1502,7 +1496,6 @@ anv_image_ccs_clear(struct anv_cmd_buffer *cmd_buffer,
 
 static void
 ccs_resolve_attachment(struct anv_cmd_buffer *cmd_buffer,
-                       struct blorp_batch *batch,
                        uint32_t att)
 {
    struct anv_framebuffer *fb = cmd_buffer->state.framebuffer;
@@ -1598,12 +1591,6 @@ ccs_resolve_attachment(struct anv_cmd_buffer *cmd_buffer,
    if (resolve_op == BLORP_FAST_CLEAR_OP_NONE)
       return;
 
-   struct blorp_surf surf;
-   get_blorp_surf_for_anv_image(image, VK_IMAGE_ASPECT_COLOR_BIT,
-                                att_state->aux_usage, &surf);
-   if (att_state->fast_clear)
-      surf.clear_color = vk_to_isl_color(att_state->clear_value.color);
-
    /* From the Sky Lake PRM Vol. 7, "Render Target Resolve":
     *
     *    "When performing a render target resolve, PIPE_CONTROL with end of
@@ -1619,12 +1606,8 @@ ccs_resolve_attachment(struct anv_cmd_buffer *cmd_buffer,
    cmd_buffer->state.pending_pipe_bits |=
       ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT | ANV_PIPE_CS_STALL_BIT;
 
-   for (uint32_t layer = 0; layer < fb->layers; layer++) {
-      blorp_ccs_resolve(batch, &surf,
-                        iview->isl.base_level,
-                        iview->isl.base_array_layer + layer,
-                        iview->isl.format, resolve_op);
-   }
+   anv_ccs_resolve(cmd_buffer, att_state->color_rt_state, image,
+                   iview->isl.base_level, fb->layers, resolve_op);
 
    cmd_buffer->state.pending_pipe_bits |=
       ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT | ANV_PIPE_CS_STALL_BIT;
@@ -1642,16 +1625,13 @@ anv_cmd_buffer_resolve_subpass(struct anv_cmd_buffer *cmd_buffer)
    struct anv_subpass *subpass = cmd_buffer->state.subpass;
 
 
-   struct blorp_batch batch;
-   blorp_batch_init(&cmd_buffer->device->blorp, &batch, cmd_buffer, 0);
-
    for (uint32_t i = 0; i < subpass->color_count; ++i) {
       const uint32_t att = subpass->color_attachments[i].attachment;
       if (att == VK_ATTACHMENT_UNUSED)
          continue;
 
       assert(att < cmd_buffer->state.pass->attachment_count);
-      ccs_resolve_attachment(cmd_buffer, &batch, att);
+      ccs_resolve_attachment(cmd_buffer, att);
    }
 
    if (subpass->has_resolve) {
@@ -1690,6 +1670,10 @@ anv_cmd_buffer_resolve_subpass(struct anv_cmd_buffer *cmd_buffer)
          const VkRect2D render_area = cmd_buffer->state.render_area;
 
          assert(src_iview->aspect_mask == dst_iview->aspect_mask);
+
+         struct blorp_batch batch;
+         blorp_batch_init(&cmd_buffer->device->blorp, &batch, cmd_buffer, 0);
+
          resolve_image(&batch, src_iview->image,
                        src_iview->isl.base_level,
                        src_iview->isl.base_array_layer,
@@ -1701,11 +1685,12 @@ anv_cmd_buffer_resolve_subpass(struct anv_cmd_buffer *cmd_buffer)
                        render_area.offset.x, render_area.offset.y,
                        render_area.extent.width, render_area.extent.height);
 
-         ccs_resolve_attachment(cmd_buffer, &batch, dst_att);
+         blorp_batch_finish(&batch);
+
+         ccs_resolve_attachment(cmd_buffer, dst_att);
       }
    }
 
-   blorp_batch_finish(&batch);
 }
 
 void
@@ -1743,5 +1728,43 @@ anv_gen8_hiz_op_resolve(struct anv_cmd_buffer *cmd_buffer,
    surf.clear_color.f32[0] = ANV_HZ_FC_VAL;
 
    blorp_hiz_op(&batch, &surf, 0, 0, 1, op);
+   blorp_batch_finish(&batch);
+}
+
+void
+anv_ccs_resolve(struct anv_cmd_buffer * const cmd_buffer,
+                const struct anv_state surface_state,
+                const struct anv_image * const image,
+                const uint8_t level, const uint32_t layer_count,
+                const enum blorp_fast_clear_op op)
+{
+   assert(cmd_buffer && image);
+
+   /* The resolved subresource range must have a CCS buffer. */
+   assert(level < anv_image_aux_levels(image));
+   assert(layer_count <= anv_image_aux_layers(image, level));
+   assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT && image->samples == 1);
+
+   /* Create a binding table for this surface state. */
+   uint32_t binding_table;
+   VkResult result =
+      binding_table_for_surface_state(cmd_buffer, surface_state,
+                                      &binding_table);
+   if (result != VK_SUCCESS)
+      return;
+
+   struct blorp_batch batch;
+   blorp_batch_init(&cmd_buffer->device->blorp, &batch, cmd_buffer, 0);
+
+   struct blorp_surf surf;
+   get_blorp_surf_for_anv_image(image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                image->aux_usage == ISL_AUX_USAGE_CCS_E ?
+                                ISL_AUX_USAGE_CCS_E : ISL_AUX_USAGE_CCS_D,
+                                &surf);
+
+   blorp_ccs_resolve_attachment(&batch, binding_table, &surf, level,
+                                layer_count, image->color_surface.isl.format,
+                                op);
+
    blorp_batch_finish(&batch);
 }

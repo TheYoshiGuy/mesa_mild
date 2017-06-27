@@ -2486,6 +2486,10 @@ MemoryOpt::combineLd(Record *rec, Instruction *ld)
 
    assert(sizeRc + sizeLd <= 16 && offRc != offLd);
 
+   // lock any stores that overlap with the load being merged into the
+   // existing record.
+   lockStores(ld);
+
    for (j = 0; sizeRc; sizeRc -= rec->insn->getDef(j)->reg.size, ++j);
 
    if (offLd < offRc) {
@@ -2541,6 +2545,10 @@ MemoryOpt::combineSt(Record *rec, Instruction *st)
    // for compute indirect stores are not guaranteed to be aligned
    if (prog->getType() == Program::TYPE_COMPUTE && rec->rel[0])
       return false;
+
+   // remove any existing load/store records for the store being merged into
+   // the existing record.
+   purgeRecords(st, DATA_FILE_COUNT);
 
    st->takeExtraSources(0, extra); // save predicate and indirect address
 
@@ -2641,7 +2649,7 @@ MemoryOpt::findRecord(const Instruction *insn, bool load, bool& isAdj) const
    Record *it = load ? loads[sym->reg.file] : stores[sym->reg.file];
 
    for (; it; it = it->next) {
-      if (it->locked && insn->op != OP_LOAD)
+      if (it->locked && insn->op != OP_LOAD && insn->op != OP_VFETCH)
          continue;
       if ((it->offset >> 4) != (sym->reg.data.offset >> 4) ||
           it->rel[0] != insn->getIndirect(0, 0) ||
@@ -2779,11 +2787,15 @@ MemoryOpt::Record::overlaps(const Instruction *ldst) const
    Record that;
    that.set(ldst);
 
-   if (this->fileIndex != that.fileIndex)
+   // This assumes that images/buffers can't overlap. They can.
+   // TODO: Plumb the restrict logic through, and only skip when it's a
+   // restrict situation, or there can implicitly be no writes.
+   if (this->fileIndex != that.fileIndex && this->rel[1] == that.rel[1])
       return false;
 
    if (this->rel[0] || that.rel[0])
       return this->base == that.base;
+
    return
       (this->offset < that.offset + that.size) &&
       (this->offset + this->size > that.offset);
