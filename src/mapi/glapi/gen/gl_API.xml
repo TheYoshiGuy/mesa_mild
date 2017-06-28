@@ -1961,7 +1961,7 @@
         <glx rop="78"/>
     </function>
 
-    <function name="CullFace" es1="1.0" es2="2.0">
+    <function name="CullFace" es1="1.0" es2="2.0" no_error="true">
         <param name="mode" type="GLenum"/>
         <glx rop="79"/>
     </function>
@@ -1990,7 +1990,7 @@
         <glx rop="83"/>
     </function>
 
-    <function name="FrontFace" es1="1.0" es2="2.0">
+    <function name="FrontFace" es1="1.0" es2="2.0" no_error="true">
         <param name="mode" type="GLenum"/>
         <glx rop="84"/>
     </function>
@@ -2291,7 +2291,7 @@
         <glx rop="126"/>
     </function>
 
-    <function name="Clear" es1="1.0" es2="2.0">
+    <function name="Clear" es1="1.0" es2="2.0" no_error="true">
         <param name="mask" type="GLbitfield"/>
         <glx rop="127"/>
     </function>
@@ -2570,7 +2570,7 @@
         <glx rop="163"/>
     </function>
 
-    <function name="DepthFunc" es1="1.0" es2="2.0">
+    <function name="DepthFunc" es1="1.0" es2="2.0" no_error="true">
         <param name="func" type="GLenum"/>
         <glx rop="164"/>
     </function>
@@ -2626,7 +2626,7 @@
         <glx rop="170" large="true"/>
     </function>
 
-    <function name="ReadBuffer" es2="3.0">
+    <function name="ReadBuffer" es2="3.0" no_error="true">
         <param name="mode" type="GLenum"/>
         <glx rop="171"/>
     </function>
@@ -3345,7 +3345,7 @@
         <glx sop="144"/>
     </function>
 
-    <function name="GenTextures" es1="1.0" es2="2.0">
+    <function name="GenTextures" es1="1.0" es2="2.0" no_error="true">
         <param name="n" type="GLsizei" counter="true"/>
         <param name="textures" type="GLuint *" output="true" count="n"/>
         <glx sop="145" always_array="true"/>
@@ -5068,7 +5068,7 @@
         <glx ignore="true"/>
     </function>
 
-    <function name="GenBuffers" es1="1.1" es2="2.0">
+    <function name="GenBuffers" es1="1.1" es2="2.0" no_error="true">
         <param name="n" type="GLsizei" counter="true"/>
         <param name="buffer" type="GLuint *" output="true" count="n"/>
         <glx ignore="true"/>
@@ -5295,13 +5295,13 @@
         <glx ignore="true"/>
     </function>
 
-    <function name="AttachShader" es2="2.0">
+    <function name="AttachShader" es2="2.0" no_error="true">
         <param name="program" type="GLuint"/>
         <param name="shader" type="GLuint"/>
         <glx ignore="true"/>
     </function>
 
-    <function name="BindAttribLocation" es2="2.0">
+    <function name="BindAttribLocation" es2="2.0" no_error="true">
         <param name="program" type="GLuint"/>
         <param name="index" type="GLuint"/>
         <param name="name" type="const GLchar *"/>
@@ -5318,7 +5318,7 @@
         <glx ignore="true"/>
     </function>
 
-    <function name="CreateShader" es2="2.0">
+    <function name="CreateShader" es2="2.0" no_error="true">
         <param name="type" type="GLenum"/>
         <return type="GLuint"/>
         <glx ignore="true"/>
@@ -7687,7 +7687,7 @@
         <glx ignore="true"/>
     </function>
 
-    <function name="CreateShaderObjectARB">
+    <function name="CreateShaderObjectARB" no_error="true">
         <param name="shaderType" type="GLenum"/>
         <return type="GLhandleARB"/>
         <glx ignore="true"/>
@@ -7709,7 +7709,7 @@
         <glx ignore="true"/>
     </function>
 
-    <function name="AttachObjectARB">
+    <function name="AttachObjectARB" no_error="true">
         <param name="containerObj" type="GLhandleARB"/>
         <param name="obj" type="GLhandleARB"/>
         <glx ignore="true"/>

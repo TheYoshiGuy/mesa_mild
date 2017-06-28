@@ -232,10 +232,21 @@ _mesa_GetUniformIndices(GLuint program,
 			GLsizei uniformCount,
 			const GLchar * const *uniformNames,
 			GLuint *uniformIndices);
+
+void GLAPIENTRY
+_mesa_UniformBlockBinding_no_error(GLuint program, GLuint uniformBlockIndex,
+                                   GLuint uniformBlockBinding);
+
 void GLAPIENTRY
 _mesa_UniformBlockBinding(GLuint program,
 			  GLuint uniformBlockIndex,
 			  GLuint uniformBlockBinding);
+
+void GLAPIENTRY
+_mesa_ShaderStorageBlockBinding_no_error(GLuint program,
+                                         GLuint shaderStorageBlockIndex,
+                                         GLuint shaderStorageBlockBinding);
+
 void GLAPIENTRY
 _mesa_ShaderStorageBlockBinding(GLuint program,
                                 GLuint shaderStorageBlockIndex,

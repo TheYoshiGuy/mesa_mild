@@ -1085,6 +1085,31 @@ _mesa_GetUniformIndices(GLuint program,
    }
 }
 
+static void
+uniform_block_binding(struct gl_context *ctx, struct gl_shader_program *shProg,
+                      GLuint uniformBlockIndex, GLuint uniformBlockBinding)
+{
+   if (shProg->data->UniformBlocks[uniformBlockIndex].Binding !=
+       uniformBlockBinding) {
+
+      FLUSH_VERTICES(ctx, 0);
+      ctx->NewDriverState |= ctx->DriverFlags.NewUniformBuffer;
+
+      shProg->data->UniformBlocks[uniformBlockIndex].Binding =
+         uniformBlockBinding;
+   }
+}
+
+void GLAPIENTRY
+_mesa_UniformBlockBinding_no_error(GLuint program, GLuint uniformBlockIndex,
+                                   GLuint uniformBlockBinding)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   struct gl_shader_program *shProg = _mesa_lookup_shader_program(ctx, program);
+   uniform_block_binding(ctx, shProg, uniformBlockIndex, uniformBlockBinding);
+}
+
 void GLAPIENTRY
 _mesa_UniformBlockBinding(GLuint program,
 			  GLuint uniformBlockIndex,
@@ -1117,15 +1142,36 @@ _mesa_UniformBlockBinding(GLuint program,
       return;
    }
 
-   if (shProg->data->UniformBlocks[uniformBlockIndex].Binding !=
-       uniformBlockBinding) {
+   uniform_block_binding(ctx, shProg, uniformBlockIndex, uniformBlockBinding);
+}
+
+static void
+shader_storage_block_binding(struct gl_context *ctx,
+                             struct gl_shader_program *shProg,
+                             GLuint shaderStorageBlockIndex,
+                             GLuint shaderStorageBlockBinding)
+{
+   if (shProg->data->ShaderStorageBlocks[shaderStorageBlockIndex].Binding !=
+       shaderStorageBlockBinding) {
 
       FLUSH_VERTICES(ctx, 0);
-      ctx->NewDriverState |= ctx->DriverFlags.NewUniformBuffer;
+      ctx->NewDriverState |= ctx->DriverFlags.NewShaderStorageBuffer;
 
-      shProg->data->UniformBlocks[uniformBlockIndex].Binding =
-         uniformBlockBinding;
+      shProg->data->ShaderStorageBlocks[shaderStorageBlockIndex].Binding =
+         shaderStorageBlockBinding;
    }
+}
+
+void GLAPIENTRY
+_mesa_ShaderStorageBlockBinding_no_error(GLuint program,
+                                         GLuint shaderStorageBlockIndex,
+                                         GLuint shaderStorageBlockBinding)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   struct gl_shader_program *shProg = _mesa_lookup_shader_program(ctx, program);
+   shader_storage_block_binding(ctx, shProg, shaderStorageBlockIndex,
+                                shaderStorageBlockBinding);
 }
 
 void GLAPIENTRY
@@ -1162,15 +1208,8 @@ _mesa_ShaderStorageBlockBinding(GLuint program,
       return;
    }
 
-   if (shProg->data->ShaderStorageBlocks[shaderStorageBlockIndex].Binding !=
-       shaderStorageBlockBinding) {
-
-      FLUSH_VERTICES(ctx, 0);
-      ctx->NewDriverState |= ctx->DriverFlags.NewShaderStorageBuffer;
-
-      shProg->data->ShaderStorageBlocks[shaderStorageBlockIndex].Binding =
-         shaderStorageBlockBinding;
-   }
+   shader_storage_block_binding(ctx, shProg, shaderStorageBlockIndex,
+                                shaderStorageBlockBinding);
 }
 
 /**
