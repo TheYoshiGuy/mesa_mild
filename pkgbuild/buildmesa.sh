@@ -132,7 +132,7 @@ function build_all {
 function end_notice {
     Log "WARNING" "if system is unbootable after installation boot kernel with commandline < modprobe.blacklist=amdgpu,radeon > and reinstall normal packages from mesa-git"
     Log "INFO" "To install packages type"
-    find ./ -name "*.xz" | tr '\n' ' ' |awk '{ printf("pacman -Udd %s --force",$0) }'
+    find ./ -name "*.xz" | tr '\n' ' ' |awk '{ printf("sudo pacman -Udd %s --force",$0) }'
     echo ""
     Log "INFO" "Remember to add 'IgnoreGroup = mesagit' to /etc/pacman.conf if you're satisfied (or take the risk to have it all overwritten)"
 }
