@@ -8,7 +8,7 @@
 #NOTICE:ATTENTION Please, setup (or check it's set) << \\n [mesa-git] \\n Server = http://pkgbuild.com/~lcarlier/$repo/$arch \\n >>  as first entry after [config]'s section in /etc/pacman.conf
 #NOTICE:WARNING If you fail to setup [mesa-git] in pacman.conf in first position ... -> GET LOST ;) 
 #NOTICE:INFO You must edit setting called "flavor" in this script if you want to remove intel IGPU support
-
+#NOTICE:ATTENTION If it's the first time you build libdrm after changing "flavor", you should install it before restarting script (or  mesa is going to fail because of dependencies)
 
 # Settings
 flavor=""  # "amd-only" or "" for intel's IGD
