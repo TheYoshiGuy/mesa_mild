@@ -125,10 +125,6 @@ package_lib32-mesa-libgl-git () {
   ln -s libEGL.so.1.0.0               "$pkgdir"/usr/lib32/libEGL.so.1
   ln -s libEGL.so.1.0.0               "$pkgdir"/usr/lib32/libEGL.so
 
-  ln -s /usr/lib32/mesa/libGLESv1_CM.so.1.1.0 "$pkgdir"/usr/lib32/libGLESv1_CM.so.1.1.0
-  ln -s libGLESv1_CM.so.1.1.0               "$pkgdir"/usr/lib32/libGLESv1_CM.so.1
-  ln -s libGLESv1_CM.so.1.1.0               "$pkgdir"/usr/lib32/libGLESv1_CM.so
-
   ln -s /usr/lib32/mesa/libGLESv2.so.2.0.0 "$pkgdir"/usr/lib32/libGLESv2.so.2.0.0
   ln -s libGLESv2.so.2.0.0               "$pkgdir"/usr/lib32/libGLESv2.so.2
   ln -s libGLESv2.so.2.0.0               "$pkgdir"/usr/lib32/libGLESv2.so
