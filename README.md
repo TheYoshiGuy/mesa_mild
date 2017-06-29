@@ -8,8 +8,10 @@ This version incorporate some modifications  for GALLIUM3D drivers and i965:
 Note: If you enable "Allow a relaxed core profile", you must disable glthread  in driconf 
 
 The modifications shall be used only in conjunction with
-MESA_GL_VERSION_OVERRIDE=4.5 for "Allow a relaxed core profile"
-MESA_GL_VERSION_OVERRIDE=4.5COMPAT and "Allow an higher compat profile for application that request it"
+
+ - MESA_GL_VERSION_OVERRIDE=4.5 for "Allow a relaxed core profile"
+
+ - MESA_GL_VERSION_OVERRIDE=4.5COMPAT and "Allow an higher compat profile for application that request it"
 
 Some applications will require additionaly "Force GLSL extension behavior to 'warn'"
 
@@ -18,6 +20,7 @@ Cemu specifics :
  - In the binary, replace "#version 420" with "#version 450"
  - Enable "Force GLSL extension behavior to 'warn'" in driconf
  - If you're brave enough to use an intel IGD, you must set
+
   MESA_VENDOR_OVERRIDE="mesa" MESA_RENDERER_OVERRIDE="mesa"
   (if you endup with a letter box display, it means it's not set)
 

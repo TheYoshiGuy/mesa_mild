@@ -127,7 +127,7 @@ DRI_CONF_OPT_END
 
 #define DRI_CONF_ALLOW_RELAXED_CORE_PROFILE(def)\
 DRI_CONF_OPT_BEGIN_B(allow_relaxed_core_profile,def) \
-DRI_CONF_DESC(en,gettext("Changes CORE PROFILE behavior")) \
+DRI_CONF_DESC(en,gettext("Allow a relaxed core profile")) \
 DRI_CONF_OPT_END
 
 #define DRI_CONF_FORCE_GLSL_ABS_SQRT(def) \
