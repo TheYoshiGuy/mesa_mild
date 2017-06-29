@@ -2545,13 +2545,13 @@
         <glx rop="159"/>
     </function>
 
-    <function name="BlendFunc" es1="1.0" es2="2.0">
+    <function name="BlendFunc" es1="1.0" es2="2.0" no_error="true">
         <param name="sfactor" type="GLenum"/>
         <param name="dfactor" type="GLenum"/>
         <glx rop="160"/>
     </function>
 
-    <function name="LogicOp" es1="1.0">
+    <function name="LogicOp" es1="1.0" no_error="true">
         <param name="opcode" type="GLenum"/>
         <glx rop="161"/>
     </function>
@@ -2593,13 +2593,13 @@
         <glx rop="167"/>
     </function>
 
-    <function name="PixelStoref">
+    <function name="PixelStoref" no_error="true">
         <param name="pname" type="GLenum"/>
         <param name="param" type="GLfloat"/>
         <glx sop="109" handcode="client"/>
     </function>
 
-    <function name="PixelStorei" es1="1.0" es2="2.0">
+    <function name="PixelStorei" es1="1.0" es2="2.0" no_error="true">
         <param name="pname" type="GLenum"/>
         <param name="param" type="GLint"/>
         <glx sop="110" handcode="client"/>
@@ -4709,7 +4709,7 @@
     </enum>
     <enum name="COMPARE_R_TO_TEXTURE"                     value="0x884E"/>
 
-    <function name="BlendFuncSeparate" es2="2.0">
+    <function name="BlendFuncSeparate" es2="2.0" no_error="true">
         <param name="sfactorRGB" type="GLenum"/>
         <param name="dfactorRGB" type="GLenum"/>
         <param name="sfactorAlpha" type="GLenum"/>
@@ -5340,13 +5340,13 @@
         <glx ignore="true"/>
     </function>
 
-    <function name="DisableVertexAttribArray" es2="2.0">
+    <function name="DisableVertexAttribArray" es2="2.0" no_error="true">
         <param name="index" type="GLuint"/>
         <glx ignore="true"/>
         <glx handcode="true"/>
     </function>
 
-    <function name="EnableVertexAttribArray" es2="2.0">
+    <function name="EnableVertexAttribArray" es2="2.0" no_error="true">
         <param name="index" type="GLuint"/>
         <glx ignore="true"/>
         <glx handcode="true"/>
@@ -5427,7 +5427,7 @@
         <glx ignore="true"/>
     </function>
 
-    <function name="GetUniformLocation" es2="2.0">
+    <function name="GetUniformLocation" es2="2.0" no_error="true">
         <param name="program" type="GLuint"/>
         <param name="name" type="const GLchar *"/>
         <return type="GLint"/>
