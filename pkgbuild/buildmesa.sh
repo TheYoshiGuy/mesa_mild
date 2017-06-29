@@ -1,7 +1,8 @@
 #!/bin/bash
-# BUG : using -march=native -O2 breaks steam https://bugs.freedesktop.org/show_bug.cgi?id=101484
+# BUG WORKED AROUND: using -march=native -O2 breaks steam https://bugs.freedesktop.org/show_bug.cgi?id=101484
 
-#NOTICE:WARNING building mesa with -O2 and native optimisations breaks steam with Haswell+
+# adding revert git revert 2b8b9a56efc24cc0f27469bf1532c288cdca2076            
+# deprecated #NOTICE:WARNING building mesa with -O2 and native optimisations breaks steam with Haswell+
 #NOTICE:WARNING building wine with -O2 and native optimisations breaks rendering
 #NOTICE:INFO Changing RENDERER is sometimes required for intel IGD
 #NOTICE:INFO Ensure MAKEFLAGS is correctly set up in buildpkg (unless you're found of wasting time)
@@ -96,14 +97,13 @@ Log "INFO" "Cloning repositories"
 for name in ${!SRC_REPOSITORIES[*]} ; do
         Log "INFO" "Cloning $name from  ${SRC_REPOSITORIES[${name}]}"
         git clone ${SRC_REPOSITORIES[${name}]} $name  &> /dev/null
-done 
+done
 }
 
 function pre_check {
-[ $UID -eq 0 ] &&  die "This script must be ran by and normal user with sudo configured"
-
-[ "x[mesa-git]" == "x$(check_mesa_git_configured)" ] || die "Mesa git must be in first position in /etc/pacman.conf"
-check_multilib_configured || die "Multilib must be configured in /etc/pacman.conf"
+    [ $UID -eq 0 ] &&  die "This script must be ran by and normal user with sudo configured"
+    [ "x[mesa-git]" == "x$(check_mesa_git_configured)" ] || die "Mesa git must be in first position in /etc/pacman.conf"
+    check_multilib_configured || die "Multilib must be configured in /etc/pacman.conf"
 }
 
 function prebuild_all {
@@ -136,9 +136,14 @@ function end_notice {
     echo ""
     Log "INFO" "Remember to add 'IgnoreGroup = mesagit' to /etc/pacman.conf if you're satisfied (or take the risk to have it all overwritten)"
 }
+function mesa_revert {
+  Log "INFO" "Reverting 2b8b9a56efc24cc0f27469bf1532c288cdca2076"
+  cd mesa
+  git revert 2b8b9a56efc24cc0f27469bf1532c288cdca2076
+  cd ..
+}
 
-
-#MAIN 
+#MAIN
 trap "die 'Interrupted by user'" SIGHUP SIGINT SIGTERM
 ask_clean
 display_notices
@@ -146,6 +151,7 @@ pre_check
 program_check
 install_packages
 clone_repositories
+mesa_revert
 prebuild_all
 build_all
 end_notice
