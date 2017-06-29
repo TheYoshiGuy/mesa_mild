@@ -251,10 +251,7 @@ struct st_config_options
    boolean allow_higher_compat_version;
    boolean glsl_zero_init;
    boolean force_glsl_abs_sqrt;
-   boolean allow_minus_one_index_uniform;
-   boolean allow_extended_primitive_type;
-   boolean allow_gl_extensions_in_core;
-   boolean allow_relaxed_vbo_validation;
+   boolean allow_relaxed_core_profile;
    unsigned char config_options_sha1[20];
 };
 

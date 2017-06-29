@@ -479,7 +479,7 @@ validate_array(struct gl_context *ctx, const char *func,
     *
     * The check for VBOs is handled below.
     */
-   if (ctx->API == API_OPENGL_CORE && (vao == ctx->Array.DefaultVAO) && (!ctx->Const.AllowRelaxedVboValidation)) {
+   if (ctx->API == API_OPENGL_CORE && (vao == ctx->Array.DefaultVAO) && (!ctx->Const.AllowRelaxedCoreProfile)) {
       _mesa_error(ctx, GL_INVALID_OPERATION, "%s(no array object bound)",
                   func);
       return;

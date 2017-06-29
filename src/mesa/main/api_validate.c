@@ -314,7 +314,7 @@ check_valid_to_render(struct gl_context *ctx, const char *function)
        *     "An INVALID_OPERATION error is generated if no vertex array
        *     object is bound (see section 10.3.1)."
        */
-      if (ctx->Array.VAO == ctx->Array.DefaultVAO && (!ctx->Const.AllowRelaxedVboValidation)) {
+      if (ctx->Array.VAO == ctx->Array.DefaultVAO && (!ctx->Const.AllowRelaxedCoreProfile)) {
          _mesa_error(ctx, GL_INVALID_OPERATION, "%s(no VAO bound)", function);
          return false;
       }
@@ -346,7 +346,7 @@ _mesa_is_valid_prim_mode(const struct gl_context *ctx, GLenum mode)
     * right approach, but at least GCC 4.7.2 generates some pretty dire code
     * for the common case.
     */
-   if (likely(mode <= GL_TRIANGLE_FAN) || (ctx->Const.AllowExtendedPrimitiveType))
+   if (likely(mode <= GL_TRIANGLE_FAN) || (ctx->Const.AllowRelaxedCoreProfile))
       return true;
 
    if (mode <= GL_POLYGON)

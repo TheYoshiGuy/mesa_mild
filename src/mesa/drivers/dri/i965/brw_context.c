@@ -900,17 +900,8 @@ brw_process_driconf_options(struct brw_context *brw)
    ctx->Const.AllowGLSLBuiltinVariableRedeclaration =
       driQueryOptionb(options, "allow_glsl_builtin_variable_redeclaration");
 
-   ctx->Const.AllowMinusOneIndexUniform =
-      driQueryOptionb(options, "allow_minus_one_index_uniform");
-
-   ctx->Const.AllowExtendedPrimitiveType =
-      driQueryOptionb(options, "allow_extended_primitive_type");
-
-   ctx->Const.AllowGLExtensionsInCore =
-      driQueryOptionb(options, "allow_gl_extensions_in_core");
-
-   ctx->Const.AllowRelaxedVboValidation =
-      driQueryOptionb(options, "allow_relaxed_vbo_validation");
+   ctx->Const.AllowRelaxedCoreProfile =
+      driQueryOptionb(options, "allow_relaxed_core_profile");
 
    ctx->Const.AllowHigherCompatVersion =
       driQueryOptionb(options, "allow_higher_compat_version");

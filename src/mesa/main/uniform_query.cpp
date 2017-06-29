@@ -1038,7 +1038,7 @@ _mesa_uniform(GLint location, GLsizei count, const GLvoid *values,
    int size_mul = glsl_base_type_is_64bit(basicType) ? 2 : 1;
 
    struct gl_uniform_storage *uni;
-   if (ctx->Const.AllowMinusOneIndexUniform && ( location == -1 ))
+   if (ctx->Const.AllowRelaxedCoreProfile && ( location == -1 ))
       return;
 
    if (_mesa_is_no_error_enabled(ctx)) {

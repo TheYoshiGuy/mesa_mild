@@ -892,13 +892,7 @@ void st_init_extensions(struct pipe_screen *screen,
 
    consts->AllowHigherCompatVersion = options->allow_higher_compat_version;
 
-   consts->AllowMinusOneIndexUniform = options->allow_minus_one_index_uniform;
-
-   consts->AllowRelaxedVboValidation = options->allow_relaxed_vbo_validation;
-
-   consts->AllowExtendedPrimitiveType = options->allow_extended_primitive_type;
-
-   consts->AllowGLExtensionsInCore = options->allow_gl_extensions_in_core;
+   consts->AllowRelaxedCoreProfile = options->allow_relaxed_core_profile;
 
    consts->ForceGLSLAbsSqrt = options->force_glsl_abs_sqrt;
 

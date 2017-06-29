@@ -117,10 +117,10 @@ _mesa_GetString( GLenum name )
 
    if (!ctx)
       return NULL;
-   const char *env_vendor = getenv("HMESA_VENDOR_OVERRIDE");
+   const char *env_vendor = getenv("MESA_VENDOR_OVERRIDE");
    if ((name == GL_VENDOR) && env_vendor)
       return (const GLubyte*) env_vendor;
-   const char *env_renderer = getenv("HMESA_RENDERER_OVERRIDE");
+   const char *env_renderer = getenv("MESA_RENDERER_OVERRIDE");
    if ((name == GL_RENDERER) && env_renderer)
       return (const GLubyte*) env_renderer;
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, NULL);
@@ -142,7 +142,7 @@ _mesa_GetString( GLenum name )
       case GL_VERSION:
          return (const GLubyte *) ctx->VersionString;
       case GL_EXTENSIONS:
-         if (ctx->API == API_OPENGL_CORE && (!ctx->Const.AllowGLExtensionsInCore)) {
+         if (ctx->API == API_OPENGL_CORE && (!ctx->Const.AllowRelaxedCoreProfile)) {
             _mesa_error(ctx, GL_INVALID_ENUM, "glGetString(GL_EXTENSIONS)");
             return (const GLubyte *) 0;
          }
