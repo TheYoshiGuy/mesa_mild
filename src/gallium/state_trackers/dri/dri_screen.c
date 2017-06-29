@@ -120,7 +120,7 @@ dri_fill_st_options(struct dri_screen *screen)
    options->glsl_zero_init = driQueryOptionb(optionCache, "glsl_zero_init");
    options->force_glsl_abs_sqrt =
       driQueryOptionb(optionCache, "force_glsl_abs_sqrt");
-    options->allow_relaxed_vbo_validation =
+    options->allow_relaxed_core_profile =
       driQueryOptionb(optionCache, "allow_relaxed_core_profile");
 
    driComputeOptionsSha1(optionCache, options->config_options_sha1);
