@@ -1,11 +1,11 @@
 #!/bin/bash
 # BUG WORKED AROUND: using -march=native -O2 breaks steam https://bugs.freedesktop.org/show_bug.cgi?id=101484
 
-# adding revert git revert 2b8b9a56efc24cc0f27469bf1532c288cdca2076            
+# adding revert git revert 2b8b9a56efc24cc0f27469bf1532c288cdca2076
 # deprecated #NOTICE:WARNING building mesa with -O2 and native optimisations breaks steam with Haswell+
 #NOTICE:WARNING building wine with -O2 and native optimisations breaks rendering
 #NOTICE:INFO Changing RENDERER is sometimes required for intel IGD
-#NOTICE:INFO Ensure MAKEFLAGS is correctly set up in buildpkg (unless you're found of wasting time)
+#NOTICE:INFO Ensure MAKEFLAGS is correctly set up in buildpkg (unless you're fond of wasting time)
 #NOTICE:ATTENTION Please, setup (or check it's set) << \\n [mesa-git] \\n Server = http://pkgbuild.com/~lcarlier/$repo/$arch \\n >>  as first entry after [config]'s section in /etc/pacman.conf
 #NOTICE:WARNING If you fail to setup [mesa-git] in pacman.conf in first position ... -> GET LOST ;) 
 #NOTICE:INFO You must edit setting called "flavor" in this script if you want to remove intel IGPU support
@@ -139,7 +139,7 @@ function end_notice {
 function mesa_revert {
   Log "INFO" "Reverting 2b8b9a56efc24cc0f27469bf1532c288cdca2076"
   cd mesa
-  git revert 2b8b9a56efc24cc0f27469bf1532c288cdca2076
+  git revert 2b8b9a56efc24cc0f27469bf1532c288cdca2076 --no-edit
   cd ..
 }
 
