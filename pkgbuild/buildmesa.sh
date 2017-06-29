@@ -18,7 +18,7 @@ declare -A SRC_REPOSITORIES=(  [mesa]="https://github.com/mikakev1/mesa_mild_com
 # GLOBALS
 curdir=$(pwd)
 
-if [ "x${flavor}" == "x" ] then 
+if [ "x${flavor}" == "x" ]; then 
 pckflavor=""
 else
 pckflavor="${flavor}."
