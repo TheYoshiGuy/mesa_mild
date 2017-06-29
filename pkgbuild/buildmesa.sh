@@ -6,8 +6,8 @@
 #NOTICE:INFO Changing RENDERER is sometimes required for intel IGD
 #NOTICE:INFO Ensure MAKEFLAGS is correctly set up in buildpkg (unless you're found of wasting time)
 #NOTICE:ATTENTION Please, setup (or check it's set) << \\n [mesa-git] \\n Server = http://pkgbuild.com/~lcarlier/$repo/$arch \\n >>  as first entry after [config]'s section in /etc/pacman.conf
-#NOTICE:WARNING If you fail to setup [mesa-git] in pacman.conf in first position ... -> GET LOST !
-#NOTICE:INFO You must edit setting called "flavor" in this script if you want to remove intel IGPU support"
+#NOTICE:WARNING If you fail to setup [mesa-git] in pacman.conf in first position ... -> GET LOST ;) 
+#NOTICE:INFO You must edit setting called "flavor" in this script if you want to remove intel IGPU support
 
 
 # Settings
@@ -17,8 +17,14 @@ declare -A SRC_REPOSITORIES=(  [mesa]="https://github.com/mikakev1/mesa_mild_com
 
 # GLOBALS
 curdir=$(pwd)
+
+if [ "x${flavor}" == "x" ] then 
+pckflavor=""
+else
 pckflavor="${flavor}."
-[ "x${flavor}" == "x" ]  && pckflavor=""
+fi
+
+
 mesasource="${curdir}/mesa"
 drmsource="${curdir}/libdrm"
 pkgbuilddir="$mesasource/pkgbuild"
