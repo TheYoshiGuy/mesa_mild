@@ -130,7 +130,7 @@ KNOBS = [
 
     ['MAX_DRAWS_IN_FLIGHT', {
         'type'      : 'uint32_t',
-        'default'   : '128',
+        'default'   : '256',
         'desc'      : ['Maximum number of draws outstanding before API thread blocks.',
                        'This value MUST be evenly divisible into 2^32'],
         'category'  : 'perf',
@@ -138,7 +138,7 @@ KNOBS = [
 
     ['MAX_PRIMS_PER_DRAW', {
         'type'      : 'uint32_t',
-        'default'   : '2040',
+        'default'   : '49152',
         'desc'      : ['Maximum primitives in a single Draw().',
                        'Larger primitives are split into smaller Draw calls.',
                        'Should be a multiple of (3 * vectorWidth).'],

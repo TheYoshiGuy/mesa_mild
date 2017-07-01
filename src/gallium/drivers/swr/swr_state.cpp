@@ -351,6 +351,7 @@ swr_create_vs_state(struct pipe_context *pipe,
       for (uint32_t i = 0; i < MAX_SO_STREAMS; i++) {
         swr_vs->soState.streamNumEntries[i] =
              _mm_popcnt_u32(swr_vs->soState.streamMasks[i]);
+        swr_vs->soState.vertexAttribOffset[i] = VERTEX_ATTRIB_START_SLOT; // TODO: optimize
        }
    }
 
@@ -1293,7 +1294,7 @@ swr_update_derived(struct pipe_context *pipe,
          const uint8_t *p_data;
          uint32_t size, pitch;
 
-         pitch = p_draw_info->index_size ? p_draw_info->index_size : sizeof(uint32_t);
+         pitch = info.index_size ? info.index_size : sizeof(uint32_t);
          index_type = swr_convert_index_type(pitch);
 
          if (!info.has_user_indices) {
@@ -1319,7 +1320,7 @@ swr_update_derived(struct pipe_context *pipe,
          }
 
          SWR_INDEX_BUFFER_STATE swrIndexBuffer;
-         swrIndexBuffer.format = swr_convert_index_type(p_draw_info->index_size);
+         swrIndexBuffer.format = swr_convert_index_type(info.index_size);
          swrIndexBuffer.pIndices = p_data;
          swrIndexBuffer.size = size;
 
@@ -1747,6 +1748,7 @@ swr_update_derived(struct pipe_context *pipe,
       &ctx->vs->info.base;
    backendState.readRenderTargetArrayIndex = pLastFE->writes_layer;
    backendState.readViewportArrayIndex = pLastFE->writes_viewport_index;
+   backendState.vertexAttribOffset = VERTEX_ATTRIB_START_SLOT; // TODO: optimize
 
    SwrSetBackendState(ctx->swrContext, &backendState);
 

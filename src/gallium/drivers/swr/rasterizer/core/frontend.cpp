@@ -527,8 +527,8 @@ static void StreamOut(
         // Write all entries into primitive data buffer for SOS.
         while (_BitScanForward(&slot, soMask))
         {
-            __m128 attrib[MAX_NUM_VERTS_PER_PRIM];    // prim attribs (always 4 wide)
-            uint32_t paSlot = slot + VERTEX_ATTRIB_START_SLOT;
+            simd4scalar attrib[MAX_NUM_VERTS_PER_PRIM];    // prim attribs (always 4 wide)
+            uint32_t paSlot = slot + soState.vertexAttribOffset[streamIndex];
             pa.AssembleSingle(paSlot, primIndex, attrib);
 
             // Attribute offset is relative offset from start of vertex.
@@ -792,12 +792,12 @@ static void GeometryShaderStage(
     // assemble all attributes for the input primitive
     for (uint32_t slot = 0; slot < pState->numInputAttribs; ++slot)
     {
-        uint32_t attribSlot = VERTEX_ATTRIB_START_SLOT + slot;
+        uint32_t attribSlot = pState->vertexAttribOffset + slot;
         pa.Assemble(attribSlot, attrib);
 
         for (uint32_t i = 0; i < numVertsPerPrim; ++i)
         {
-            tlsGsContext.vert[i].attrib[attribSlot] = attrib[i];
+            tlsGsContext.vert[i].attrib[VERTEX_ATTRIB_START_SLOT + slot] = attrib[i];
         }
     }
 
@@ -941,7 +941,9 @@ static void GeometryShaderStage(
 
                             if (HasStreamOutT::value)
                             {
+#if ENABLE_AVX512_SIMD16
                                 gsPa.useAlternateOffset = false;
+#endif
                                 StreamOut(pDC, gsPa, workerId, pSoPrimData, stream);
                             }
 
@@ -1131,12 +1133,12 @@ static void TessellationStages(
     // assemble all attributes for the input primitives
     for (uint32_t slot = 0; slot < tsState.numHsInputAttribs; ++slot)
     {
-        uint32_t attribSlot = VERTEX_ATTRIB_START_SLOT + slot;
+        uint32_t attribSlot = tsState.vertexAttribOffset + slot;
         pa.Assemble(attribSlot, simdattrib);
 
         for (uint32_t i = 0; i < numVertsPerPrim; ++i)
         {
-            hsContext.vert[i].attrib[attribSlot] = simdattrib[i];
+            hsContext.vert[i].attrib[VERTEX_ATTRIB_START_SLOT + slot] = simdattrib[i];
         }
     }
 
@@ -1279,7 +1281,9 @@ static void TessellationStages(
             {
                 if (HasStreamOutT::value)
                 {
+#if ENABLE_AVX512_SIMD16
                     tessPa.useAlternateOffset = false;
+#endif
                     StreamOut(pDC, tessPa, workerId, pSoPrimData, 0);
                 }
 

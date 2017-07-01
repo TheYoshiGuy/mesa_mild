@@ -414,7 +414,7 @@ svga_texture_transfer_map_direct(struct svga_context *svga,
    struct svga_texture *tex = svga_texture(texture);
    struct svga_winsys_surface *surf = tex->handle;
    unsigned level = st->base.level;
-   unsigned w, h, nblocksx, nblocksy;
+   unsigned w, h, nblocksx, nblocksy, i;
    unsigned usage = st->base.usage;
 
    if (need_tex_readback(transfer)) {
@@ -422,13 +422,14 @@ svga_texture_transfer_map_direct(struct svga_context *svga,
 
       svga_surfaces_flush(svga);
 
-      if (svga_have_vgpu10(svga)) {
-         ret = readback_image_vgpu10(svga, surf, st->slice, level,
-                                     tex->b.b.last_level + 1);
-      } else {
-         ret = readback_image_vgpu9(svga, surf, st->slice, level);
+      for (i = 0; i < st->base.box.depth; i++) {
+         if (svga_have_vgpu10(svga)) {
+            ret = readback_image_vgpu10(svga, surf, st->slice + i, level,
+                                        tex->b.b.last_level + 1);
+         } else {
+            ret = readback_image_vgpu9(svga, surf, st->slice + i, level);
+         }
       }
-
       svga->hud.num_readbacks++;
       SVGA_STATS_COUNT_INC(sws, SVGA_STATS_COUNT_TEXREADBACK);
 
@@ -913,6 +914,39 @@ svga_texture_create(struct pipe_screen *screen,
    assert(template->last_level < SVGA_MAX_TEXTURE_LEVELS);
    if (template->last_level >= SVGA_MAX_TEXTURE_LEVELS) {
       goto fail_notex;
+   }
+
+   /* Verify the number of mipmap levels isn't impossibly large.  For example,
+    * if the base 2D image is 16x16, we can't have 8 mipmap levels.
+    * The state tracker should never ask us to create a resource with invalid
+    * parameters.
+    */
+   {
+      unsigned max_dim = template->width0;
+
+      switch (template->target) {
+      case PIPE_TEXTURE_1D:
+      case PIPE_TEXTURE_1D_ARRAY:
+         // nothing
+         break;
+      case PIPE_TEXTURE_2D:
+      case PIPE_TEXTURE_CUBE:
+      case PIPE_TEXTURE_CUBE_ARRAY:
+      case PIPE_TEXTURE_2D_ARRAY:
+         max_dim = MAX2(max_dim, template->height0);
+         break;
+      case PIPE_TEXTURE_3D:
+         max_dim = MAX3(max_dim, template->height0, template->depth0);
+         break;
+      case PIPE_TEXTURE_RECT:
+      case PIPE_BUFFER:
+         assert(template->last_level == 0);
+         /* the assertion below should always pass */
+         break;
+      default:
+         debug_printf("Unexpected texture target type\n");
+      }
+      assert(1 << template->last_level <= max_dim);
    }
 
    tex = CALLOC_STRUCT(svga_texture);

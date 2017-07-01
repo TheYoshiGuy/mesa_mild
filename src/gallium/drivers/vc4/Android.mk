@@ -31,7 +31,10 @@ LOCAL_SRC_FILES := \
 LOCAL_GENERATED_SOURCES := $(MESA_GEN_NIR_H)
 
 # We need libmesa_nir to get NIR's generated include directories.
-LOCAL_STATIC_LIBRARIES := libmesa_nir
+LOCAL_STATIC_LIBRARIES := \
+	libmesa_nir \
+	libmesa_broadcom_genxml
+
 LOCAL_MODULE := libmesa_pipe_vc4
 
 include $(GALLIUM_COMMON_MK)
