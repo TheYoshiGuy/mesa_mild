@@ -869,7 +869,7 @@ void anv_GetPhysicalDeviceProperties(
       .storageImageSampleCounts                 = VK_SAMPLE_COUNT_1_BIT,
       .maxSampleMaskWords                       = 1,
       .timestampComputeAndGraphics              = false,
-      .timestampPeriod                          = 1000000000ull / devinfo->timestamp_frequency,
+      .timestampPeriod                          = 1000000000.0 / devinfo->timestamp_frequency,
       .maxClipDistances                         = 8,
       .maxCullDistances                         = 8,
       .maxCombinedClipAndCullDistances          = 8,
@@ -1128,6 +1128,19 @@ VkResult anv_CreateDevice(
       }
       if (!found)
          return vk_error(VK_ERROR_EXTENSION_NOT_PRESENT);
+   }
+
+   /* Check enabled features */
+   if (pCreateInfo->pEnabledFeatures) {
+      VkPhysicalDeviceFeatures supported_features;
+      anv_GetPhysicalDeviceFeatures(physicalDevice, &supported_features);
+      VkBool32 *supported_feature = (VkBool32 *)&supported_features;
+      VkBool32 *enabled_feature = (VkBool32 *)pCreateInfo->pEnabledFeatures;
+      unsigned num_features = sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32);
+      for (uint32_t i = 0; i < num_features; i++) {
+         if (enabled_feature[i] && !supported_feature[i])
+            return vk_error(VK_ERROR_FEATURE_NOT_PRESENT);
+      }
    }
 
    device = vk_alloc2(&physical_device->instance->alloc, pAllocator,

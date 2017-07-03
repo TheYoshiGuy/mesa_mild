@@ -645,6 +645,24 @@ set_domain(struct brw_context *brw, const char *action,
    }
 }
 
+static void
+print_flags(unsigned flags)
+{
+   if (flags & MAP_READ)
+      DBG("READ ");
+   if (flags & MAP_WRITE)
+      DBG("WRITE ");
+   if (flags & MAP_ASYNC)
+      DBG("ASYNC ");
+   if (flags & MAP_PERSISTENT)
+      DBG("PERSISTENT ");
+   if (flags & MAP_COHERENT)
+      DBG("COHERENT ");
+   if (flags & MAP_RAW)
+      DBG("RAW ");
+   DBG("\n");
+}
+
 static void *
 brw_bo_map_cpu(struct brw_context *brw, struct brw_bo *bo, unsigned flags)
 {
@@ -674,8 +692,9 @@ brw_bo_map_cpu(struct brw_context *brw, struct brw_bo *bo, unsigned flags)
          drm_munmap(map, bo->size);
       }
    }
-   DBG("brw_bo_map_cpu: %d (%s) -> %p\n", bo->gem_handle, bo->name,
+   DBG("brw_bo_map_cpu: %d (%s) -> %p, ", bo->gem_handle, bo->name,
        bo->map_cpu);
+   print_flags(flags);
 
    if (!(flags & MAP_ASYNC) || !bufmgr->has_llc) {
       set_domain(brw, "CPU mapping", bo, I915_GEM_DOMAIN_CPU,
@@ -715,7 +734,6 @@ brw_bo_map_gtt(struct brw_context *brw, struct brw_bo *bo, unsigned flags)
       map = drm_mmap(0, bo->size, PROT_READ | PROT_WRITE,
                      MAP_SHARED, bufmgr->fd, mmap_arg.offset);
       if (map == MAP_FAILED) {
-         bo->map_gtt = NULL;
          DBG("%s:%d: Error mapping buffer %d (%s): %s .\n",
              __FILE__, __LINE__, bo->gem_handle, bo->name, strerror(errno));
          return NULL;
@@ -726,8 +744,8 @@ brw_bo_map_gtt(struct brw_context *brw, struct brw_bo *bo, unsigned flags)
       }
    }
 
-   DBG("bo_map_gtt: %d (%s) -> %p\n", bo->gem_handle, bo->name,
-       bo->map_gtt);
+   DBG("bo_map_gtt: %d (%s) -> %p, ", bo->gem_handle, bo->name, bo->map_gtt);
+   print_flags(flags);
 
    if (!(flags & MAP_ASYNC) || !bufmgr->has_llc) {
       set_domain(brw, "GTT mapping", bo,
