@@ -1621,13 +1621,22 @@ static void visit_alu(struct nir_to_llvm_context *ctx, const nir_alu_instr *inst
 		result = LLVMBuildXor(ctx->builder, src[0], src[1], "");
 		break;
 	case nir_op_ishl:
-		result = LLVMBuildShl(ctx->builder, src[0], src[1], "");
+		result = LLVMBuildShl(ctx->builder, src[0],
+				      LLVMBuildZExt(ctx->builder, src[1],
+						    LLVMTypeOf(src[0]), ""),
+				      "");
 		break;
 	case nir_op_ishr:
-		result = LLVMBuildAShr(ctx->builder, src[0], src[1], "");
+		result = LLVMBuildAShr(ctx->builder, src[0],
+				       LLVMBuildZExt(ctx->builder, src[1],
+						     LLVMTypeOf(src[0]), ""),
+				       "");
 		break;
 	case nir_op_ushr:
-		result = LLVMBuildLShr(ctx->builder, src[0], src[1], "");
+		result = LLVMBuildLShr(ctx->builder, src[0],
+				       LLVMBuildZExt(ctx->builder, src[1],
+						     LLVMTypeOf(src[0]), ""),
+				       "");
 		break;
 	case nir_op_ilt:
 		result = emit_int_cmp(&ctx->ac, LLVMIntSLT, src[0], src[1]);
@@ -1866,6 +1875,37 @@ static void visit_alu(struct nir_to_llvm_context *ctx, const nir_alu_instr *inst
 	case nir_op_fddy_coarse:
 		result = emit_ddxy(ctx, instr->op, src[0]);
 		break;
+
+	case nir_op_unpack_64_2x32_split_x: {
+		assert(instr->src[0].src.ssa->num_components == 1);
+		LLVMValueRef tmp = LLVMBuildBitCast(ctx->builder, src[0],
+						    LLVMVectorType(ctx->i32, 2),
+						    "");
+		result = LLVMBuildExtractElement(ctx->builder, tmp,
+						 ctx->i32zero, "");
+		break;
+	}
+
+	case nir_op_unpack_64_2x32_split_y: {
+		assert(instr->src[0].src.ssa->num_components == 1);
+		LLVMValueRef tmp = LLVMBuildBitCast(ctx->builder, src[0],
+						    LLVMVectorType(ctx->i32, 2),
+						    "");
+		result = LLVMBuildExtractElement(ctx->builder, tmp,
+						 ctx->i32one, "");
+		break;
+	}
+
+	case nir_op_pack_64_2x32_split: {
+		LLVMValueRef tmp = LLVMGetUndef(LLVMVectorType(ctx->i32, 2));
+		tmp = LLVMBuildInsertElement(ctx->builder, tmp,
+					     src[0], ctx->i32zero, "");
+		tmp = LLVMBuildInsertElement(ctx->builder, tmp,
+					     src[1], ctx->i32one, "");
+		result = LLVMBuildBitCast(ctx->builder, tmp, ctx->i64, "");
+		break;
+	}
+
 	default:
 		fprintf(stderr, "Unknown NIR alu instr: ");
 		nir_print_instr(&instr->instr, stderr);
