@@ -140,6 +140,8 @@ static uint64_t amdgpu_query_value(struct radeon_winsys *rws,
       return ws->num_gfx_IBs;
    case RADEON_NUM_SDMA_IBS:
       return ws->num_sdma_IBs;
+   case RADEON_GFX_BO_LIST_COUNTER:
+      return ws->gfx_bo_list_counter;
    case RADEON_NUM_BYTES_MOVED:
       amdgpu_query_info(ws->dev, AMDGPU_INFO_NUM_BYTES_MOVED, 8, &retval);
       return retval;
@@ -285,7 +287,7 @@ amdgpu_winsys_create(int fd, unsigned flags,
 
    if (!pb_slabs_init(&ws->bo_slabs,
                       AMDGPU_SLAB_MIN_SIZE_LOG2, AMDGPU_SLAB_MAX_SIZE_LOG2,
-                      12, /* number of heaps (domain/flags combinations) */
+                      RADEON_MAX_SLAB_HEAPS,
                       ws,
                       amdgpu_bo_can_reclaim_slab,
                       amdgpu_bo_slab_alloc,

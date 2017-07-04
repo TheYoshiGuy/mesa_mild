@@ -631,6 +631,7 @@ static uint64_t radeon_query_value(struct radeon_winsys *rws,
     case RADEON_NUM_EVICTIONS:
     case RADEON_NUM_VRAM_CPU_PAGE_FAULTS:
     case RADEON_VRAM_VIS_USAGE:
+    case RADEON_GFX_BO_LIST_COUNTER:
         return 0; /* unimplemented */
     case RADEON_VRAM_USAGE:
         radeon_get_drm_value(ws->fd, RADEON_INFO_VRAM_USAGE,
@@ -775,7 +776,7 @@ radeon_drm_winsys_create(int fd, unsigned flags,
          */
         if (!pb_slabs_init(&ws->bo_slabs,
                            RADEON_SLAB_MIN_SIZE_LOG2, RADEON_SLAB_MAX_SIZE_LOG2,
-                           12,
+                           RADEON_MAX_SLAB_HEAPS,
                            ws,
                            radeon_bo_can_reclaim_slab,
                            radeon_bo_slab_alloc,

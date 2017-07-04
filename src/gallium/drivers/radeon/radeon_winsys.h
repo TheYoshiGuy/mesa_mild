@@ -51,10 +51,9 @@ enum radeon_bo_domain { /* bitfield */
 
 enum radeon_bo_flag { /* bitfield */
     RADEON_FLAG_GTT_WC =        (1 << 0),
-    RADEON_FLAG_CPU_ACCESS =    (1 << 1),
-    RADEON_FLAG_NO_CPU_ACCESS = (1 << 2),
-    RADEON_FLAG_HANDLE =        (1 << 3), /* the buffer must not be suballocated */
-    RADEON_FLAG_SPARSE =        (1 << 4),
+    RADEON_FLAG_NO_CPU_ACCESS = (1 << 1),
+    RADEON_FLAG_NO_SUBALLOC =   (1 << 2),
+    RADEON_FLAG_SPARSE =        (1 << 3),
 };
 
 enum radeon_bo_usage { /* bitfield */
@@ -91,6 +90,7 @@ enum radeon_value_id {
     RADEON_TIMESTAMP,
     RADEON_NUM_GFX_IBS,
     RADEON_NUM_SDMA_IBS,
+    RADEON_GFX_BO_LIST_COUNTER, /* number of BOs submitted in gfx IBs */
     RADEON_NUM_BYTES_MOVED,
     RADEON_NUM_EVICTIONS,
     RADEON_NUM_VRAM_CPU_PAGE_FAULTS,
@@ -359,6 +359,9 @@ struct radeon_winsys {
      * \return          whether \p buf was created via buffer_from_ptr
      */
     bool (*buffer_is_user_ptr)(struct pb_buffer *buf);
+
+    /** Whether the buffer was suballocated. */
+    bool (*buffer_is_suballocated)(struct pb_buffer *buf);
 
     /**
      * Get a winsys handle from a winsys buffer. The internal structure
@@ -656,6 +659,97 @@ static inline void radeon_emit_array(struct radeon_winsys_cs *cs,
 {
     memcpy(cs->current.buf + cs->current.cdw, values, count * 4);
     cs->current.cdw += count;
+}
+
+enum radeon_heap {
+    RADEON_HEAP_VRAM_NO_CPU_ACCESS,
+    RADEON_HEAP_VRAM,
+    RADEON_HEAP_VRAM_GTT, /* combined heaps */
+    RADEON_HEAP_GTT_WC,
+    RADEON_HEAP_GTT,
+    RADEON_MAX_SLAB_HEAPS,
+    RADEON_MAX_CACHED_HEAPS = RADEON_MAX_SLAB_HEAPS,
+};
+
+static inline enum radeon_bo_domain radeon_domain_from_heap(enum radeon_heap heap)
+{
+    switch (heap) {
+    case RADEON_HEAP_VRAM_NO_CPU_ACCESS:
+    case RADEON_HEAP_VRAM:
+        return RADEON_DOMAIN_VRAM;
+    case RADEON_HEAP_VRAM_GTT:
+        return RADEON_DOMAIN_VRAM_GTT;
+    case RADEON_HEAP_GTT_WC:
+    case RADEON_HEAP_GTT:
+        return RADEON_DOMAIN_GTT;
+    default:
+        assert(0);
+        return 0;
+    }
+}
+
+static inline unsigned radeon_flags_from_heap(enum radeon_heap heap)
+{
+    switch (heap) {
+    case RADEON_HEAP_VRAM_NO_CPU_ACCESS:
+        return RADEON_FLAG_GTT_WC | RADEON_FLAG_NO_CPU_ACCESS;
+    case RADEON_HEAP_VRAM:
+    case RADEON_HEAP_VRAM_GTT:
+    case RADEON_HEAP_GTT_WC:
+        return RADEON_FLAG_GTT_WC;
+    case RADEON_HEAP_GTT:
+    default:
+        return 0;
+    }
+}
+
+/* The pb cache bucket is chosen to minimize pb_cache misses.
+ * It must be between 0 and 3 inclusive.
+ */
+static inline unsigned radeon_get_pb_cache_bucket_index(enum radeon_heap heap)
+{
+    switch (heap) {
+    case RADEON_HEAP_VRAM_NO_CPU_ACCESS:
+        return 0;
+    case RADEON_HEAP_VRAM:
+    case RADEON_HEAP_VRAM_GTT:
+        return 1;
+    case RADEON_HEAP_GTT_WC:
+        return 2;
+    case RADEON_HEAP_GTT:
+    default:
+        return 3;
+    }
+}
+
+/* Return the heap index for winsys allocators, or -1 on failure. */
+static inline int radeon_get_heap_index(enum radeon_bo_domain domain,
+                                        enum radeon_bo_flag flags)
+{
+    /* VRAM implies WC (write combining) */
+    assert(!(domain & RADEON_DOMAIN_VRAM) || flags & RADEON_FLAG_GTT_WC);
+    /* NO_CPU_ACCESS implies VRAM only. */
+    assert(!(flags & RADEON_FLAG_NO_CPU_ACCESS) || domain == RADEON_DOMAIN_VRAM);
+
+    /* Unsupported flags: NO_SUBALLOC, SPARSE. */
+    if (flags & ~(RADEON_FLAG_GTT_WC | RADEON_FLAG_NO_CPU_ACCESS))
+        return -1;
+
+    switch (domain) {
+    case RADEON_DOMAIN_VRAM:
+        if (flags & RADEON_FLAG_NO_CPU_ACCESS)
+            return RADEON_HEAP_VRAM_NO_CPU_ACCESS;
+        else
+            return RADEON_HEAP_VRAM;
+    case RADEON_DOMAIN_VRAM_GTT:
+        return RADEON_HEAP_VRAM_GTT;
+    case RADEON_DOMAIN_GTT:
+        if (flags & RADEON_FLAG_GTT_WC)
+            return RADEON_HEAP_GTT_WC;
+        else
+            return RADEON_HEAP_GTT;
+    }
+    return -1;
 }
 
 #endif

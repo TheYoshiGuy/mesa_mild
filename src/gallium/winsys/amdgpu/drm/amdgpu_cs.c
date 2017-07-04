@@ -581,8 +581,7 @@ static bool amdgpu_ib_new_buffer(struct amdgpu_winsys *ws, struct amdgpu_ib *ib)
 
    pb = ws->base.buffer_create(&ws->base, buffer_size,
                                ws->info.gart_page_size,
-                               RADEON_DOMAIN_GTT,
-                               RADEON_FLAG_CPU_ACCESS);
+                               RADEON_DOMAIN_GTT, 0);
    if (!pb)
       return false;
 
@@ -1224,6 +1223,9 @@ void amdgpu_cs_submit_ib(void *job, int thread_index)
          cs->handles[i] = buffer->bo->bo;
          cs->flags[i] = (util_last_bit64(buffer->u.real.priority_usage) - 1) / 4;
       }
+
+      if (acs->ring_type == RING_GFX)
+         ws->gfx_bo_list_counter += cs->num_real_buffers;
 
       r = amdgpu_bo_list_create(ws->dev, cs->num_real_buffers,
                                 cs->handles, cs->flags,

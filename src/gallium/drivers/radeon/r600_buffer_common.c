@@ -132,7 +132,6 @@ void r600_init_resource_fields(struct r600_common_screen *rscreen,
 			res->flags |= RADEON_FLAG_GTT_WC;
 			break;
 		}
-		res->flags |= RADEON_FLAG_CPU_ACCESS;
 		/* fall through */
 	case PIPE_USAGE_DEFAULT:
 	case PIPE_USAGE_IMMUTABLE:
@@ -158,15 +157,12 @@ void r600_init_resource_fields(struct r600_common_screen *rscreen,
 		if (rscreen->info.drm_major == 2 &&
 		    rscreen->info.drm_minor < 40)
 			res->domains = RADEON_DOMAIN_GTT;
-		else if (res->domains & RADEON_DOMAIN_VRAM)
-			res->flags |= RADEON_FLAG_CPU_ACCESS;
 	}
 
 	/* Tiled textures are unmappable. Always put them in VRAM. */
 	if ((res->b.b.target != PIPE_BUFFER && !rtex->surface.is_linear) ||
 	    res->flags & R600_RESOURCE_FLAG_UNMAPPABLE) {
 		res->domains = RADEON_DOMAIN_VRAM;
-		res->flags &= ~RADEON_FLAG_CPU_ACCESS;
 		res->flags |= RADEON_FLAG_NO_CPU_ACCESS |
 			 RADEON_FLAG_GTT_WC;
 	}
@@ -180,11 +176,16 @@ void r600_init_resource_fields(struct r600_common_screen *rscreen,
 	 */
 	if (!rscreen->info.has_dedicated_vram &&
 	    (rscreen->info.drm_major < 3 || rscreen->info.drm_minor < 6) &&
-	    res->domains == RADEON_DOMAIN_VRAM)
+	    res->domains == RADEON_DOMAIN_VRAM) {
 		res->domains = RADEON_DOMAIN_VRAM_GTT;
+		res->flags &= ~RADEON_FLAG_NO_CPU_ACCESS; /* disallowed with VRAM_GTT */
+	}
 
 	if (rscreen->debug_flags & DBG_NO_WC)
 		res->flags &= ~RADEON_FLAG_GTT_WC;
+
+	if (res->b.b.bind & PIPE_BIND_SHARED)
+		res->flags |= RADEON_FLAG_NO_SUBALLOC;
 
 	/* Set expected VRAM and GART usage for the buffer. */
 	res->vram_usage = 0;
@@ -610,8 +611,6 @@ struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 
 	r600_init_resource_fields(rscreen, rbuffer, templ->width0, alignment);
 
-	if (templ->bind & PIPE_BIND_SHARED)
-		rbuffer->flags |= RADEON_FLAG_HANDLE;
 	if (templ->flags & PIPE_RESOURCE_FLAG_SPARSE)
 		rbuffer->flags |= RADEON_FLAG_SPARSE;
 
