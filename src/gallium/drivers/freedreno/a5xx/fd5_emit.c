@@ -439,6 +439,7 @@ fd5_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd5_emit *emit)
 			OUT_RING(ring, A5XX_VFD_DECODE_INSTR_IDX(j) |
 					A5XX_VFD_DECODE_INSTR_FORMAT(fmt) |
 					COND(elem->instance_divisor, A5XX_VFD_DECODE_INSTR_INSTANCED) |
+					A5XX_VFD_DECODE_INSTR_SWAP(fd5_pipe2swap(pfmt)) |
 					A5XX_VFD_DECODE_INSTR_UNK30 |
 					COND(!isint, A5XX_VFD_DECODE_INSTR_FLOAT));
 			OUT_RING(ring, MAX2(1, elem->instance_divisor)); /* VFD_DECODE[j].STEP_RATE */
@@ -602,6 +603,12 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_PKT4(ring, REG_A5XX_PC_PRIMITIVE_CNTL, 1);
 		OUT_RING(ring, rasterizer->pc_primitive_cntl |
 				 A5XX_PC_PRIMITIVE_CNTL_STRIDE_IN_VPC(max_loc));
+
+		OUT_PKT4(ring, REG_A5XX_PC_RASTER_CNTL, 1);
+		OUT_RING(ring, rasterizer->pc_raster_cntl);
+
+		OUT_PKT4(ring, REG_A5XX_GRAS_CL_CNTL, 1);
+		OUT_RING(ring, rasterizer->gras_cl_clip_cntl);
 	}
 
 	if (dirty & (FD_DIRTY_FRAMEBUFFER | FD_DIRTY_RASTERIZER)) {
@@ -672,7 +679,7 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 			if (is_int) {
 				control &= A5XX_RB_MRT_CONTROL_COMPONENT_ENABLE__MASK;
-//				control |= A5XX_RB_MRT_CONTROL_ROP_CODE(ROP_COPY);
+				control |= A5XX_RB_MRT_CONTROL_ROP_CODE(ROP_COPY);
 			}
 
 			if (has_alpha) {
