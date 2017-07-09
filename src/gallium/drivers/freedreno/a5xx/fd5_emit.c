@@ -127,38 +127,6 @@ fd5_emit_const_bo(struct fd_ringbuffer *ring, enum shader_t type, boolean write,
  * the same as a6xx then move this somewhere common ;-)
  *
  * Entry layout looks like (total size, 0x60 bytes):
- *
- *   offset | description
- *   -------+-------------
- *     0x00 | fp32[0]
- *          | fp32[1]
- *          | fp32[2]
- *          | fp32[3]
- *     0x10 | uint16[0]
- *          | uint16[1]
- *          | uint16[2]
- *          | uint16[3]
- *     0x18 | int16[0]
- *          | int16[1]
- *          | int16[2]
- *          | int16[3]
- *     0x20 | fp16[0]
- *          | fp16[1]
- *          | fp16[2]
- *          | fp16[3]
- *     0x28 | ?? maybe padding ??
- *     0x30 | uint8[0]
- *          | uint8[1]
- *          | uint8[2]
- *          | uint8[3]
- *     0x34 | int8[0]
- *          | int8[1]
- *          | int8[2]
- *          | int8[3]
- *     0x38 | ?? maybe padding ??
- *
- * Some uncertainty, because not clear that this actually works properly
- * with blob, so who knows..
  */
 
 struct PACKED bcolor_entry {
@@ -166,10 +134,15 @@ struct PACKED bcolor_entry {
 	uint16_t ui16[4];
 	int16_t  si16[4];
 	uint16_t fp16[4];
-	uint8_t  __pad0[8];
+	uint16_t rgb565;
+	uint16_t rgb5a1;
+	uint16_t rgba4;
+	uint8_t __pad0[2];
 	uint8_t  ui8[4];
 	int8_t   si8[4];
-	uint8_t  __pad1[40];
+	uint32_t rgb10a2;
+	uint32_t z24; /* also s8? */
+	uint8_t  __pad1[32];
 };
 
 #define FD5_BORDER_COLOR_SIZE        0x60
@@ -179,6 +152,7 @@ static void
 setup_border_colors(struct fd_texture_stateobj *tex, struct bcolor_entry *entries)
 {
 	unsigned i, j;
+	STATIC_ASSERT(sizeof(struct bcolor_entry) == FD5_BORDER_COLOR_SIZE);
 
 	for (i = 0; i < tex->num_samplers; i++) {
 		struct bcolor_entry *e = &entries[i];
@@ -205,6 +179,12 @@ setup_border_colors(struct fd_texture_stateobj *tex, struct bcolor_entry *entrie
 		const struct util_format_description *desc =
 				util_format_description(tex->textures[i]->format);
 
+		e->rgb565 = 0;
+		e->rgb5a1 = 0;
+		e->rgba4 = 0;
+		e->rgb10a2 = 0;
+		e->z24 = 0;
+
 		for (j = 0; j < 4; j++) {
 			int c = desc->swizzle[j];
 
@@ -212,23 +192,62 @@ setup_border_colors(struct fd_texture_stateobj *tex, struct bcolor_entry *entrie
 				continue;
 
 			if (desc->channel[c].pure_integer) {
-				float f = bc->i[c];
-
-				e->fp32[j] = fui(f);
-				e->fp16[j] = util_float_to_half(f);
-				e->ui16[j] = bc->ui[c];
-				e->si16[j] = bc->i[c];
-				e->ui8[j]  = bc->ui[c];
-				e->si8[j]  = bc->i[c];
+				uint16_t clamped;
+				switch (desc->channel[c].size) {
+				case 2:
+					assert(desc->channel[c].type == UTIL_FORMAT_TYPE_UNSIGNED);
+					clamped = CLAMP(bc->ui[j], 0, 0x3);
+					break;
+				case 8:
+					if (desc->channel[c].type == UTIL_FORMAT_TYPE_SIGNED)
+						clamped = CLAMP(bc->i[j], -128, 127);
+					else
+						clamped = CLAMP(bc->ui[j], 0, 255);
+					break;
+				case 10:
+					assert(desc->channel[c].type == UTIL_FORMAT_TYPE_UNSIGNED);
+					clamped = CLAMP(bc->ui[j], 0, 0x3ff);
+					break;
+				case 16:
+					if (desc->channel[c].type == UTIL_FORMAT_TYPE_SIGNED)
+						clamped = CLAMP(bc->i[j], -32768, 32767);
+					else
+						clamped = CLAMP(bc->ui[j], 0, 65535);
+					break;
+				default:
+					assert(!"Unexpected bit size");
+				case 32:
+					clamped = 0;
+					break;
+				}
+				e->fp32[c] = bc->ui[j];
+				e->fp16[c] = clamped;
 			} else {
-				float f = bc->f[c];
+				float f = bc->f[j];
+				float f_u = CLAMP(f, 0, 1);
+				float f_s = CLAMP(f, -1, 1);
 
-				e->fp32[j] = fui(f);
-				e->fp16[j] = util_float_to_half(f);
-				e->ui16[j] = f * 65535.0;
-				e->si16[j] = f * 32767.5;
-				e->ui8[j]  = f * 255.0;
-				e->si8[j]  = f * 128.0;
+				e->fp32[c] = fui(f);
+				e->fp16[c] = util_float_to_half(f);
+				e->ui16[c] = f_u * 0xffff;
+				e->si16[c] = f_s * 0x7fff;
+				e->ui8[c]  = f_u * 0xff;
+				e->si8[c]  = f_s * 0x7f;
+				if (c == 1)
+					e->rgb565 |= (int)(f_u * 0x3f) << 5;
+				else if (c < 3)
+					e->rgb565 |= (int)(f_u * 0x1f) << (c ? 11 : 0);
+				if (c == 3)
+					e->rgb5a1 |= (f_u > 0.5) ? 0x8000 : 0;
+				else
+					e->rgb5a1 |= (int)(f_u * 0x1f) << (c * 5);
+				if (c == 3)
+					e->rgb10a2 |= (int)(f_u * 0x3) << 30;
+				else
+					e->rgb10a2 |= (int)(f_u * 0x3ff) << (c * 10);
+				e->rgba4 |= (int)(f_u * 0xf) << (c * 4);
+				if (c == 0)
+					e->z24 = f_u * 0xffffff;
 			}
 		}
 
@@ -580,15 +599,9 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	if (dirty & FD_DIRTY_PROG)
 		fd5_program_emit(ctx, ring, emit);
 
-	/* note: must come after program emit.. because there is some overlap
-	 * in registers, ex. PC_PRIMITIVE_CNTL and we rely on some cached
-	 * values from fd5_program_emit() to avoid having to re-emit the prog
-	 * every time rast state changes.
-	 */
-	if (dirty & (FD_DIRTY_PROG | FD_DIRTY_RASTERIZER)) {
+	if (dirty & FD_DIRTY_RASTERIZER) {
 		struct fd5_rasterizer_stateobj *rasterizer =
 				fd5_rasterizer_stateobj(ctx->rasterizer);
-		unsigned max_loc = fd5_context(ctx)->max_loc;
 
 		OUT_PKT4(ring, REG_A5XX_GRAS_SU_CNTL, 1);
 		OUT_RING(ring, rasterizer->gras_su_cntl);
@@ -602,15 +615,31 @@ fd5_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_RING(ring, rasterizer->gras_su_poly_offset_offset);
 		OUT_RING(ring, rasterizer->gras_su_poly_offset_clamp);
 
-		OUT_PKT4(ring, REG_A5XX_PC_PRIMITIVE_CNTL, 1);
-		OUT_RING(ring, rasterizer->pc_primitive_cntl |
-				 A5XX_PC_PRIMITIVE_CNTL_STRIDE_IN_VPC(max_loc));
-
 		OUT_PKT4(ring, REG_A5XX_PC_RASTER_CNTL, 1);
 		OUT_RING(ring, rasterizer->pc_raster_cntl);
 
 		OUT_PKT4(ring, REG_A5XX_GRAS_CL_CNTL, 1);
 		OUT_RING(ring, rasterizer->gras_cl_clip_cntl);
+	}
+
+	/* note: must come after program emit.. because there is some overlap
+	 * in registers, ex. PC_PRIMITIVE_CNTL and we rely on some cached
+	 * values from fd5_program_emit() to avoid having to re-emit the prog
+	 * every time rast state changes.
+	 *
+	 * Since the primitive restart state is not part of a tracked object, we
+	 * re-emit this register every time.
+	 */
+	if (emit->info && ctx->rasterizer) {
+		struct fd5_rasterizer_stateobj *rasterizer =
+				fd5_rasterizer_stateobj(ctx->rasterizer);
+		unsigned max_loc = fd5_context(ctx)->max_loc;
+
+		OUT_PKT4(ring, REG_A5XX_PC_PRIMITIVE_CNTL, 1);
+		OUT_RING(ring, rasterizer->pc_primitive_cntl |
+				 A5XX_PC_PRIMITIVE_CNTL_STRIDE_IN_VPC(max_loc) |
+				 COND(emit->info->primitive_restart && emit->info->index_size,
+					  A5XX_PC_PRIMITIVE_CNTL_PRIMITIVE_RESTART));
 	}
 
 	if (dirty & (FD_DIRTY_FRAMEBUFFER | FD_DIRTY_RASTERIZER)) {
