@@ -61,6 +61,9 @@
 #define SWR_MAX_TEXTURE_CUBE_LEVELS 14  /* 8K x 8K for now */
 #define SWR_MAX_TEXTURE_ARRAY_LAYERS 512 /* 8K x 512 / 8K x 8K x 512 */
 
+/* Default max client_copy_limit */
+#define SWR_CLIENT_COPY_LIMIT 32768
+
 /* Flag indicates creation of alternate surface, to prevent recursive loop
  * in resource creation when msaa_force_enable is set. */
 #define SWR_RESOURCE_FLAG_ALT_SURFACE (PIPE_RESOURCE_FLAG_DRV_PRIV << 0)
@@ -1016,11 +1019,12 @@ swr_flush_frontbuffer(struct pipe_screen *p_screen,
    struct sw_winsys *winsys = screen->winsys;
    struct swr_resource *spr = swr_resource(resource);
    struct pipe_context *pipe = screen->pipe;
+   struct swr_context *ctx = swr_context(pipe);
 
    if (pipe) {
       swr_fence_finish(p_screen, NULL, screen->flush_fence, 0);
       swr_resource_unused(resource);
-      SwrEndFrame(swr_context(pipe)->swrContext);
+      ctx->api.pfnSwrEndFrame(ctx->swrContext);
    }
 
    /* Multisample resolved into resolve_target at flush with store_resource */
@@ -1062,6 +1066,49 @@ swr_destroy_screen(struct pipe_screen *p_screen)
    FREE(screen);
 }
 
+
+static void
+swr_validate_env_options(struct swr_screen *screen)
+{
+   /* The client_copy_limit sets a maximum on the amount of user-buffer memory
+    * copied to scratch space on a draw.  Past this, the draw will access
+    * user-buffer directly and then block.  This is faster than queuing many
+    * large client draws. */
+   screen->client_copy_limit = SWR_CLIENT_COPY_LIMIT;
+   int client_copy_limit =
+      debug_get_num_option("SWR_CLIENT_COPY_LIMIT", SWR_CLIENT_COPY_LIMIT);
+   if (client_copy_limit > 0)
+      screen->client_copy_limit = client_copy_limit;
+
+   /* XXX msaa under development, disable by default for now */
+   screen->msaa_max_count = 0; /* was SWR_MAX_NUM_MULTISAMPLES; */
+
+   /* validate env override values, within range and power of 2 */
+   int msaa_max_count = debug_get_num_option("SWR_MSAA_MAX_COUNT", 0);
+   if (msaa_max_count) {
+      if ((msaa_max_count < 0) || (msaa_max_count > SWR_MAX_NUM_MULTISAMPLES)
+            || !util_is_power_of_two(msaa_max_count)) {
+         fprintf(stderr, "SWR_MSAA_MAX_COUNT invalid: %d\n", msaa_max_count);
+         fprintf(stderr, "must be power of 2 between 1 and %d" \
+                         " (or 0 to disable msaa)\n",
+               SWR_MAX_NUM_MULTISAMPLES);
+         msaa_max_count = 0;
+      }
+
+      fprintf(stderr, "SWR_MSAA_MAX_COUNT: %d\n", msaa_max_count);
+      if (!msaa_max_count)
+         fprintf(stderr, "(msaa disabled)\n");
+
+      screen->msaa_max_count = msaa_max_count;
+   }
+
+   screen->msaa_force_enable = debug_get_bool_option(
+         "SWR_MSAA_FORCE_ENABLE", false);
+   if (screen->msaa_force_enable)
+      fprintf(stderr, "SWR_MSAA_FORCE_ENABLE: true\n");
+}
+
+
 PUBLIC
 struct pipe_screen *
 swr_create_screen_internal(struct sw_winsys *winsys)
@@ -1099,32 +1146,7 @@ swr_create_screen_internal(struct sw_winsys *winsys)
 
    util_format_s3tc_init();
 
-   /* XXX msaa under development, disable by default for now */
-   screen->msaa_max_count = 0; /* was SWR_MAX_NUM_MULTISAMPLES; */
-
-   /* validate env override values, within range and power of 2 */
-   int msaa_max_count = debug_get_num_option("SWR_MSAA_MAX_COUNT", 0);
-   if (msaa_max_count) {
-      if ((msaa_max_count < 0) || (msaa_max_count > SWR_MAX_NUM_MULTISAMPLES)
-            || !util_is_power_of_two(msaa_max_count)) {
-         fprintf(stderr, "SWR_MSAA_MAX_COUNT invalid: %d\n", msaa_max_count);
-         fprintf(stderr, "must be power of 2 between 1 and %d" \
-                         " (or 0 to disable msaa)\n",
-               SWR_MAX_NUM_MULTISAMPLES);
-         msaa_max_count = 0;
-      }
-
-      fprintf(stderr, "SWR_MSAA_MAX_COUNT: %d\n", msaa_max_count);
-      if (!msaa_max_count)
-         fprintf(stderr, "(msaa disabled)\n");
-
-      screen->msaa_max_count = msaa_max_count;
-   }
-
-   screen->msaa_force_enable = debug_get_bool_option(
-         "SWR_MSAA_FORCE_ENABLE", false);
-   if (screen->msaa_force_enable)
-      fprintf(stderr, "SWR_MSAA_FORCE_ENABLE: true\n");
+   swr_validate_env_options(screen);
 
    return &screen->base;
 }

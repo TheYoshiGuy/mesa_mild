@@ -56,6 +56,7 @@
 #ifndef ETIME
 #define ETIME ETIMEDOUT
 #endif
+#include "common/gen_clflush.h"
 #include "common/gen_debug.h"
 #include "common/gen_device_info.h"
 #include "libdrm_macros.h"
@@ -76,6 +77,16 @@
 #else
 #define VG(x)
 #endif
+
+/* VALGRIND_FREELIKE_BLOCK unfortunately does not actually undo the earlier
+ * VALGRIND_MALLOCLIKE_BLOCK but instead leaves vg convinced the memory is
+ * leaked. All because it does not call VG(cli_free) from its
+ * VG_USERREQ__FREELIKE_BLOCK handler. Instead of treating the memory like
+ * and allocation, we mark it available for use upon mmapping and remove
+ * it upon unmapping.
+ */
+#define VG_DEFINED(ptr, size) VG(VALGRIND_MAKE_MEM_DEFINED(ptr, size))
+#define VG_NOACCESS(ptr, size) VG(VALGRIND_MAKE_MEM_NOACCESS(ptr, size))
 
 #define memclear(s) memset(&s, 0, sizeof(s))
 
@@ -483,6 +494,7 @@ brw_bo_gem_create_from_name(struct brw_bufmgr *bufmgr,
    bo->name = name;
    bo->global_name = handle;
    bo->reusable = false;
+   bo->external = true;
 
    _mesa_hash_table_insert(bufmgr->handle_table, &bo->gem_handle, bo);
    _mesa_hash_table_insert(bufmgr->name_table, &bo->global_name, bo);
@@ -517,14 +529,15 @@ bo_free(struct brw_bo *bo)
    int ret;
 
    if (bo->map_cpu) {
-      VG(VALGRIND_FREELIKE_BLOCK(bo->map_cpu, 0));
+      VG_NOACCESS(bo->map_cpu, bo->size);
       drm_munmap(bo->map_cpu, bo->size);
    }
    if (bo->map_wc) {
-      VG(VALGRIND_FREELIKE_BLOCK(bo->map_wc, 0));
+      VG_NOACCESS(bo->map_wc, bo->size);
       drm_munmap(bo->map_wc, bo->size);
    }
    if (bo->map_gtt) {
+      VG_NOACCESS(bo->map_gtt, bo->size);
       drm_munmap(bo->map_gtt, bo->size);
    }
 
@@ -668,6 +681,12 @@ brw_bo_map_cpu(struct brw_context *brw, struct brw_bo *bo, unsigned flags)
 {
    struct brw_bufmgr *bufmgr = bo->bufmgr;
 
+   /* We disallow CPU maps for writing to non-coherent buffers, as the
+    * CPU map can become invalidated when a batch is flushed out, which
+    * can happen at unpredictable times.  You should use WC maps instead.
+    */
+   assert(bo->cache_coherent || !(flags & MAP_WRITE));
+
    if (!bo->map_cpu) {
       struct drm_i915_gem_mmap mmap_arg;
       void *map;
@@ -684,21 +703,37 @@ brw_bo_map_cpu(struct brw_context *brw, struct brw_bo *bo, unsigned flags)
              __FILE__, __LINE__, bo->gem_handle, bo->name, strerror(errno));
          return NULL;
       }
-      VG(VALGRIND_MALLOCLIKE_BLOCK(mmap_arg.addr_ptr, mmap_arg.size, 0, 1));
       map = (void *) (uintptr_t) mmap_arg.addr_ptr;
+      VG_DEFINED(map, bo->size);
 
       if (p_atomic_cmpxchg(&bo->map_cpu, NULL, map)) {
-         VG(VALGRIND_FREELIKE_BLOCK(map, 0));
+         VG_NOACCESS(map, bo->size);
          drm_munmap(map, bo->size);
       }
    }
+   assert(bo->map_cpu);
+
    DBG("brw_bo_map_cpu: %d (%s) -> %p, ", bo->gem_handle, bo->name,
        bo->map_cpu);
    print_flags(flags);
 
-   if (!(flags & MAP_ASYNC) || !bufmgr->has_llc) {
+   if (!(flags & MAP_ASYNC)) {
       set_domain(brw, "CPU mapping", bo, I915_GEM_DOMAIN_CPU,
                  flags & MAP_WRITE ? I915_GEM_DOMAIN_CPU : 0);
+   }
+
+   if (!bo->cache_coherent) {
+      /* If we're reusing an existing CPU mapping, the CPU caches may
+       * contain stale data from the last time we read from that mapping.
+       * (With the BO cache, it might even be data from a previous buffer!)
+       * Even if it's a brand new mapping, the kernel may have zeroed the
+       * buffer via CPU writes.
+       *
+       * We need to invalidate those cachelines so that we see the latest
+       * contents, and so long as we only read from the CPU mmap we do not
+       * need to write those cachelines back afterwards.
+       */
+      gen_invalidate_range(bo->map_cpu, bo->size);
    }
 
    return bo->map_cpu;
@@ -724,13 +759,10 @@ brw_bo_map_gtt(struct brw_context *brw, struct brw_bo *bo, unsigned flags)
       if (ret != 0) {
          DBG("%s:%d: Error preparing buffer map %d (%s): %s .\n",
              __FILE__, __LINE__, bo->gem_handle, bo->name, strerror(errno));
-         pthread_mutex_unlock(&bufmgr->lock);
          return NULL;
       }
 
-      /* and mmap it.  We don't need to use VALGRIND_MALLOCLIKE_BLOCK
-       * because Valgrind will already intercept this mmap call.
-       */
+      /* and mmap it. */
       map = drm_mmap(0, bo->size, PROT_READ | PROT_WRITE,
                      MAP_SHARED, bufmgr->fd, mmap_arg.offset);
       if (map == MAP_FAILED) {
@@ -739,15 +771,24 @@ brw_bo_map_gtt(struct brw_context *brw, struct brw_bo *bo, unsigned flags)
          return NULL;
       }
 
+      /* We don't need to use VALGRIND_MALLOCLIKE_BLOCK because Valgrind will
+       * already intercept this mmap call. However, for consistency between
+       * all the mmap paths, we mark the pointer as defined now and mark it
+       * as inaccessible afterwards.
+       */
+      VG_DEFINED(map, bo->size);
+
       if (p_atomic_cmpxchg(&bo->map_gtt, NULL, map)) {
+         VG_NOACCESS(map, bo->size);
          drm_munmap(map, bo->size);
       }
    }
+   assert(bo->map_gtt);
 
    DBG("bo_map_gtt: %d (%s) -> %p, ", bo->gem_handle, bo->name, bo->map_gtt);
    print_flags(flags);
 
-   if (!(flags & MAP_ASYNC) || !bufmgr->has_llc) {
+   if (!(flags & MAP_ASYNC)) {
       set_domain(brw, "GTT mapping", bo,
                  I915_GEM_DOMAIN_GTT, I915_GEM_DOMAIN_GTT);
    }
@@ -761,10 +802,18 @@ can_map_cpu(struct brw_bo *bo, unsigned flags)
    if (bo->cache_coherent)
       return true;
 
-   if (flags & MAP_PERSISTENT)
-      return false;
-
-   if (flags & MAP_COHERENT)
+   /* If PERSISTENT or COHERENT are set, the mmapping needs to remain valid
+    * across batch flushes where the kernel will change cache domains of the
+    * bo, invalidating continued access to the CPU mmap on non-LLC device.
+    *
+    * Similarly, ASYNC typically means that the buffer will be accessed via
+    * both the CPU and the GPU simultaneously.  Batches may be executed that
+    * use the BO even while it is mapped.  While OpenGL technically disallows
+    * most drawing while non-persistent mappings are active, we may still use
+    * the GPU for blits or other operations, causing batches to happen at
+    * inconvenient times.
+    */
+   if (flags & (MAP_PERSISTENT | MAP_COHERENT | MAP_ASYNC))
       return false;
 
    return !(flags & MAP_WRITE);
@@ -805,36 +854,14 @@ brw_bo_subdata(struct brw_bo *bo, uint64_t offset,
    return ret;
 }
 
-int
-brw_bo_get_subdata(struct brw_bo *bo, uint64_t offset,
-                   uint64_t size, void *data)
-{
-   struct brw_bufmgr *bufmgr = bo->bufmgr;
-   struct drm_i915_gem_pread pread;
-   int ret;
-
-   memclear(pread);
-   pread.handle = bo->gem_handle;
-   pread.offset = offset;
-   pread.size = size;
-   pread.data_ptr = (uint64_t) (uintptr_t) data;
-   ret = drmIoctl(bufmgr->fd, DRM_IOCTL_I915_GEM_PREAD, &pread);
-   if (ret != 0) {
-      ret = -errno;
-      DBG("%s:%d: Error reading data from buffer %d: "
-          "(%"PRIu64" %"PRIu64") %s .\n",
-          __FILE__, __LINE__, bo->gem_handle, offset, size, strerror(errno));
-   }
-
-   return ret;
-}
-
 /** Waits for all GPU rendering with the object to have completed. */
 void
-brw_bo_wait_rendering(struct brw_context *brw, struct brw_bo *bo)
+brw_bo_wait_rendering(struct brw_bo *bo)
 {
-   set_domain(brw, "waiting for",
-              bo, I915_GEM_DOMAIN_GTT, I915_GEM_DOMAIN_GTT);
+   /* We require a kernel recent enough for WAIT_IOCTL support.
+    * See intel_init_bufmgr()
+    */
+   brw_bo_wait(bo, -1);
 }
 
 /**
@@ -995,6 +1022,7 @@ brw_bo_gem_create_from_prime(struct brw_bufmgr *bufmgr, int prime_fd)
 
    bo->name = "prime";
    bo->reusable = false;
+   bo->external = true;
 
    memclear(get_tiling);
    get_tiling.handle = bo->gem_handle;
@@ -1025,6 +1053,7 @@ brw_bo_gem_export_to_prime(struct brw_bo *bo, int *prime_fd)
       return -errno;
 
    bo->reusable = false;
+   bo->external = true;
 
    return 0;
 }
@@ -1046,6 +1075,7 @@ brw_bo_flink(struct brw_bo *bo, uint32_t *name)
       if (!bo->global_name) {
          bo->global_name = flink.name;
          bo->reusable = false;
+         bo->external = true;
 
          _mesa_hash_table_insert(bufmgr->name_table, &bo->global_name, bo);
       }

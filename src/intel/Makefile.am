@@ -38,6 +38,7 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/gallium/auxiliary \
 	-I$(top_srcdir)/src/gallium/include \
 	$(VALGRIND_CFLAGS) \
+	$(LIBDRM_CFLAGS) \
 	$(DEFINES)
 
 AM_CFLAGS = \
@@ -62,7 +63,6 @@ EXTRA_DIST =
 include Makefile.blorp.am
 include Makefile.common.am
 include Makefile.compiler.am
-include Makefile.drm.am
 include Makefile.genxml.am
 include Makefile.isl.am
 include Makefile.tools.am

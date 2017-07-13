@@ -29,12 +29,16 @@
 #include "util/u_surface.h"
 #include "util/u_upload_mgr.h"
 
+#include "drm_fourcc.h"
+#include "vc4_drm.h"
 #include "vc4_screen.h"
 #include "vc4_context.h"
 #include "vc4_resource.h"
 #include "vc4_tiling.h"
 
-static bool miptree_debug = false;
+#ifndef DRM_FORMAT_MOD_INVALID
+#define DRM_FORMAT_MOD_INVALID ((1ULL << 56) - 1)
+#endif
 
 static bool
 vc4_resource_bo_alloc(struct vc4_resource *rsc)
@@ -43,7 +47,7 @@ vc4_resource_bo_alloc(struct vc4_resource *rsc)
         struct pipe_screen *pscreen = prsc->screen;
         struct vc4_bo *bo;
 
-        if (miptree_debug) {
+        if (vc4_debug & VC4_DEBUG_SURFACE) {
                 fprintf(stderr, "alloc %p: size %d + offset %d -> %d\n",
                         rsc,
                         rsc->slices[0].size,
@@ -258,10 +262,6 @@ vc4_resource_transfer_map(struct pipe_context *pctx,
                 ptrans->box.z = 0;
         }
 
-        /* Note that the current kernel implementation is synchronous, so no
-         * need to do syncing stuff here yet.
-         */
-
         if (usage & PIPE_TRANSFER_UNSYNCHRONIZED)
                 buf = vc4_bo_map_unsynchronized(rsc->bo);
         else
@@ -393,12 +393,18 @@ vc4_resource_get_handle(struct pipe_screen *pscreen,
         struct vc4_resource *rsc = vc4_resource(prsc);
 
         whandle->stride = rsc->slices[0].stride;
+        whandle->offset = 0;
 
         /* If we're passing some reference to our BO out to some other part of
          * the system, then we can't do any optimizations about only us being
          * the ones seeing it (like BO caching or shadow update avoidance).
          */
         rsc->bo->private = false;
+
+        if (rsc->tiled)
+                whandle->modifier = DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED;
+        else
+                whandle->modifier = DRM_FORMAT_MOD_LINEAR;
 
         switch (whandle->type) {
         case DRM_API_HANDLE_TYPE_SHARED:
@@ -427,7 +433,7 @@ vc4_resource_get_handle(struct pipe_screen *pscreen,
 }
 
 static void
-vc4_setup_slices(struct vc4_resource *rsc)
+vc4_setup_slices(struct vc4_resource *rsc, const char *caller)
 {
         struct pipe_resource *prsc = &rsc->base;
         uint32_t width = prsc->width0;
@@ -486,16 +492,16 @@ vc4_setup_slices(struct vc4_resource *rsc)
 
                 offset += slice->size;
 
-                if (miptree_debug) {
+                if (vc4_debug & VC4_DEBUG_SURFACE) {
                         static const char tiling_chars[] = {
                                 [VC4_TILING_FORMAT_LINEAR] = 'R',
                                 [VC4_TILING_FORMAT_LT] = 'L',
                                 [VC4_TILING_FORMAT_T] = 'T'
                         };
                         fprintf(stderr,
-                                "rsc setup %p (format %s: vc4 %d), %dx%d: "
+                                "rsc %s %p (format %s: vc4 %d), %dx%d: "
                                 "level %d (%c) -> %dx%d, stride %d@0x%08x\n",
-                                rsc,
+                                caller, rsc,
                                 util_format_short_name(prsc->format),
                                 rsc->vc4_format,
                                 prsc->width0, prsc->height0,
@@ -567,34 +573,101 @@ get_resource_texture_format(struct pipe_resource *prsc)
         return format;
 }
 
-struct pipe_resource *
-vc4_resource_create(struct pipe_screen *pscreen,
-                    const struct pipe_resource *tmpl)
+static bool
+find_modifier(uint64_t needle, const uint64_t *haystack, int count)
+{
+        int i;
+
+        for (i = 0; i < count; i++) {
+                if (haystack[i] == needle)
+                        return true;
+        }
+
+        return false;
+}
+
+static struct pipe_resource *
+vc4_resource_create_with_modifiers(struct pipe_screen *pscreen,
+                                   const struct pipe_resource *tmpl,
+                                   const uint64_t *modifiers,
+                                   int count)
 {
         struct vc4_screen *screen = vc4_screen(pscreen);
         struct vc4_resource *rsc = vc4_resource_setup(pscreen, tmpl);
         struct pipe_resource *prsc = &rsc->base;
+        bool linear_ok = find_modifier(DRM_FORMAT_MOD_LINEAR, modifiers, count);
+        /* Use a tiled layout if we can, for better 3D performance. */
+        bool should_tile = true;
 
-        /* We have to make shared be untiled, since we don't have any way to
-         * communicate metadata about tiling currently.
+        /* VBOs/PBOs are untiled (and 1 height). */
+        if (tmpl->target == PIPE_BUFFER)
+                should_tile = false;
+
+        /* MSAA buffers are linear. */
+        if (tmpl->nr_samples > 1)
+                should_tile = false;
+
+        /* No tiling when we're sharing with another device (pl111). */
+        if (screen->ro && (tmpl->bind & PIPE_BIND_SCANOUT))
+                should_tile = false;
+
+        /* Cursors are always linear, and the user can request linear as well.
          */
-        if (tmpl->target == PIPE_BUFFER ||
-            tmpl->nr_samples > 1 ||
-            (tmpl->bind & (PIPE_BIND_SCANOUT |
-                           PIPE_BIND_LINEAR |
-                           PIPE_BIND_SHARED |
-                           PIPE_BIND_CURSOR))) {
+        if (tmpl->bind & (PIPE_BIND_LINEAR | PIPE_BIND_CURSOR))
+                should_tile = false;
+
+        /* No shared objects with LT format -- the kernel only has T-format
+         * metadata.  LT objects are small enough it's not worth the trouble to
+         * give them metadata to tile.
+         */
+        if ((tmpl->bind & (PIPE_BIND_SHARED | PIPE_BIND_SCANOUT)) &&
+            vc4_size_is_lt(prsc->width0, prsc->height0, rsc->cpp))
+                should_tile = false;
+
+        /* If we're sharing or scanning out, we need the ioctl present to
+         * inform the kernel or the other side.
+         */
+        if ((tmpl->bind & (PIPE_BIND_SHARED |
+                           PIPE_BIND_SCANOUT)) && !screen->has_tiling_ioctl)
+                should_tile = false;
+
+        /* No user-specified modifier; determine our own. */
+        if (count == 1 && modifiers[0] == DRM_FORMAT_MOD_INVALID) {
+                linear_ok = true;
+                rsc->tiled = should_tile;
+        } else if (should_tile &&
+                   find_modifier(DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED,
+                                 modifiers, count)) {
+                rsc->tiled = true;
+        } else if (linear_ok) {
                 rsc->tiled = false;
         } else {
-                rsc->tiled = true;
+                fprintf(stderr, "Unsupported modifier requested\n");
+                return NULL;
         }
 
         if (tmpl->target != PIPE_BUFFER)
                 rsc->vc4_format = get_resource_texture_format(prsc);
 
-        vc4_setup_slices(rsc);
+        vc4_setup_slices(rsc, "create");
         if (!vc4_resource_bo_alloc(rsc))
                 goto fail;
+
+        if (screen->has_tiling_ioctl) {
+                uint64_t modifier;
+                if (rsc->tiled)
+                        modifier = DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED;
+                else
+                        modifier = DRM_FORMAT_MOD_LINEAR;
+                struct drm_vc4_set_tiling set_tiling = {
+                        .handle = rsc->bo->handle,
+                        .modifier = modifier,
+                };
+                int ret = vc4_ioctl(screen->fd, DRM_IOCTL_VC4_SET_TILING,
+                                    &set_tiling);
+                if (ret != 0)
+                        goto fail;
+        }
 
         if (screen->ro && tmpl->bind & PIPE_BIND_SCANOUT) {
                 rsc->scanout =
@@ -609,6 +682,14 @@ fail:
         return NULL;
 }
 
+struct pipe_resource *
+vc4_resource_create(struct pipe_screen *pscreen,
+                    const struct pipe_resource *tmpl)
+{
+        const uint64_t mod = DRM_FORMAT_MOD_INVALID;
+        return vc4_resource_create_with_modifiers(pscreen, tmpl, &mod, 1);
+}
+
 static struct pipe_resource *
 vc4_resource_from_handle(struct pipe_screen *pscreen,
                          const struct pipe_resource *tmpl,
@@ -619,28 +700,9 @@ vc4_resource_from_handle(struct pipe_screen *pscreen,
         struct vc4_resource *rsc = vc4_resource_setup(pscreen, tmpl);
         struct pipe_resource *prsc = &rsc->base;
         struct vc4_resource_slice *slice = &rsc->slices[0];
-        uint32_t expected_stride =
-            align(prsc->width0, vc4_utile_width(rsc->cpp)) * rsc->cpp;
 
         if (!rsc)
                 return NULL;
-
-        if (whandle->stride != expected_stride) {
-                static bool warned = false;
-                if (!warned) {
-                        warned = true;
-                        fprintf(stderr,
-                                "Attempting to import %dx%d %s with "
-                                "unsupported stride %d instead of %d\n",
-                                prsc->width0, prsc->height0,
-                                util_format_short_name(prsc->format),
-                                whandle->stride,
-                                expected_stride);
-                }
-                goto fail;
-        }
-
-        rsc->tiled = false;
 
         if (whandle->offset != 0) {
                 fprintf(stderr,
@@ -667,10 +729,38 @@ vc4_resource_from_handle(struct pipe_screen *pscreen,
         if (!rsc->bo)
                 goto fail;
 
-        slice->stride = whandle->stride;
-        slice->tiling = VC4_TILING_FORMAT_LINEAR;
+        struct drm_vc4_get_tiling get_tiling = {
+                .handle = rsc->bo->handle,
+        };
+        int ret = vc4_ioctl(screen->fd, DRM_IOCTL_VC4_GET_TILING, &get_tiling);
+
+        if (ret != 0) {
+                whandle->modifier = DRM_FORMAT_MOD_LINEAR;
+        } else if (whandle->modifier == DRM_FORMAT_MOD_INVALID) {
+                whandle->modifier = get_tiling.modifier;
+        } else if (whandle->modifier != get_tiling.modifier) {
+                fprintf(stderr,
+                        "Modifier 0x%llx vs. tiling (0x%llx) mismatch\n",
+                        (long long)whandle->modifier, get_tiling.modifier);
+                goto fail;
+        }
+
+        switch (whandle->modifier) {
+        case DRM_FORMAT_MOD_LINEAR:
+                rsc->tiled = false;
+                break;
+        case DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED:
+                rsc->tiled = true;
+                break;
+        default:
+                fprintf(stderr,
+                        "Attempt to import unsupported modifier 0x%llx\n",
+                        (long long)whandle->modifier);
+                goto fail;
+        }
 
         rsc->vc4_format = get_resource_texture_format(prsc);
+        vc4_setup_slices(rsc, "import");
 
         if (screen->ro) {
                 /* Make sure that renderonly has a handle to our buffer in the
@@ -684,13 +774,19 @@ vc4_resource_from_handle(struct pipe_screen *pscreen,
                         goto fail;
         }
 
-        if (miptree_debug) {
-                fprintf(stderr,
-                        "rsc import %p (format %d), %dx%d: "
-                        "level 0 (R) -> stride %d@0x%08x\n",
-                        rsc, rsc->vc4_format,
-                        prsc->width0, prsc->height0,
-                        slice->stride, slice->offset);
+        if (whandle->stride != slice->stride) {
+                static bool warned = false;
+                if (!warned) {
+                        warned = true;
+                        fprintf(stderr,
+                                "Attempting to import %dx%d %s with "
+                                "unsupported stride %d instead of %d\n",
+                                prsc->width0, prsc->height0,
+                                util_format_short_name(prsc->format),
+                                whandle->stride,
+                                slice->stride);
+                }
+                goto fail;
         }
 
         return prsc;
@@ -1087,11 +1183,26 @@ vc4_get_shadow_index_buffer(struct pipe_context *pctx,
 void
 vc4_resource_screen_init(struct pipe_screen *pscreen)
 {
+        struct vc4_screen *screen = vc4_screen(pscreen);
+
         pscreen->resource_create = vc4_resource_create;
+        pscreen->resource_create_with_modifiers =
+                vc4_resource_create_with_modifiers;
         pscreen->resource_from_handle = vc4_resource_from_handle;
         pscreen->resource_destroy = u_resource_destroy_vtbl;
         pscreen->resource_get_handle = vc4_resource_get_handle;
         pscreen->resource_destroy = vc4_resource_destroy;
+
+        /* Test if the kernel has GET_TILING; it will return -EINVAL if the
+         * ioctl does not exist, but -ENOENT if we pass an impossible handle.
+         * 0 cannot be a valid GEM object, so use that.
+         */
+        struct drm_vc4_get_tiling get_tiling = {
+                .handle = 0x0,
+        };
+        int ret = vc4_ioctl(screen->fd, DRM_IOCTL_VC4_GET_TILING, &get_tiling);
+        if (ret == -1 && errno == ENOENT)
+                screen->has_tiling_ioctl = true;
 }
 
 void

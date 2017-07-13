@@ -1165,12 +1165,12 @@ swr_update_derived(struct pipe_context *pipe,
       rastState->cullDistanceMask =
          ctx->vs->info.base.culldist_writemask << ctx->vs->info.base.num_written_clipdistance;
 
-      SwrSetRastState(ctx->swrContext, rastState);
+      ctx->api.pfnSwrSetRastState(ctx->swrContext, rastState);
    }
 
    /* Scissor */
    if (ctx->dirty & SWR_NEW_SCISSOR) {
-      SwrSetScissorRects(ctx->swrContext, 1, &ctx->swr_scissor);
+      ctx->api.pfnSwrSetScissorRects(ctx->swrContext, 1, &ctx->swr_scissor);
    }
 
    /* Viewport */
@@ -1210,7 +1210,7 @@ swr_update_derived(struct pipe_context *pipe,
       vp->width = std::min(vp->width, (float)fb->width - vp->x);
       vp->height = std::min(vp->height, (float)fb->height - vp->y);
 
-      SwrSetViewports(ctx->swrContext, 1, vp, vpm);
+      ctx->api.pfnSwrSetViewports(ctx->swrContext, 1, vp, vpm);
    }
 
    /* Set vertex & index buffers
@@ -1267,12 +1267,20 @@ swr_update_derived(struct pipe_context *pipe,
             partial_inbounds = 0;
             min_vertex_index = info.min_index;
 
-            /* Copy only needed vertices to scratch space */
             size = AlignUp(size, 4);
-            const void *ptr = (const uint8_t *) vb->buffer.user + base;
-            ptr = (uint8_t *)swr_copy_to_scratch_space(
-               ctx, &ctx->scratch->vertex_buffer, ptr, size);
-            p_data = (const uint8_t *)ptr - base;
+            /* If size of client memory copy is too large, don't copy. The
+             * draw will access user-buffer directly and then block.  This is
+             * faster than queuing many large client draws. */
+            if (size >= screen->client_copy_limit) {
+               post_update_dirty_flags |= SWR_LARGE_CLIENT_DRAW;
+               p_data = (const uint8_t *) vb->buffer.user;
+            } else {
+               /* Copy only needed vertices to scratch space */
+               const void *ptr = (const uint8_t *) vb->buffer.user + base;
+               ptr = (uint8_t *)swr_copy_to_scratch_space(
+                     ctx, &ctx->scratch->vertex_buffer, ptr, size);
+               p_data = (const uint8_t *)ptr - base;
+            }
          }
 
          swrVertexBuffers[i] = {0};
@@ -1285,7 +1293,7 @@ swr_update_derived(struct pipe_context *pipe,
          swrVertexBuffers[i].partialInboundsSize = partial_inbounds;
       }
 
-      SwrSetVertexBuffers(
+      ctx->api.pfnSwrSetVertexBuffers(
          ctx->swrContext, ctx->num_vertex_buffers, swrVertexBuffers);
 
       /* index buffer, if required (info passed in by swr_draw_vbo) */
@@ -1311,12 +1319,19 @@ swr_update_derived(struct pipe_context *pipe,
 
             size = info.count * pitch;
             size = AlignUp(size, 4);
-
-            /* Copy indices to scratch space */
-            const void *ptr = info.index.user;
-            ptr = swr_copy_to_scratch_space(
-               ctx, &ctx->scratch->index_buffer, ptr, size);
-            p_data = (const uint8_t *)ptr;
+            /* If size of client memory copy is too large, don't copy. The
+             * draw will access user-buffer directly and then block.  This is
+             * faster than queuing many large client draws. */
+            if (size >= screen->client_copy_limit) {
+               post_update_dirty_flags |= SWR_LARGE_CLIENT_DRAW;
+               p_data = (const uint8_t *) info.index.user;
+            } else {
+               /* Copy indices to scratch space */
+               const void *ptr = info.index.user;
+               ptr = swr_copy_to_scratch_space(
+                     ctx, &ctx->scratch->index_buffer, ptr, size);
+               p_data = (const uint8_t *)ptr;
+            }
          }
 
          SWR_INDEX_BUFFER_STATE swrIndexBuffer;
@@ -1324,7 +1339,7 @@ swr_update_derived(struct pipe_context *pipe,
          swrIndexBuffer.pIndices = p_data;
          swrIndexBuffer.size = size;
 
-         SwrSetIndexBuffer(ctx->swrContext, &swrIndexBuffer);
+         ctx->api.pfnSwrSetIndexBuffer(ctx->swrContext, &swrIndexBuffer);
       }
 
       struct swr_vertex_element_state *velems = ctx->velems;
@@ -1349,7 +1364,7 @@ swr_update_derived(struct pipe_context *pipe,
          } else {
             func = swr_compile_gs(ctx, key);
          }
-         SwrSetGsFunc(ctx->swrContext, func);
+         ctx->api.pfnSwrSetGsFunc(ctx->swrContext, func);
 
          /* JIT sampler state */
          if (ctx->dirty & SWR_NEW_SAMPLER) {
@@ -1367,11 +1382,11 @@ swr_update_derived(struct pipe_context *pipe,
                                      ctx->swrDC.texturesGS);
          }
 
-         SwrSetGsState(ctx->swrContext, &ctx->gs->gsState);
+         ctx->api.pfnSwrSetGsState(ctx->swrContext, &ctx->gs->gsState);
       } else {
          SWR_GS_STATE state = { 0 };
-         SwrSetGsState(ctx->swrContext, &state);
-         SwrSetGsFunc(ctx->swrContext, NULL);
+         ctx->api.pfnSwrSetGsState(ctx->swrContext, &state);
+         ctx->api.pfnSwrSetGsFunc(ctx->swrContext, NULL);
       }
    }
 
@@ -1390,7 +1405,7 @@ swr_update_derived(struct pipe_context *pipe,
       } else {
          func = swr_compile_vs(ctx, key);
       }
-      SwrSetVertexFunc(ctx->swrContext, func);
+      ctx->api.pfnSwrSetVertexFunc(ctx->swrContext, func);
 
       /* JIT sampler state */
       if (ctx->dirty & SWR_NEW_SAMPLER) {
@@ -1478,7 +1493,7 @@ swr_update_derived(struct pipe_context *pipe,
       psState.barycentricsMask = barycentricsMask;
       psState.usesUAV = false; // XXX
       psState.forceEarlyZ = false;
-      SwrSetPixelShaderState(ctx->swrContext, &psState);
+      ctx->api.pfnSwrSetPixelShaderState(ctx->swrContext, &psState);
 
       /* JIT sampler state */
       if (ctx->dirty & (SWR_NEW_SAMPLER |
@@ -1567,12 +1582,12 @@ swr_update_derived(struct pipe_context *pipe,
       depthStencilState.depthTestEnable = depth->enabled;
       depthStencilState.depthTestFunc = swr_convert_depth_func(depth->func);
       depthStencilState.depthWriteEnable = depth->writemask;
-      SwrSetDepthStencilState(ctx->swrContext, &depthStencilState);
+      ctx->api.pfnSwrSetDepthStencilState(ctx->swrContext, &depthStencilState);
 
       depthBoundsState.depthBoundsTestEnable = depth->bounds_test;
       depthBoundsState.depthBoundsTestMinValue = depth->bounds_min;
       depthBoundsState.depthBoundsTestMaxValue = depth->bounds_max;
-      SwrSetDepthBoundsState(ctx->swrContext, &depthBoundsState);
+      ctx->api.pfnSwrSetDepthBoundsState(ctx->swrContext, &depthBoundsState);
    }
 
    /* Blend State */
@@ -1601,7 +1616,7 @@ swr_update_derived(struct pipe_context *pipe,
          blendState.renderTarget[0].writeDisableGreen = 1;
          blendState.renderTarget[0].writeDisableBlue = 1;
          blendState.renderTarget[0].writeDisableAlpha = 1;
-         SwrSetBlendFunc(ctx->swrContext, 0, NULL);
+         ctx->api.pfnSwrSetBlendFunc(ctx->swrContext, 0, NULL);
       }
       else
          for (int target = 0;
@@ -1633,7 +1648,7 @@ swr_update_derived(struct pipe_context *pipe,
             if (compileState.blendState.blendEnable == false &&
                 compileState.blendState.logicOpEnable == false &&
                 ctx->depth_stencil->alpha.enabled == 0) {
-               SwrSetBlendFunc(ctx->swrContext, target, NULL);
+               ctx->api.pfnSwrSetBlendFunc(ctx->swrContext, target, NULL);
                continue;
             }
 
@@ -1669,10 +1684,10 @@ swr_update_derived(struct pipe_context *pipe,
 
                ctx->blendJIT->insert(std::make_pair(compileState, func));
             }
-            SwrSetBlendFunc(ctx->swrContext, target, func);
+            ctx->api.pfnSwrSetBlendFunc(ctx->swrContext, target, func);
          }
 
-      SwrSetBlendState(ctx->swrContext, &blendState);
+      ctx->api.pfnSwrSetBlendState(ctx->swrContext, &blendState);
    }
 
    if (ctx->dirty & SWR_NEW_STIPPLE) {
@@ -1682,7 +1697,7 @@ swr_update_derived(struct pipe_context *pipe,
    if (ctx->dirty & (SWR_NEW_VS | SWR_NEW_SO | SWR_NEW_RASTERIZER)) {
       ctx->vs->soState.rasterizerDisable =
          ctx->rasterizer->rasterizer_discard;
-      SwrSetSoState(ctx->swrContext, &ctx->vs->soState);
+      ctx->api.pfnSwrSetSoState(ctx->swrContext, &ctx->vs->soState);
 
       pipe_stream_output_info *stream_output = &ctx->vs->pipe.stream_output;
 
@@ -1698,7 +1713,7 @@ swr_update_derived(struct pipe_context *pipe,
          buffer.pitch = stream_output->stride[i];
          buffer.streamOffset = 0;
 
-         SwrSetSoBuffers(ctx->swrContext, &buffer, i);
+         ctx->api.pfnSwrSetSoBuffers(ctx->swrContext, &buffer, i);
       }
    }
 
@@ -1750,7 +1765,7 @@ swr_update_derived(struct pipe_context *pipe,
    backendState.readViewportArrayIndex = pLastFE->writes_viewport_index;
    backendState.vertexAttribOffset = VERTEX_ATTRIB_START_SLOT; // TODO: optimize
 
-   SwrSetBackendState(ctx->swrContext, &backendState);
+   ctx->api.pfnSwrSetBackendState(ctx->swrContext, &backendState);
 
    /* Ensure that any in-progress attachment change StoreTiles finish */
    if (swr_is_fence_pending(screen->flush_fence))

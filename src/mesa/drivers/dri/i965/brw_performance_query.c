@@ -1350,7 +1350,7 @@ brw_wait_perf_query(struct gl_context *ctx, struct gl_perf_query_object *o)
    if (brw_batch_references(&brw->batch, bo))
       intel_batchbuffer_flush(brw);
 
-   brw_bo_wait_rendering(brw, bo);
+   brw_bo_wait_rendering(bo);
 
    /* Due to a race condition between the OA unit signaling report
     * availability and the report actually being written into memory,
@@ -1826,63 +1826,41 @@ init_oa_sys_vars(struct brw_context *brw, const char *sysfs_dev_dir)
    brw->perfquery.sys_vars.gt_min_freq = min_freq_mhz * 1000000;
    brw->perfquery.sys_vars.gt_max_freq = max_freq_mhz * 1000000;
    brw->perfquery.sys_vars.timestamp_frequency = devinfo->timestamp_frequency;
+   brw->perfquery.sys_vars.n_eu_slices = devinfo->num_slices;
+   /* Assuming uniform distribution of subslices per slices. */
+   brw->perfquery.sys_vars.n_eu_sub_slices = devinfo->num_subslices[0];
 
    if (devinfo->is_haswell) {
+      brw->perfquery.sys_vars.slice_mask = 0;
+      brw->perfquery.sys_vars.subslice_mask = 0;
+
+      for (int s = 0; s < devinfo->num_slices; s++)
+         brw->perfquery.sys_vars.slice_mask |= 1U << s;
+      for (int ss = 0; ss < devinfo->num_subslices[0]; ss++)
+         brw->perfquery.sys_vars.subslice_mask |= 1U << ss;
+
       if (devinfo->gt == 1) {
          brw->perfquery.sys_vars.n_eus = 10;
-         brw->perfquery.sys_vars.n_eu_slices = 1;
-         brw->perfquery.sys_vars.n_eu_sub_slices = 1;
-         brw->perfquery.sys_vars.slice_mask = 0x1;
-         brw->perfquery.sys_vars.subslice_mask = 0x1;
       } else if (devinfo->gt == 2) {
          brw->perfquery.sys_vars.n_eus = 20;
-         brw->perfquery.sys_vars.n_eu_slices = 1;
-         brw->perfquery.sys_vars.n_eu_sub_slices = 2;
-         brw->perfquery.sys_vars.slice_mask = 0x1;
-         brw->perfquery.sys_vars.subslice_mask = 0x3;
       } else if (devinfo->gt == 3) {
          brw->perfquery.sys_vars.n_eus = 40;
-         brw->perfquery.sys_vars.n_eu_slices = 2;
-         brw->perfquery.sys_vars.n_eu_sub_slices = 2;
-         brw->perfquery.sys_vars.slice_mask = 0x3;
-         brw->perfquery.sys_vars.subslice_mask = 0xf;
       } else
          unreachable("not reached");
    } else {
       __DRIscreen *screen = brw->screen->driScrnPriv;
       drm_i915_getparam_t gp;
       int ret;
-      int n_eus = 0;
       int slice_mask = 0;
       int ss_mask = 0;
-      int s_max = devinfo->num_slices; /* maximum number of slices */
-      int ss_max = 0; /* maximum number of subslices per slice */
+      /* maximum number of slices */
+      int s_max = devinfo->num_slices;
+      /* maximum number of subslices per slice (assuming uniform subslices per
+       * slices)
+       */
+      int ss_max = devinfo->num_subslices[0];
       uint64_t subslice_mask = 0;
       int s;
-
-      if (devinfo->gen == 8) {
-         if (devinfo->gt == 1) {
-            ss_max = 2;
-         } else {
-            ss_max = 3;
-         }
-      } else if (devinfo->gen == 9) {
-         /* XXX: beware that the kernel (as of writing) actually works as if
-          * ss_max == 4 since the HW register that reports the global subslice
-          * mask has 4 bits while in practice the limit is 3. It's also
-          * important that we initialize $SubsliceMask with 3 bits per slice
-          * since that's what the counter availability expressions in XML
-          * expect.
-          */
-         ss_max = 3;
-      } else
-         return false;
-
-      gp.param = I915_PARAM_EU_TOTAL;
-      gp.value = &n_eus;
-      ret = drmIoctl(screen->fd, DRM_IOCTL_I915_GETPARAM, &gp);
-      if (ret)
-         return false;
 
       gp.param = I915_PARAM_SLICE_MASK;
       gp.value = &slice_mask;
@@ -1896,7 +1874,7 @@ init_oa_sys_vars(struct brw_context *brw, const char *sysfs_dev_dir)
       if (ret)
          return false;
 
-      brw->perfquery.sys_vars.n_eus = n_eus;
+      brw->perfquery.sys_vars.n_eus = brw->screen->eu_total;
       brw->perfquery.sys_vars.n_eu_slices = __builtin_popcount(slice_mask);
       brw->perfquery.sys_vars.slice_mask = slice_mask;
 

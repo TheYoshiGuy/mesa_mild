@@ -702,10 +702,11 @@ dri2_setup_screen(_EGLDisplay *disp)
           dri2_dpy->image->createImageFromTexture) {
          disp->Extensions.KHR_gl_texture_2D_image = EGL_TRUE;
          disp->Extensions.KHR_gl_texture_cubemap_image = EGL_TRUE;
+
+         if (dri2_renderer_query_integer(dri2_dpy,
+                                         __DRI2_RENDERER_HAS_TEXTURE_3D))
+             disp->Extensions.KHR_gl_texture_3D_image = EGL_TRUE;
       }
-      if (dri2_renderer_query_integer(dri2_dpy,
-                                      __DRI2_RENDERER_HAS_TEXTURE_3D))
-         disp->Extensions.KHR_gl_texture_3D_image = EGL_TRUE;
 #ifdef HAVE_LIBDRM
       if (dri2_dpy->image->base.version >= 8 &&
           dri2_dpy->image->createImageFromDmaBufs) {
@@ -1682,6 +1683,11 @@ dri2_create_image_khr_renderbuffer(_EGLDisplay *disp, _EGLContext *ctx,
       return EGL_NO_IMAGE_KHR;
    }
 
+   if (!disp->Extensions.KHR_gl_renderbuffer_image) {
+      _eglError(EGL_BAD_PARAMETER, "dri2_create_image_khr");
+      return EGL_NO_IMAGE_KHR;
+   }
+
    dri_image =
       dri2_dpy->image->createImageFromRenderbuffer(dri2_ctx->dri_context,
                                                    renderbuffer, NULL);
@@ -1719,7 +1725,6 @@ dri2_create_image_wayland_wl_buffer(_EGLDisplay *disp, _EGLContext *ctx,
    const struct wl_drm_components_descriptor *f;
    __DRIimage *dri_image;
    _EGLImageAttribs attrs;
-   EGLint err;
    int32_t plane;
 
    buffer = wayland_drm_buffer_get(dri2_dpy->wl_server_drm,
@@ -1727,13 +1732,10 @@ dri2_create_image_wayland_wl_buffer(_EGLDisplay *disp, _EGLContext *ctx,
    if (!buffer)
        return NULL;
 
-   err = _eglParseImageAttribList(&attrs, disp, attr_list);
-   plane = attrs.PlaneWL;
-   if (err != EGL_SUCCESS) {
-      _eglError(EGL_BAD_PARAMETER, "dri2_create_image_wayland_wl_buffer");
+   if (!_eglParseImageAttribList(&attrs, disp, attr_list))
       return NULL;
-   }
 
+   plane = attrs.PlaneWL;
    f = buffer->driver_format;
    if (plane < 0 || plane >= f->nplanes) {
       _eglError(EGL_BAD_PARAMETER,
@@ -1819,35 +1821,43 @@ dri2_create_image_khr_texture(_EGLDisplay *disp, _EGLContext *ctx,
       return EGL_NO_IMAGE_KHR;
    }
 
-   if (_eglParseImageAttribList(&attrs, disp, attr_list) != EGL_SUCCESS)
+   if (!_eglParseImageAttribList(&attrs, disp, attr_list))
       return EGL_NO_IMAGE_KHR;
 
    switch (target) {
    case EGL_GL_TEXTURE_2D_KHR:
+      if (!disp->Extensions.KHR_gl_texture_2D_image) {
+         _eglError(EGL_BAD_PARAMETER, "dri2_create_image_khr");
+         return EGL_NO_IMAGE_KHR;
+      }
       depth = 0;
       gl_target = GL_TEXTURE_2D;
       break;
    case EGL_GL_TEXTURE_3D_KHR:
-      if (disp->Extensions.KHR_gl_texture_3D_image) {
-         depth = attrs.GLTextureZOffset;
-         gl_target = GL_TEXTURE_3D;
-         break;
-      }
-      else {
+      if (!disp->Extensions.KHR_gl_texture_3D_image) {
          _eglError(EGL_BAD_PARAMETER, "dri2_create_image_khr");
          return EGL_NO_IMAGE_KHR;
       }
+
+      depth = attrs.GLTextureZOffset;
+      gl_target = GL_TEXTURE_3D;
+      break;
    case EGL_GL_TEXTURE_CUBE_MAP_POSITIVE_X_KHR:
    case EGL_GL_TEXTURE_CUBE_MAP_NEGATIVE_X_KHR:
    case EGL_GL_TEXTURE_CUBE_MAP_POSITIVE_Y_KHR:
    case EGL_GL_TEXTURE_CUBE_MAP_NEGATIVE_Y_KHR:
    case EGL_GL_TEXTURE_CUBE_MAP_POSITIVE_Z_KHR:
    case EGL_GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_KHR:
+      if (!disp->Extensions.KHR_gl_texture_cubemap_image) {
+         _eglError(EGL_BAD_PARAMETER, "dri2_create_image_khr");
+         return EGL_NO_IMAGE_KHR;
+      }
+
       depth = target - EGL_GL_TEXTURE_CUBE_MAP_POSITIVE_X_KHR;
       gl_target = GL_TEXTURE_CUBE_MAP;
       break;
    default:
-      _eglError(EGL_BAD_PARAMETER, "dri2_create_image_khr");
+      unreachable("Unexpected target in dri2_create_image_khr_texture()");
       return EGL_NO_IMAGE_KHR;
    }
 
@@ -1906,8 +1916,7 @@ dri2_create_image_mesa_drm_buffer(_EGLDisplay *disp, _EGLContext *ctx,
 
    name = (EGLint) (uintptr_t) buffer;
 
-   err = _eglParseImageAttribList(&attrs, disp, attr_list);
-   if (err != EGL_SUCCESS)
+   if (!_eglParseImageAttribList(&attrs, disp, attr_list))
       return NULL;
 
    if (attrs.Width <= 0 || attrs.Height <= 0 ||
@@ -2199,7 +2208,6 @@ dri2_create_image_dma_buf(_EGLDisplay *disp, _EGLContext *ctx,
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    _EGLImage *res;
-   EGLint err;
    _EGLImageAttribs attrs;
    __DRIimage *dri_image;
    unsigned num_fds;
@@ -2221,11 +2229,8 @@ dri2_create_image_dma_buf(_EGLDisplay *disp, _EGLContext *ctx,
       return NULL;
    }
 
-   err = _eglParseImageAttribList(&attrs, disp, attr_list);
-   if (err != EGL_SUCCESS) {
-      _eglError(err, "bad attribute");
+   if (!_eglParseImageAttribList(&attrs, disp, attr_list))
       return NULL;
-   }
 
    if (!dri2_check_dma_buf_attribs(&attrs))
       return NULL;
@@ -2247,8 +2252,6 @@ dri2_create_image_dma_buf(_EGLDisplay *disp, _EGLContext *ctx,
       modifier = (uint64_t) attrs.DMABufPlaneModifiersHi[0].Value << 32;
       modifier |= (uint64_t) (attrs.DMABufPlaneModifiersLo[0].Value & 0xffffffff);
       has_modifier = true;
-   } else {
-      modifier = DRM_FORMAT_MOD_INVALID;
    }
 
    if (has_modifier) {
@@ -2298,31 +2301,20 @@ dri2_create_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp,
    _EGLImageAttribs attrs;
    unsigned int dri_use, valid_mask;
    int format;
-   EGLint err = EGL_SUCCESS;
 
    (void) drv;
 
-   dri2_img = malloc(sizeof *dri2_img);
-   if (!dri2_img) {
-      _eglError(EGL_BAD_ALLOC, "dri2_create_image_khr");
+   if (!attr_list) {
+      _eglError(EGL_BAD_PARAMETER, __func__);
       return EGL_NO_IMAGE_KHR;
    }
 
-   if (!attr_list) {
-      err = EGL_BAD_PARAMETER;
-      goto cleanup_img;
-   }
-
-   _eglInitImage(&dri2_img->base, disp);
-
-   err = _eglParseImageAttribList(&attrs, disp, attr_list);
-   if (err != EGL_SUCCESS)
-      goto cleanup_img;
+   if (!_eglParseImageAttribList(&attrs, disp, attr_list))
+      return EGL_NO_IMAGE_KHR;
 
    if (attrs.Width <= 0 || attrs.Height <= 0) {
-      _eglLog(_EGL_WARNING, "bad width or height (%dx%d)",
-            attrs.Width, attrs.Height);
-      goto cleanup_img;
+      _eglError(EGL_BAD_PARAMETER, __func__);
+      return EGL_NO_IMAGE_KHR;
    }
 
    switch (attrs.DRMBufferFormatMESA) {
@@ -2330,9 +2322,8 @@ dri2_create_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp,
       format = __DRI_IMAGE_FORMAT_ARGB8888;
       break;
    default:
-      _eglLog(_EGL_WARNING, "bad image format value 0x%04x",
-            attrs.DRMBufferFormatMESA);
-      goto cleanup_img;
+      _eglError(EGL_BAD_PARAMETER, __func__);
+      return EGL_NO_IMAGE_KHR;
    }
 
    valid_mask =
@@ -2340,9 +2331,8 @@ dri2_create_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp,
       EGL_DRM_BUFFER_USE_SHARE_MESA |
       EGL_DRM_BUFFER_USE_CURSOR_MESA;
    if (attrs.DRMBufferUseMESA & ~valid_mask) {
-      _eglLog(_EGL_WARNING, "bad image use bit 0x%04x",
-            attrs.DRMBufferUseMESA & ~valid_mask);
-      goto cleanup_img;
+      _eglError(EGL_BAD_PARAMETER, __func__);
+      return EGL_NO_IMAGE_KHR;
    }
 
    dri_use = 0;
@@ -2353,22 +2343,25 @@ dri2_create_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp,
    if (attrs.DRMBufferUseMESA & EGL_DRM_BUFFER_USE_CURSOR_MESA)
       dri_use |= __DRI_IMAGE_USE_CURSOR;
 
+   dri2_img = malloc(sizeof *dri2_img);
+   if (!dri2_img) {
+      _eglError(EGL_BAD_ALLOC, "dri2_create_image_khr");
+      return EGL_NO_IMAGE_KHR;
+   }
+
+   _eglInitImage(&dri2_img->base, disp);
+
    dri2_img->dri_image =
       dri2_dpy->image->createImage(dri2_dpy->dri_screen,
                                    attrs.Width, attrs.Height,
                                    format, dri_use, dri2_img);
    if (dri2_img->dri_image == NULL) {
-      err = EGL_BAD_ALLOC;
-      goto cleanup_img;
+      free(dri2_img);
+       _eglError(EGL_BAD_ALLOC, "dri2_create_drm_image_mesa");
+      return EGL_NO_IMAGE_KHR;
    }
 
    return &dri2_img->base;
-
- cleanup_img:
-   free(dri2_img);
-   _eglError(err, "dri2_create_drm_image_mesa");
-
-   return EGL_NO_IMAGE_KHR;
 }
 
 static EGLBoolean
@@ -2468,15 +2461,8 @@ dri2_create_image_khr(_EGLDriver *drv, _EGLDisplay *disp,
    case EGL_GL_TEXTURE_CUBE_MAP_NEGATIVE_Y_KHR:
    case EGL_GL_TEXTURE_CUBE_MAP_POSITIVE_Z_KHR:
    case EGL_GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_KHR:
-      return dri2_create_image_khr_texture(disp, ctx, target, buffer, attr_list);
    case EGL_GL_TEXTURE_3D_KHR:
-      if (disp->Extensions.KHR_gl_texture_3D_image) {
-         return dri2_create_image_khr_texture(disp, ctx, target, buffer, attr_list);
-      }
-      else {
-         _eglError(EGL_BAD_PARAMETER, "dri2_create_image_khr");
-         return EGL_NO_IMAGE_KHR;
-      }
+      return dri2_create_image_khr_texture(disp, ctx, target, buffer, attr_list);
    case EGL_GL_RENDERBUFFER_KHR:
       return dri2_create_image_khr_renderbuffer(disp, ctx, buffer, attr_list);
 #ifdef HAVE_LIBDRM

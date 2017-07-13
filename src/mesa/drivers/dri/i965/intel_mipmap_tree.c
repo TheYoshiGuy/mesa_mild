@@ -27,6 +27,7 @@
 #include <GL/internal/dri_interface.h>
 
 #include "intel_batchbuffer.h"
+#include "intel_image.h"
 #include "intel_mipmap_tree.h"
 #include "intel_tex.h"
 #include "intel_blit.h"
@@ -978,18 +979,152 @@ intel_miptree_create_for_bo(struct brw_context *brw,
    mt->offset = offset;
    mt->tiling = tiling;
 
-   if (!(layout_flags & MIPTREE_LAYOUT_DISABLE_AUX)) {
+   if (!(layout_flags & MIPTREE_LAYOUT_DISABLE_AUX))
       intel_miptree_choose_aux_usage(brw, mt);
 
-      /* Since CCS_E can compress more than just clear color, we create the
-       * CCS for it up-front.  For CCS_D which only compresses clears, we
-       * create the CCS on-demand when a clear occurs that wants one.
+   return mt;
+}
+
+static struct intel_mipmap_tree *
+miptree_create_for_planar_image(struct brw_context *brw,
+                                __DRIimage *image, GLenum target)
+{
+   struct intel_image_format *f = image->planar_format;
+   struct intel_mipmap_tree *planar_mt;
+
+   for (int i = 0; i < f->nplanes; i++) {
+      const int index = f->planes[i].buffer_index;
+      const uint32_t dri_format = f->planes[i].dri_format;
+      const mesa_format format = driImageFormatToGLFormat(dri_format);
+      const uint32_t width = image->width >> f->planes[i].width_shift;
+      const uint32_t height = image->height >> f->planes[i].height_shift;
+
+      /* Disable creation of the texture's aux buffers because the driver
+       * exposes no EGL API to manage them. That is, there is no API for
+       * resolving the aux buffer's content to the main buffer nor for
+       * invalidating the aux buffer's content.
        */
-      if (mt->aux_usage == ISL_AUX_USAGE_CCS_E) {
-         if (!intel_miptree_alloc_ccs(brw, mt)) {
-            intel_miptree_release(&mt);
-            return NULL;
-         }
+      struct intel_mipmap_tree *mt =
+         intel_miptree_create_for_bo(brw, image->bo, format,
+                                     image->offsets[index],
+                                     width, height, 1,
+                                     image->strides[index],
+                                     MIPTREE_LAYOUT_DISABLE_AUX);
+      if (mt == NULL)
+         return NULL;
+
+      mt->target = target;
+      mt->total_width = width;
+      mt->total_height = height;
+
+      if (i == 0)
+         planar_mt = mt;
+      else
+         planar_mt->plane[i - 1] = mt;
+   }
+
+   return planar_mt;
+}
+
+struct intel_mipmap_tree *
+intel_miptree_create_for_dri_image(struct brw_context *brw,
+                                   __DRIimage *image, GLenum target,
+                                   enum isl_colorspace colorspace,
+                                   bool is_winsys_image)
+{
+   if (image->planar_format && image->planar_format->nplanes > 0) {
+      assert(colorspace == ISL_COLORSPACE_NONE ||
+             colorspace == ISL_COLORSPACE_YUV);
+      return miptree_create_for_planar_image(brw, image, target);
+   }
+
+   mesa_format format = image->format;
+   switch (colorspace) {
+   case ISL_COLORSPACE_NONE:
+      /* Keep the image format unmodified */
+      break;
+
+   case ISL_COLORSPACE_LINEAR:
+      format =_mesa_get_srgb_format_linear(format);
+      break;
+
+   case ISL_COLORSPACE_SRGB:
+      format =_mesa_get_linear_format_srgb(format);
+      break;
+
+   default:
+      unreachable("Inalid colorspace for non-planar image");
+   }
+
+   if (!brw->ctx.TextureFormatSupported[format]) {
+      /* The texture storage paths in core Mesa detect if the driver does not
+       * support the user-requested format, and then searches for a
+       * fallback format. The DRIimage code bypasses core Mesa, though. So we
+       * do the fallbacks here for important formats.
+       *
+       * We must support DRM_FOURCC_XBGR8888 textures because the Android
+       * framework produces HAL_PIXEL_FORMAT_RGBX8888 winsys surfaces, which
+       * the Chrome OS compositor consumes as dma_buf EGLImages.
+       */
+      format = _mesa_format_fallback_rgbx_to_rgba(format);
+   }
+
+   if (!brw->ctx.TextureFormatSupported[format])
+      return NULL;
+
+   /* If this image comes in from a window system, we have different
+    * requirements than if it comes in via an EGL import operation.  Window
+    * system images can use any form of auxiliary compression we wish because
+    * they get "flushed" before being handed off to the window system and we
+    * have the opportunity to do resolves.  Window system buffers also may be
+    * used for scanout so we need to flag that appropriately.
+    */
+   const uint32_t mt_layout_flags =
+      is_winsys_image ? MIPTREE_LAYOUT_FOR_SCANOUT : MIPTREE_LAYOUT_DISABLE_AUX;
+
+   /* Disable creation of the texture's aux buffers because the driver exposes
+    * no EGL API to manage them. That is, there is no API for resolving the aux
+    * buffer's content to the main buffer nor for invalidating the aux buffer's
+    * content.
+    */
+   struct intel_mipmap_tree *mt =
+      intel_miptree_create_for_bo(brw, image->bo, format,
+                                  image->offset, image->width, image->height, 1,
+                                  image->pitch, mt_layout_flags);
+   if (mt == NULL)
+      return NULL;
+
+   mt->target = target;
+   mt->level[0].level_x = image->tile_x;
+   mt->level[0].level_y = image->tile_y;
+   mt->level[0].slice[0].x_offset = image->tile_x;
+   mt->level[0].slice[0].y_offset = image->tile_y;
+   mt->total_width += image->tile_x;
+   mt->total_height += image->tile_y;
+
+   /* From "OES_EGL_image" error reporting. We report GL_INVALID_OPERATION
+    * for EGL images from non-tile aligned sufaces in gen4 hw and earlier which has
+    * trouble resolving back to destination image due to alignment issues.
+    */
+   if (!brw->has_surface_tile_offset) {
+      uint32_t draw_x, draw_y;
+      intel_miptree_get_tile_offsets(mt, 0, 0, &draw_x, &draw_y);
+
+      if (draw_x != 0 || draw_y != 0) {
+         _mesa_error(&brw->ctx, GL_INVALID_OPERATION, __func__);
+         intel_miptree_release(&mt);
+         return NULL;
+      }
+   }
+
+   /* Since CCS_E can compress more than just clear color, we create the CCS
+    * for it up-front.  For CCS_D which only compresses clears, we create the
+    * CCS on-demand when a clear occurs that wants one.
+    */
+   if (mt->aux_usage == ISL_AUX_USAGE_CCS_E) {
+      if (!intel_miptree_alloc_ccs(brw, mt)) {
+         intel_miptree_release(&mt);
+         return NULL;
       }
    }
 
@@ -1006,14 +1141,13 @@ intel_miptree_create_for_bo(struct brw_context *brw,
  * that will contain the actual rendering (which is lazily resolved to
  * irb->singlesample_mt).
  */
-void
+bool
 intel_update_winsys_renderbuffer_miptree(struct brw_context *intel,
                                          struct intel_renderbuffer *irb,
-                                         struct brw_bo *bo,
+                                         struct intel_mipmap_tree *singlesample_mt,
                                          uint32_t width, uint32_t height,
                                          uint32_t pitch)
 {
-   struct intel_mipmap_tree *singlesample_mt = NULL;
    struct intel_mipmap_tree *multisample_mt = NULL;
    struct gl_renderbuffer *rb = &irb->Base.Base;
    mesa_format format = rb->Format;
@@ -1025,17 +1159,7 @@ intel_update_winsys_renderbuffer_miptree(struct brw_context *intel,
    assert(_mesa_get_format_base_format(format) == GL_RGB ||
           _mesa_get_format_base_format(format) == GL_RGBA);
 
-   singlesample_mt = intel_miptree_create_for_bo(intel,
-                                                 bo,
-                                                 format,
-                                                 0,
-                                                 width,
-                                                 height,
-                                                 1,
-                                                 pitch,
-                                                 MIPTREE_LAYOUT_FOR_SCANOUT);
-   if (!singlesample_mt)
-      goto fail;
+   assert(singlesample_mt);
 
    if (num_samples == 0) {
       intel_miptree_release(&irb->mt);
@@ -1062,12 +1186,11 @@ intel_update_winsys_renderbuffer_miptree(struct brw_context *intel,
          irb->mt = multisample_mt;
       }
    }
-   return;
+   return true;
 
 fail:
-   intel_miptree_release(&irb->singlesample_mt);
    intel_miptree_release(&irb->mt);
-   return;
+   return false;
 }
 
 struct intel_mipmap_tree*

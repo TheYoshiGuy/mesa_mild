@@ -48,6 +48,7 @@ struct vc4_bo;
 #define VC4_DEBUG_ALWAYS_SYNC  0x0100
 #define VC4_DEBUG_NIR       0x0200
 #define VC4_DEBUG_DUMP      0x0400
+#define VC4_DEBUG_SURFACE   0x0800
 
 #define VC4_MAX_MIP_LEVELS 12
 #define VC4_MAX_TEXTURE_SAMPLERS 16
@@ -94,6 +95,7 @@ struct vc4_screen {
         bool has_control_flow;
         bool has_etc1;
         bool has_threaded_fs;
+        bool has_tiling_ioctl;
 
         struct vc4_simulator_file *sim_file;
 };

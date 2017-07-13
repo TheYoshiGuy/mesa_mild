@@ -256,7 +256,7 @@ intel_finish(struct gl_context * ctx)
    intel_glFlush(ctx);
 
    if (brw->batch.last_bo)
-      brw_bo_wait_rendering(brw, brw->batch.last_bo);
+      brw_bo_wait_rendering(brw->batch.last_bo);
 }
 
 static void
@@ -856,7 +856,7 @@ brwCreateContext(gl_api api,
    brw->must_use_separate_stencil = devinfo->must_use_separate_stencil;
    brw->has_swizzling = screen->hw_has_swizzling;
 
-   isl_device_init(&brw->isl_dev, devinfo, screen->hw_has_swizzling);
+   brw->isl_dev = screen->isl_dev;
 
    brw->vs.base.stage = MESA_SHADER_VERTEX;
    brw->tcs.base.stage = MESA_SHADER_TESS_CTRL;
@@ -1507,9 +1507,28 @@ intel_process_dri2_buffer(struct brw_context *brw,
       return;
    }
 
-   intel_update_winsys_renderbuffer_miptree(brw, rb, bo,
-                                            drawable->w, drawable->h,
-                                            buffer->pitch);
+   struct intel_mipmap_tree *mt =
+      intel_miptree_create_for_bo(brw,
+                                  bo,
+                                  intel_rb_format(rb),
+                                  0,
+                                  drawable->w,
+                                  drawable->h,
+                                  1,
+                                  buffer->pitch,
+                                  MIPTREE_LAYOUT_FOR_SCANOUT);
+   if (!mt) {
+      brw_bo_unreference(bo);
+      return;
+   }
+
+   if (!intel_update_winsys_renderbuffer_miptree(brw, rb, mt,
+                                                 drawable->w, drawable->h,
+                                                 buffer->pitch)) {
+      brw_bo_unreference(bo);
+      intel_miptree_release(&mt);
+      return;
+   }
 
    if (_mesa_is_front_buffer_drawing(fb) &&
        (buffer->attachment == __DRI_BUFFER_FRONT_LEFT ||
@@ -1565,9 +1584,30 @@ intel_update_image_buffer(struct brw_context *intel,
    if (last_mt && last_mt->bo == buffer->bo)
       return;
 
-   intel_update_winsys_renderbuffer_miptree(intel, rb, buffer->bo,
-                                            buffer->width, buffer->height,
-                                            buffer->pitch);
+   enum isl_colorspace colorspace;
+   switch (_mesa_get_format_color_encoding(intel_rb_format(rb))) {
+   case GL_SRGB:
+      colorspace = ISL_COLORSPACE_SRGB;
+      break;
+   case GL_LINEAR:
+      colorspace = ISL_COLORSPACE_LINEAR;
+      break;
+   default:
+      unreachable("Invalid color encoding");
+   }
+
+   struct intel_mipmap_tree *mt =
+      intel_miptree_create_for_dri_image(intel, buffer, GL_TEXTURE_2D,
+                                         colorspace, true);
+   if (!mt)
+      return;
+
+   if (!intel_update_winsys_renderbuffer_miptree(intel, rb, mt,
+                                                 buffer->width, buffer->height,
+                                                 buffer->pitch)) {
+      intel_miptree_release(&mt);
+      return;
+   }
 
    if (_mesa_is_front_buffer_drawing(fb) &&
        buffer_type == __DRI_IMAGE_BUFFER_FRONT &&
