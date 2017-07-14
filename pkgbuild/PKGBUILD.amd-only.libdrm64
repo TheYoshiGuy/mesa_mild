@@ -10,7 +10,6 @@ arch=(i686 x86_64)
 license=('custom')
 depends=('libpciaccess')
 makedepends=('valgrind' 'xorg-util-macros' 'libxslt' 'docbook-xsl')
-checkdepends=('cairo')
 url="http://dri.freedesktop.org/"
 provides=('libdrm')
 replaces=('libdrm')
@@ -27,14 +26,10 @@ pkgver() {
 
 build() {
   cd ${_pkgname}
-  ./autogen.sh --prefix=/usr --with-gnu-ld --enable-manpages --disable-vc4 --disable-freedreno --disable-vmwgfx --disable-nouveau  --enable-udev --disable-intel
+  ./autogen.sh --prefix=/usr --with-gnu-ld --enable-manpages --disable-vc4 --disable-freedreno --disable-vmwgfx --disable-nouveau  --enable-udev --disable-intel --disable-cairo-tests
   make
 }
 
-check() {
-  cd ${_pkgname}
-  make -k check
-}
 
 package() {
   cd ${_pkgname}

@@ -11,7 +11,6 @@ arch=(i686 x86_64)
 license=('custom')
 depends=('libdrm-git' 'lib32-libpciaccess')
 makedepends=('gcc-multilib' 'valgrind-multilib' 'xorg-util-macros')
-checkdepends=('lib32-cairo')
 url="http://dri.freedesktop.org/"
 provides=('lib32-libdrm')
 replaces=('lib32-libdrm')
@@ -34,14 +33,10 @@ build() {
 
   ./autogen.sh \
     --prefix=/usr \
-    --libdir=/usr/lib32 --with-gnu-ld --enable-manpages --disable-vc4 --disable-freedreno --disable-vmwgfx --disable-nouveau  --enable-udev --disable-intel
+    --libdir=/usr/lib32 --with-gnu-ld --enable-manpages --disable-vc4 --disable-freedreno --disable-vmwgfx --disable-nouveau  --enable-udev --disable-intel --disable-cairo-tests
   make
 }
 
-check() {
-  cd ${_pkgname}
-  make -k check
-}
 
 package() {
   cd ${_pkgname}
