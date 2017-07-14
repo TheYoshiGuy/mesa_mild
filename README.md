@@ -5,7 +5,7 @@ This version incorporate some modifications  for GALLIUM3D drivers and i965:
 - Include a way to override VENDOR and RENDERER via environment
 
 
-Note: If you enable "Allow a relaxed core profile", you must disable glthread  in driconf 
+Note: If you enable "Allow a relaxed core profile", you must disable glthread  in driconf
 
 The modifications shall be used only in conjunction with
 
@@ -30,6 +30,4 @@ MESA_GL_VERSION_OVERRIDE=4.5COMPAT wine Cemu.exe
 
 
 
-If you run arch linux derivative, you can use the script buildmesa.sh available in pkgbuild subdirectory
-
-There won't be any kind of support if it's not working from my end
+If you run arch linux derivative, you can use the script buildmesa.sh available in pkgbuild subdirectoryi*might help*

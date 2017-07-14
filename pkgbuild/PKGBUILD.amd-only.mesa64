@@ -58,7 +58,7 @@ build () {
                --enable-dri3 \
                --enable-gallium-extra-hud \
                --with-vulkan-drivers=radeon \
-               --enable-egl --disable-gles1  --enable-gles2 --enable-shared-glapi --disable-libunwind
+               --enable-egl --disable-gles1  --enable-gles2 --enable-shared-glapi 
 
 
 # Used configure settings
