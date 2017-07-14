@@ -222,7 +222,7 @@ brw_emit_prim(struct brw_context *brw,
       struct gl_buffer_object *indirect_buffer = brw->ctx.DrawIndirectBuffer;
       struct brw_bo *bo = intel_bufferobj_buffer(brw,
             intel_buffer_object(indirect_buffer),
-            prim->indirect_offset, 5 * sizeof(GLuint));
+            prim->indirect_offset, 5 * sizeof(GLuint), false);
 
       indirect_flag = GEN7_3DPRIM_INDIRECT_PARAMETER_ENABLE;
 
@@ -674,6 +674,11 @@ brw_try_draw_prims(struct gl_context *ctx,
       estimated_max_prim_size += 1024; /* gen6 VS push constants */
       estimated_max_prim_size += 1024; /* gen6 WM push constants */
       estimated_max_prim_size += 512; /* misc. pad */
+
+      /* Flag BRW_NEW_DRAW_CALL on every draw.  This allows us to have
+       * atoms that happen on every draw call.
+       */
+      brw->ctx.NewDriverState |= BRW_NEW_DRAW_CALL;
 
       /* Flush the batch if it's approaching full, so that we don't wrap while
        * we've got validated state that needs to be in the same batch as the

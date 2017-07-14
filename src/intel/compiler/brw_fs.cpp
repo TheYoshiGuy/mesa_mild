@@ -1383,7 +1383,16 @@ fs_visitor::emit_gs_thread_end()
 void
 fs_visitor::assign_curb_setup()
 {
-   prog_data->curb_read_length = ALIGN(stage_prog_data->nr_params, 8) / 8;
+   unsigned uniform_push_length = DIV_ROUND_UP(stage_prog_data->nr_params, 8);
+
+   unsigned ubo_push_length = 0;
+   unsigned ubo_push_start[4];
+   for (int i = 0; i < 4; i++) {
+      ubo_push_start[i] = 8 * (ubo_push_length + uniform_push_length);
+      ubo_push_length += stage_prog_data->ubo_ranges[i].length;
+   }
+
+   prog_data->curb_read_length = uniform_push_length + ubo_push_length;
 
    /* Map the offsets in the UNIFORM file to fixed HW regs. */
    foreach_block_and_inst(block, fs_inst, inst, cfg) {
@@ -1391,7 +1400,11 @@ fs_visitor::assign_curb_setup()
 	 if (inst->src[i].file == UNIFORM) {
             int uniform_nr = inst->src[i].nr + inst->src[i].offset / 4;
             int constant_nr;
-            if (uniform_nr >= 0 && uniform_nr < (int) uniforms) {
+            if (inst->src[i].nr >= UBO_START) {
+               /* constant_nr is in 32-bit units, the rest are in bytes */
+               constant_nr = ubo_push_start[inst->src[i].nr - UBO_START] +
+                             inst->src[i].offset / 4;
+            } else if (uniform_nr >= 0 && uniform_nr < (int) uniforms) {
                constant_nr = push_constant_loc[uniform_nr];
             } else {
                /* Section 5.11 of the OpenGL 4.1 spec says:
@@ -2062,6 +2075,20 @@ fs_visitor::assign_constant_locations()
    stage_prog_data->nr_params = num_push_constants;
    stage_prog_data->nr_pull_params = num_pull_constants;
 
+   /* Now that we know how many regular uniforms we'll push, reduce the
+    * UBO push ranges so we don't exceed the 3DSTATE_CONSTANT limits.
+    */
+   unsigned push_length = DIV_ROUND_UP(stage_prog_data->nr_params, 8);
+   for (int i = 0; i < 4; i++) {
+      struct brw_ubo_range *range = &prog_data->ubo_ranges[i];
+
+      if (push_length + range->length > 64)
+         range->length = 64 - push_length;
+
+      push_length += range->length;
+   }
+   assert(push_length <= 64);
+
    /* Up until now, the param[] array has been indexed by reg + offset
     * of UNIFORM registers.  Move pull constants into pull_param[] and
     * condense param[] to only contain the uniforms we chose to push.
@@ -2089,6 +2116,38 @@ fs_visitor::assign_constant_locations()
          new_thread_local_id_index;
 }
 
+bool
+fs_visitor::get_pull_locs(const fs_reg &src,
+                          unsigned *out_surf_index,
+                          unsigned *out_pull_index)
+{
+   assert(src.file == UNIFORM);
+
+   if (src.nr >= UBO_START) {
+      const struct brw_ubo_range *range =
+         &prog_data->ubo_ranges[src.nr - UBO_START];
+
+      /* If this access is in our (reduced) range, use the push data. */
+      if (src.offset / 32 < range->length)
+         return false;
+
+      *out_surf_index = prog_data->binding_table.ubo_start + range->block;
+      *out_pull_index = (32 * range->start + src.offset) / 4;
+      return true;
+   }
+
+   const unsigned location = src.nr + src.offset / 4;
+
+   if (location < uniforms && pull_constant_loc[location] != -1) {
+      /* A regular uniform push constant */
+      *out_surf_index = stage_prog_data->binding_table.pull_constants_start;
+      *out_pull_index = pull_constant_loc[location];
+      return true;
+   }
+
+   return false;
+}
+
 /**
  * Replace UNIFORM register file access with either UNIFORM_PULL_CONSTANT_LOAD
  * or VARYING_PULL_CONSTANT_LOAD instructions which load values into VGRFs.
@@ -2096,7 +2155,7 @@ fs_visitor::assign_constant_locations()
 void
 fs_visitor::lower_constant_loads()
 {
-   const unsigned index = stage_prog_data->binding_table.pull_constants_start;
+   unsigned index, pull_index;
 
    foreach_block_and_inst_safe (block, fs_inst, inst, cfg) {
       /* Set up the annotation tracking for new generated instructions. */
@@ -2110,13 +2169,7 @@ fs_visitor::lower_constant_loads()
          if (inst->opcode == SHADER_OPCODE_MOV_INDIRECT && i == 0)
             continue;
 
-         unsigned location = inst->src[i].nr + inst->src[i].offset / 4;
-         if (location >= uniforms)
-            continue; /* Out of bounds access */
-
-         int pull_index = pull_constant_loc[location];
-
-         if (pull_index == -1)
+         if (!get_pull_locs(inst->src[i], &index, &pull_index))
 	    continue;
 
          assert(inst->src[i].stride == 0);
@@ -2141,14 +2194,8 @@ fs_visitor::lower_constant_loads()
       if (inst->opcode == SHADER_OPCODE_MOV_INDIRECT &&
           inst->src[0].file == UNIFORM) {
 
-         unsigned location = inst->src[0].nr + inst->src[0].offset / 4;
-         if (location >= uniforms)
-            continue; /* Out of bounds access */
-
-         int pull_index = pull_constant_loc[location];
-
-         if (pull_index == -1)
-	    continue;
+         if (!get_pull_locs(inst->src[0], &index, &pull_index))
+            continue;
 
          VARYING_PULL_CONSTANT_LOAD(ibld, inst->dst,
                                     brw_imm_ud(index),

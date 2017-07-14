@@ -1156,9 +1156,16 @@ genX(calculate_attr_overrides)(const struct brw_context *brw,
 
 /* ---------------------------------------------------------------------- */
 
-#if GEN_GEN >= 6
-static void
-genX(upload_depth_stencil_state)(struct brw_context *brw)
+#if GEN_GEN >= 8
+typedef struct GENX(3DSTATE_WM_DEPTH_STENCIL) DEPTH_STENCIL_GENXML;
+#elif GEN_GEN >= 6
+typedef struct GENX(DEPTH_STENCIL_STATE)      DEPTH_STENCIL_GENXML;
+#else
+typedef struct GENX(COLOR_CALC_STATE)         DEPTH_STENCIL_GENXML;
+#endif
+
+static inline void
+set_depth_stencil_bits(struct brw_context *brw, DEPTH_STENCIL_GENXML *ds)
 {
    struct gl_context *ctx = &brw->ctx;
 
@@ -1173,65 +1180,75 @@ genX(upload_depth_stencil_state)(struct brw_context *brw)
    struct gl_stencil_attrib *stencil = &ctx->Stencil;
    const int b = stencil->_BackFace;
 
-#if GEN_GEN >= 8
-   brw_batch_emit(brw, GENX(3DSTATE_WM_DEPTH_STENCIL), wmds) {
-#else
-   uint32_t ds_offset;
-   brw_state_emit(brw, GENX(DEPTH_STENCIL_STATE), 64, &ds_offset, wmds) {
-#endif
-      if (depth->Test && depth_irb) {
-         wmds.DepthTestEnable = true;
-         wmds.DepthBufferWriteEnable = brw_depth_writes_enabled(brw);
-         wmds.DepthTestFunction = intel_translate_compare_func(depth->Func);
-      }
-
-      if (brw->stencil_enabled) {
-         wmds.StencilTestEnable = true;
-         wmds.StencilWriteMask = stencil->WriteMask[0] & 0xff;
-         wmds.StencilTestMask = stencil->ValueMask[0] & 0xff;
-
-         wmds.StencilTestFunction =
-            intel_translate_compare_func(stencil->Function[0]);
-         wmds.StencilFailOp =
-            intel_translate_stencil_op(stencil->FailFunc[0]);
-         wmds.StencilPassDepthPassOp =
-            intel_translate_stencil_op(stencil->ZPassFunc[0]);
-         wmds.StencilPassDepthFailOp =
-            intel_translate_stencil_op(stencil->ZFailFunc[0]);
-
-         wmds.StencilBufferWriteEnable = brw->stencil_write_enabled;
-
-         if (brw->stencil_two_sided) {
-            wmds.DoubleSidedStencilEnable = true;
-            wmds.BackfaceStencilWriteMask = stencil->WriteMask[b] & 0xff;
-            wmds.BackfaceStencilTestMask = stencil->ValueMask[b] & 0xff;
-
-            wmds.BackfaceStencilTestFunction =
-               intel_translate_compare_func(stencil->Function[b]);
-            wmds.BackfaceStencilFailOp =
-               intel_translate_stencil_op(stencil->FailFunc[b]);
-            wmds.BackfaceStencilPassDepthPassOp =
-               intel_translate_stencil_op(stencil->ZPassFunc[b]);
-            wmds.BackfaceStencilPassDepthFailOp =
-               intel_translate_stencil_op(stencil->ZFailFunc[b]);
-         }
-
-#if GEN_GEN >= 9
-         wmds.StencilReferenceValue = _mesa_get_stencil_ref(ctx, 0);
-         wmds.BackfaceStencilReferenceValue = _mesa_get_stencil_ref(ctx, b);
-#endif
-      }
+   if (depth->Test && depth_irb) {
+      ds->DepthTestEnable = true;
+      ds->DepthBufferWriteEnable = brw_depth_writes_enabled(brw);
+      ds->DepthTestFunction = intel_translate_compare_func(depth->Func);
    }
 
+   if (brw->stencil_enabled) {
+      ds->StencilTestEnable = true;
+      ds->StencilWriteMask = stencil->WriteMask[0] & 0xff;
+      ds->StencilTestMask = stencil->ValueMask[0] & 0xff;
+
+      ds->StencilTestFunction =
+         intel_translate_compare_func(stencil->Function[0]);
+      ds->StencilFailOp =
+         intel_translate_stencil_op(stencil->FailFunc[0]);
+      ds->StencilPassDepthPassOp =
+         intel_translate_stencil_op(stencil->ZPassFunc[0]);
+      ds->StencilPassDepthFailOp =
+         intel_translate_stencil_op(stencil->ZFailFunc[0]);
+
+      ds->StencilBufferWriteEnable = brw->stencil_write_enabled;
+
+      if (brw->stencil_two_sided) {
+         ds->DoubleSidedStencilEnable = true;
+         ds->BackfaceStencilWriteMask = stencil->WriteMask[b] & 0xff;
+         ds->BackfaceStencilTestMask = stencil->ValueMask[b] & 0xff;
+
+         ds->BackfaceStencilTestFunction =
+            intel_translate_compare_func(stencil->Function[b]);
+         ds->BackfaceStencilFailOp =
+            intel_translate_stencil_op(stencil->FailFunc[b]);
+         ds->BackfaceStencilPassDepthPassOp =
+            intel_translate_stencil_op(stencil->ZPassFunc[b]);
+         ds->BackfaceStencilPassDepthFailOp =
+            intel_translate_stencil_op(stencil->ZFailFunc[b]);
+      }
+
+#if GEN_GEN <= 5 || GEN_GEN >= 9
+      ds->StencilReferenceValue = _mesa_get_stencil_ref(ctx, 0);
+      ds->BackfaceStencilReferenceValue = _mesa_get_stencil_ref(ctx, b);
+#endif
+   }
+}
+
+#if GEN_GEN >= 6
+static void
+genX(upload_depth_stencil_state)(struct brw_context *brw)
+{
+#if GEN_GEN >= 8
+   brw_batch_emit(brw, GENX(3DSTATE_WM_DEPTH_STENCIL), wmds) {
+      set_depth_stencil_bits(brw, &wmds);
+   }
+#else
+   uint32_t ds_offset;
+   brw_state_emit(brw, GENX(DEPTH_STENCIL_STATE), 64, &ds_offset, ds) {
+      set_depth_stencil_bits(brw, &ds);
+   }
+
+   /* Now upload a pointer to the indirect state */
 #if GEN_GEN == 6
    brw_batch_emit(brw, GENX(3DSTATE_CC_STATE_POINTERS), ptr) {
       ptr.PointertoDEPTH_STENCIL_STATE = ds_offset;
       ptr.DEPTH_STENCIL_STATEChange = true;
    }
-#elif GEN_GEN == 7
+#else
    brw_batch_emit(brw, GENX(3DSTATE_DEPTH_STENCIL_STATE_POINTERS), ptr) {
       ptr.PointertoDEPTH_STENCIL_STATE = ds_offset;
    }
+#endif
 #endif
 }
 
@@ -2322,25 +2339,25 @@ static const struct brw_tracked_state genX(sf_clip_viewport) = {
 
 /* ---------------------------------------------------------------------- */
 
-#if GEN_GEN >= 6
 static void
 genX(upload_gs_state)(struct brw_context *brw)
 {
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+   UNUSED struct gl_context *ctx = &brw->ctx;
+   UNUSED const struct gen_device_info *devinfo = &brw->screen->devinfo;
    const struct brw_stage_state *stage_state = &brw->gs.base;
    /* BRW_NEW_GEOMETRY_PROGRAM */
-   bool active = brw->geometry_program;
+   bool active = GEN_GEN >= 6 && brw->geometry_program;
 
    /* BRW_NEW_GS_PROG_DATA */
    struct brw_stage_prog_data *stage_prog_data = stage_state->prog_data;
-   const struct brw_vue_prog_data *vue_prog_data =
+   UNUSED const struct brw_vue_prog_data *vue_prog_data =
       brw_vue_prog_data(stage_prog_data);
 #if GEN_GEN >= 7
    const struct brw_gs_prog_data *gs_prog_data =
       brw_gs_prog_data(stage_prog_data);
 #endif
 
-#if GEN_GEN < 7
+#if GEN_GEN == 6
    brw_batch_emit(brw, GENX(3DSTATE_CONSTANT_GS), cgs) {
       if (active && stage_state->push_const_size != 0) {
          cgs.Buffer0Valid = true;
@@ -2367,8 +2384,15 @@ genX(upload_gs_state)(struct brw_context *brw)
       gen7_emit_cs_stall_flush(brw);
 #endif
 
-   if (active) {
-      brw_batch_emit(brw, GENX(3DSTATE_GS), gs) {
+#if GEN_GEN >= 6
+   brw_batch_emit(brw, GENX(3DSTATE_GS), gs) {
+#else
+   ctx->NewDriverState |= BRW_NEW_GEN4_UNIT_STATE;
+   brw_state_emit(brw, GENX(GS_STATE), 32, &brw->ff_gs.state_offset, gs) {
+#endif
+
+#if GEN_GEN >= 6
+      if (active) {
          INIT_THREAD_DISPATCH_FIELDS(gs, Vertex);
 
 #if GEN_GEN >= 7
@@ -2418,7 +2442,6 @@ genX(upload_gs_state)(struct brw_context *brw)
 
 #if GEN_GEN < 7
          gs.SOStatisticsEnable = true;
-         gs.RenderingEnabled = 1;
          if (brw->geometry_program->info.has_transform_feedback_varyings)
             gs.SVBIPayloadEnable = true;
 
@@ -2453,20 +2476,40 @@ genX(upload_gs_state)(struct brw_context *brw)
          gs.VertexURBEntryOutputLength = MAX2(urb_entry_output_length, 1);
 #endif
       }
-#if GEN_GEN < 7
-   } else if (brw->ff_gs.prog_active)  {
-      /* In gen6, transform feedback for the VS stage is done with an ad-hoc GS
-       * program. This function provides the needed 3DSTATE_GS for this.
-       */
-      upload_gs_state_for_tf(brw);
-#endif
-   } else {
-      brw_batch_emit(brw, GENX(3DSTATE_GS), gs) {
-         gs.StatisticsEnable = true;
-#if GEN_GEN < 7
-         gs.RenderingEnabled = true;
 #endif
 
+#if GEN_GEN <= 6
+      if (!active && brw->ff_gs.prog_active) {
+         /* In gen6, transform feedback for the VS stage is done with an
+          * ad-hoc GS program. This function provides the needed 3DSTATE_GS
+          * for this.
+          */
+         gs.KernelStartPointer = KSP(brw, brw->ff_gs.prog_offset);
+         gs.SingleProgramFlow = true;
+         gs.DispatchGRFStartRegisterForURBData = GEN_GEN == 6 ? 2 : 1;
+         gs.VertexURBEntryReadLength = brw->ff_gs.prog_data->urb_read_length;
+
+#if GEN_GEN <= 5
+         gs.GRFRegisterCount =
+            DIV_ROUND_UP(brw->ff_gs.prog_data->total_grf, 16) - 1;
+         /* BRW_NEW_URB_FENCE */
+         gs.NumberofURBEntries = brw->urb.nr_gs_entries;
+         gs.URBEntryAllocationSize = brw->urb.vsize - 1;
+         gs.MaximumNumberofThreads = brw->urb.nr_gs_entries >= 8 ? 1 : 0;
+         gs.FloatingPointMode = FLOATING_POINT_MODE_Alternate;
+#else
+         gs.Enable = true;
+         gs.VectorMaskEnable = true;
+         gs.SVBIPayloadEnable = true;
+         gs.SVBIPostIncrementEnable = true;
+         gs.SVBIPostIncrementValue =
+            brw->ff_gs.prog_data->svbi_postincrement_value;
+         gs.SOStatisticsEnable = true;
+         gs.MaximumNumberofThreads = devinfo->max_gs_threads - 1;
+#endif
+      }
+#endif
+      if (!active && !brw->ff_gs.prog_active) {
 #if GEN_GEN < 8
          gs.DispatchGRFStartRegisterForURBData = 1;
 #if GEN_GEN >= 7
@@ -2474,25 +2517,41 @@ genX(upload_gs_state)(struct brw_context *brw)
 #endif
 #endif
       }
+
+#if GEN_GEN >= 6
+      gs.StatisticsEnable = true;
+#endif
+#if GEN_GEN == 5 || GEN_GEN == 6
+      gs.RenderingEnabled = true;
+#endif
+#if GEN_GEN <= 5
+      gs.MaximumVPIndex = brw->clip.viewport_count - 1;
+#endif
    }
-#if GEN_GEN < 7
+
+#if GEN_GEN == 6
    brw->gs.enabled = active;
 #endif
 }
 
 static const struct brw_tracked_state genX(gs_state) = {
    .dirty = {
-      .mesa  = (GEN_GEN < 7 ? _NEW_PROGRAM_CONSTANTS : 0),
+      .mesa  = (GEN_GEN == 6 ? _NEW_PROGRAM_CONSTANTS : 0),
       .brw   = BRW_NEW_BATCH |
                BRW_NEW_BLORP |
-               BRW_NEW_CONTEXT |
-               BRW_NEW_GEOMETRY_PROGRAM |
-               BRW_NEW_GS_PROG_DATA |
+               (GEN_GEN <= 5 ? BRW_NEW_PUSH_CONSTANT_ALLOCATION |
+                               BRW_NEW_PROGRAM_CACHE |
+                               BRW_NEW_URB_FENCE |
+                               BRW_NEW_VIEWPORT_COUNT
+                             : 0) |
+               (GEN_GEN >= 6 ? BRW_NEW_CONTEXT |
+                               BRW_NEW_GEOMETRY_PROGRAM |
+                               BRW_NEW_GS_PROG_DATA
+                             : 0) |
                (GEN_GEN < 7 ? BRW_NEW_FF_GS_PROG_DATA : 0),
    },
    .emit = genX(upload_gs_state),
 };
-#endif
 
 /* ---------------------------------------------------------------------- */
 
@@ -2512,6 +2571,129 @@ fix_dual_blend_alpha_to_one(GLenum function)
 
 #define blend_factor(x) brw_translate_blend_factor(x)
 #define blend_eqn(x) brw_translate_blend_equation(x)
+
+/**
+ * Modify blend function to force destination alpha to 1.0
+ *
+ * If \c function specifies a blend function that uses destination alpha,
+ * replace it with a function that hard-wires destination alpha to 1.0.  This
+ * is used when rendering to xRGB targets.
+ */
+static GLenum
+brw_fix_xRGB_alpha(GLenum function)
+{
+   switch (function) {
+   case GL_DST_ALPHA:
+      return GL_ONE;
+
+   case GL_ONE_MINUS_DST_ALPHA:
+   case GL_SRC_ALPHA_SATURATE:
+      return GL_ZERO;
+   }
+
+   return function;
+}
+
+#if GEN_GEN >= 6
+typedef struct GENX(BLEND_STATE_ENTRY) BLEND_ENTRY_GENXML;
+#else
+typedef struct GENX(COLOR_CALC_STATE) BLEND_ENTRY_GENXML;
+#endif
+
+UNUSED static bool
+set_blend_entry_bits(struct brw_context *brw, BLEND_ENTRY_GENXML *entry, int i,
+                     bool alpha_to_one)
+{
+   struct gl_context *ctx = &brw->ctx;
+
+   /* _NEW_BUFFERS */
+   const struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[i];
+
+   bool independent_alpha_blend = false;
+
+   /* Used for implementing the following bit of GL_EXT_texture_integer:
+    * "Per-fragment operations that require floating-point color
+    *  components, including multisample alpha operations, alpha test,
+    *  blending, and dithering, have no effect when the corresponding
+    *  colors are written to an integer color buffer."
+    */
+   const bool integer = ctx->DrawBuffer->_IntegerBuffers & (0x1 << i);
+
+   const unsigned blend_enabled = GEN_GEN >= 6 ?
+      ctx->Color.BlendEnabled & (1 << i) : ctx->Color.BlendEnabled;
+
+   /* _NEW_COLOR */
+   if (ctx->Color.ColorLogicOpEnabled) {
+      GLenum rb_type = rb ? _mesa_get_format_datatype(rb->Format)
+         : GL_UNSIGNED_NORMALIZED;
+      WARN_ONCE(ctx->Color.LogicOp != GL_COPY &&
+                rb_type != GL_UNSIGNED_NORMALIZED &&
+                rb_type != GL_FLOAT, "Ignoring %s logic op on %s "
+                "renderbuffer\n",
+                _mesa_enum_to_string(ctx->Color.LogicOp),
+                _mesa_enum_to_string(rb_type));
+      if (GEN_GEN >= 8 || rb_type == GL_UNSIGNED_NORMALIZED) {
+         entry->LogicOpEnable = true;
+         entry->LogicOpFunction =
+            intel_translate_logic_op(ctx->Color.LogicOp);
+      }
+   } else if (blend_enabled && !ctx->Color._AdvancedBlendMode
+              && (GEN_GEN <= 5 || !integer)) {
+      GLenum eqRGB = ctx->Color.Blend[i].EquationRGB;
+      GLenum eqA = ctx->Color.Blend[i].EquationA;
+      GLenum srcRGB = ctx->Color.Blend[i].SrcRGB;
+      GLenum dstRGB = ctx->Color.Blend[i].DstRGB;
+      GLenum srcA = ctx->Color.Blend[i].SrcA;
+      GLenum dstA = ctx->Color.Blend[i].DstA;
+
+      if (eqRGB == GL_MIN || eqRGB == GL_MAX)
+         srcRGB = dstRGB = GL_ONE;
+
+      if (eqA == GL_MIN || eqA == GL_MAX)
+         srcA = dstA = GL_ONE;
+
+      /* Due to hardware limitations, the destination may have information
+       * in an alpha channel even when the format specifies no alpha
+       * channel. In order to avoid getting any incorrect blending due to
+       * that alpha channel, coerce the blend factors to values that will
+       * not read the alpha channel, but will instead use the correct
+       * implicit value for alpha.
+       */
+      if (rb && !_mesa_base_format_has_channel(rb->_BaseFormat,
+                                               GL_TEXTURE_ALPHA_TYPE)) {
+         srcRGB = brw_fix_xRGB_alpha(srcRGB);
+         srcA = brw_fix_xRGB_alpha(srcA);
+         dstRGB = brw_fix_xRGB_alpha(dstRGB);
+         dstA = brw_fix_xRGB_alpha(dstA);
+      }
+
+      /* From the BLEND_STATE docs, DWord 0, Bit 29 (AlphaToOne Enable):
+       * "If Dual Source Blending is enabled, this bit must be disabled."
+       *
+       * We override SRC1_ALPHA to ONE and ONE_MINUS_SRC1_ALPHA to ZERO,
+       * and leave it enabled anyway.
+       */
+      if (GEN_GEN >= 6 && ctx->Color.Blend[i]._UsesDualSrc && alpha_to_one) {
+         srcRGB = fix_dual_blend_alpha_to_one(srcRGB);
+         srcA = fix_dual_blend_alpha_to_one(srcA);
+         dstRGB = fix_dual_blend_alpha_to_one(dstRGB);
+         dstA = fix_dual_blend_alpha_to_one(dstA);
+      }
+
+      entry->ColorBufferBlendEnable = true;
+      entry->DestinationBlendFactor = blend_factor(dstRGB);
+      entry->SourceBlendFactor = blend_factor(srcRGB);
+      entry->DestinationAlphaBlendFactor = blend_factor(dstA);
+      entry->SourceAlphaBlendFactor = blend_factor(srcA);
+      entry->ColorBlendFunction = blend_eqn(eqRGB);
+      entry->AlphaBlendFunction = blend_eqn(eqA);
+
+      if (srcA != srcRGB || dstA != dstRGB || eqA != eqRGB)
+         independent_alpha_blend = true;
+   }
+
+   return independent_alpha_blend;
+}
 
 #if GEN_GEN >= 6
 static void
@@ -2580,87 +2762,9 @@ genX(upload_blend_state)(struct brw_context *brw)
 #else
       {
 #endif
-
-         /* _NEW_BUFFERS */
-         struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[i];
-
-         /* Used for implementing the following bit of GL_EXT_texture_integer:
-          * "Per-fragment operations that require floating-point color
-          *  components, including multisample alpha operations, alpha test,
-          *  blending, and dithering, have no effect when the corresponding
-          *  colors are written to an integer color buffer."
-          */
-         bool integer = ctx->DrawBuffer->_IntegerBuffers & (0x1 << i);
-
-         /* _NEW_COLOR */
-         if (ctx->Color.ColorLogicOpEnabled) {
-            GLenum rb_type = rb ? _mesa_get_format_datatype(rb->Format)
-                                : GL_UNSIGNED_NORMALIZED;
-            WARN_ONCE(ctx->Color.LogicOp != GL_COPY &&
-                      rb_type != GL_UNSIGNED_NORMALIZED &&
-                      rb_type != GL_FLOAT, "Ignoring %s logic op on %s "
-                      "renderbuffer\n",
-                      _mesa_enum_to_string(ctx->Color.LogicOp),
-                      _mesa_enum_to_string(rb_type));
-            if (GEN_GEN >= 8 || rb_type == GL_UNSIGNED_NORMALIZED) {
-               entry.LogicOpEnable = true;
-               entry.LogicOpFunction =
-                  intel_translate_logic_op(ctx->Color.LogicOp);
-            }
-         } else if (ctx->Color.BlendEnabled & (1 << i) && !integer &&
-                    !ctx->Color._AdvancedBlendMode) {
-            GLenum eqRGB = ctx->Color.Blend[i].EquationRGB;
-            GLenum eqA = ctx->Color.Blend[i].EquationA;
-            GLenum srcRGB = ctx->Color.Blend[i].SrcRGB;
-            GLenum dstRGB = ctx->Color.Blend[i].DstRGB;
-            GLenum srcA = ctx->Color.Blend[i].SrcA;
-            GLenum dstA = ctx->Color.Blend[i].DstA;
-
-            if (eqRGB == GL_MIN || eqRGB == GL_MAX)
-               srcRGB = dstRGB = GL_ONE;
-
-            if (eqA == GL_MIN || eqA == GL_MAX)
-               srcA = dstA = GL_ONE;
-
-            /* Due to hardware limitations, the destination may have information
-             * in an alpha channel even when the format specifies no alpha
-             * channel. In order to avoid getting any incorrect blending due to
-             * that alpha channel, coerce the blend factors to values that will
-             * not read the alpha channel, but will instead use the correct
-             * implicit value for alpha.
-             */
-            if (rb && !_mesa_base_format_has_channel(rb->_BaseFormat,
-                                                     GL_TEXTURE_ALPHA_TYPE)) {
-               srcRGB = brw_fix_xRGB_alpha(srcRGB);
-               srcA = brw_fix_xRGB_alpha(srcA);
-               dstRGB = brw_fix_xRGB_alpha(dstRGB);
-               dstA = brw_fix_xRGB_alpha(dstA);
-            }
-
-            /* From the BLEND_STATE docs, DWord 0, Bit 29 (AlphaToOne Enable):
-             * "If Dual Source Blending is enabled, this bit must be disabled."
-             *
-             * We override SRC1_ALPHA to ONE and ONE_MINUS_SRC1_ALPHA to ZERO,
-             * and leave it enabled anyway.
-             */
-            if (ctx->Color.Blend[i]._UsesDualSrc && blend.AlphaToOneEnable) {
-               srcRGB = fix_dual_blend_alpha_to_one(srcRGB);
-               srcA = fix_dual_blend_alpha_to_one(srcA);
-               dstRGB = fix_dual_blend_alpha_to_one(dstRGB);
-               dstA = fix_dual_blend_alpha_to_one(dstA);
-            }
-
-            entry.ColorBufferBlendEnable = true;
-            entry.DestinationBlendFactor = blend_factor(dstRGB);
-            entry.SourceBlendFactor = blend_factor(srcRGB);
-            entry.DestinationAlphaBlendFactor = blend_factor(dstA);
-            entry.SourceAlphaBlendFactor = blend_factor(srcA);
-            entry.ColorBlendFunction = blend_eqn(eqRGB);
-            entry.AlphaBlendFunction = blend_eqn(eqA);
-
-            if (srcA != srcRGB || dstA != dstRGB || eqA != eqRGB)
-               blend.IndependentAlphaBlendEnable = true;
-         }
+         blend.IndependentAlphaBlendEnable =
+            set_blend_entry_bits(brw, &entry, i, blend.AlphaToOneEnable) ||
+            blend.IndependentAlphaBlendEnable;
 
          /* See section 8.1.6 "Pre-Blend Color Clamping" of the
           * SandyBridge PRM Volume 2 Part 1 for HW requirements.
@@ -2741,30 +2845,112 @@ UNUSED static const uint32_t push_constant_opcodes[] = {
 };
 
 static void
-upload_constant_state(struct brw_context *brw,
-                      struct brw_stage_state *stage_state,
-                      bool active, uint32_t stage)
+genX(upload_push_constant_packets)(struct brw_context *brw)
 {
-   UNUSED uint32_t mocs = GEN_GEN < 8 ? GEN7_MOCS_L3 : 0;
-   active = active && stage_state->push_const_size != 0;
+   struct gl_context *ctx = &brw->ctx;
 
-   brw_batch_emit(brw, GENX(3DSTATE_CONSTANT_VS), pkt) {
-      pkt._3DCommandSubOpcode = push_constant_opcodes[stage];
-      if (active) {
+   UNUSED uint32_t mocs = GEN_GEN < 8 ? GEN7_MOCS_L3 : 0;
+
+   struct brw_stage_state *stage_states[] = {
+      &brw->vs.base,
+      &brw->tcs.base,
+      &brw->tes.base,
+      &brw->gs.base,
+      &brw->wm.base,
+   };
+
+   if (GEN_GEN == 7 && !GEN_IS_HASWELL && !brw->is_baytrail &&
+       stage_states[MESA_SHADER_VERTEX]->push_constants_dirty)
+      gen7_emit_vs_workaround_flush(brw);
+
+   for (int stage = 0; stage <= MESA_SHADER_FRAGMENT; stage++) {
+      struct brw_stage_state *stage_state = stage_states[stage];
+      struct gl_program *prog = ctx->_Shader->CurrentProgram[stage];
+
+      if (!stage_state->push_constants_dirty)
+         continue;
+
+      brw_batch_emit(brw, GENX(3DSTATE_CONSTANT_VS), pkt) {
+         pkt._3DCommandSubOpcode = push_constant_opcodes[stage];
+         if (stage_state->prog_data) {
 #if GEN_GEN >= 8 || GEN_IS_HASWELL
-         pkt.ConstantBody.ReadLength[2] = stage_state->push_const_size;
-         pkt.ConstantBody.Buffer[2] =
-            render_ro_bo(brw->curbe.curbe_bo, stage_state->push_const_offset);
+            /* The Skylake PRM contains the following restriction:
+             *
+             *    "The driver must ensure The following case does not occur
+             *     without a flush to the 3D engine: 3DSTATE_CONSTANT_* with
+             *     buffer 3 read length equal to zero committed followed by a
+             *     3DSTATE_CONSTANT_* with buffer 0 read length not equal to
+             *     zero committed."
+             *
+             * To avoid this, we program the buffers in the highest slots.
+             * This way, slot 0 is only used if slot 3 is also used.
+             */
+            int n = 3;
+
+            for (int i = 3; i >= 0; i--) {
+               const struct brw_ubo_range *range =
+                  &stage_state->prog_data->ubo_ranges[i];
+
+               if (range->length == 0)
+                  continue;
+
+               const struct gl_uniform_block *block =
+                  prog->sh.UniformBlocks[range->block];
+               const struct gl_uniform_buffer_binding *binding =
+                  &ctx->UniformBufferBindings[block->Binding];
+
+               if (binding->BufferObject == ctx->Shared->NullBufferObj) {
+                  static unsigned msg_id = 0;
+                  _mesa_gl_debug(ctx, &msg_id, MESA_DEBUG_SOURCE_API,
+                                 MESA_DEBUG_TYPE_UNDEFINED,
+                                 MESA_DEBUG_SEVERITY_HIGH,
+                                 "UBO %d unbound, %s shader uniform data "
+                                 "will be undefined.",
+                                 range->block,
+                                 _mesa_shader_stage_to_string(stage));
+                  continue;
+               }
+
+               assert(binding->Offset % 32 == 0);
+
+               struct brw_bo *bo = intel_bufferobj_buffer(brw,
+                  intel_buffer_object(binding->BufferObject),
+                  binding->Offset, range->length * 32, false);
+
+               pkt.ConstantBody.ReadLength[n] = range->length;
+               pkt.ConstantBody.Buffer[n] =
+                  render_ro_bo(bo, range->start * 32 + binding->Offset);
+               n--;
+            }
+
+            if (stage_state->push_const_size > 0) {
+               assert(n >= 0);
+               pkt.ConstantBody.ReadLength[n] = stage_state->push_const_size;
+               pkt.ConstantBody.Buffer[n] =
+                  render_ro_bo(stage_state->push_const_bo,
+                               stage_state->push_const_offset);
+            }
 #else
-         pkt.ConstantBody.ReadLength[0] = stage_state->push_const_size;
-         pkt.ConstantBody.Buffer[0].offset =
-            stage_state->push_const_offset | mocs;
+            pkt.ConstantBody.ReadLength[0] = stage_state->push_const_size;
+            pkt.ConstantBody.Buffer[0].offset =
+               stage_state->push_const_offset | mocs;
 #endif
+         }
       }
+
+      stage_state->push_constants_dirty = false;
    }
 
    brw->ctx.NewDriverState |= GEN_GEN >= 9 ? BRW_NEW_SURFACES : 0;
 }
+
+const struct brw_tracked_state genX(push_constant_packets) = {
+   .dirty = {
+      .mesa  = 0,
+      .brw   = BRW_NEW_DRAW_CALL,
+   },
+   .emit = genX(upload_push_constant_packets),
+};
 #endif
 
 #if GEN_GEN >= 6
@@ -2780,14 +2966,6 @@ genX(upload_vs_push_constants)(struct brw_context *brw)
 
    _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_VERTEX);
    gen6_upload_push_constants(brw, &vp->program, prog_data, stage_state);
-
-#if GEN_GEN >= 7
-   if (GEN_GEN == 7 && !GEN_IS_HASWELL && !brw->is_baytrail)
-      gen7_emit_vs_workaround_flush(brw);
-
-   upload_constant_state(brw, stage_state, true /* active */,
-                         MESA_SHADER_VERTEX);
-#endif
 }
 
 static const struct brw_tracked_state genX(vs_push_constants) = {
@@ -2796,7 +2974,6 @@ static const struct brw_tracked_state genX(vs_push_constants) = {
                _NEW_TRANSFORM,
       .brw   = BRW_NEW_BATCH |
                BRW_NEW_BLORP |
-               BRW_NEW_PUSH_CONSTANT_ALLOCATION |
                BRW_NEW_VERTEX_PROGRAM |
                BRW_NEW_VS_PROG_DATA,
    },
@@ -2818,10 +2995,6 @@ genX(upload_gs_push_constants)(struct brw_context *brw)
       _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_GEOMETRY);
       gen6_upload_push_constants(brw, &gp->program, prog_data, stage_state);
    }
-
-#if GEN_GEN >= 7
-   upload_constant_state(brw, stage_state, gp, MESA_SHADER_GEOMETRY);
-#endif
 }
 
 static const struct brw_tracked_state genX(gs_push_constants) = {
@@ -2831,8 +3004,7 @@ static const struct brw_tracked_state genX(gs_push_constants) = {
       .brw   = BRW_NEW_BATCH |
                BRW_NEW_BLORP |
                BRW_NEW_GEOMETRY_PROGRAM |
-               BRW_NEW_GS_PROG_DATA |
-               BRW_NEW_PUSH_CONSTANT_ALLOCATION,
+               BRW_NEW_GS_PROG_DATA,
    },
    .emit = genX(upload_gs_push_constants),
 };
@@ -2849,10 +3021,6 @@ genX(upload_wm_push_constants)(struct brw_context *brw)
    _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_FRAGMENT);
 
    gen6_upload_push_constants(brw, &fp->program, prog_data, stage_state);
-
-#if GEN_GEN >= 7
-   upload_constant_state(brw, stage_state, true, MESA_SHADER_FRAGMENT);
-#endif
 }
 
 static const struct brw_tracked_state genX(wm_push_constants) = {
@@ -2861,8 +3029,7 @@ static const struct brw_tracked_state genX(wm_push_constants) = {
       .brw   = BRW_NEW_BATCH |
                BRW_NEW_BLORP |
                BRW_NEW_FRAGMENT_PROGRAM |
-               BRW_NEW_FS_PROG_DATA |
-               BRW_NEW_PUSH_CONSTANT_ALLOCATION,
+               BRW_NEW_FS_PROG_DATA,
    },
    .emit = genX(upload_wm_push_constants),
 };
@@ -2960,17 +3127,36 @@ static const struct brw_tracked_state genX(multisample_state) = {
 
 /* ---------------------------------------------------------------------- */
 
-#if GEN_GEN >= 6
 static void
 genX(upload_color_calc_state)(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
 
    brw_state_emit(brw, GENX(COLOR_CALC_STATE), 64, &brw->cc.state_offset, cc) {
+#if GEN_GEN <= 5
+      cc.IndependentAlphaBlendEnable =
+         set_blend_entry_bits(brw, &cc, 0, false);
+      set_depth_stencil_bits(brw, &cc);
+
+      if (ctx->Color.AlphaEnabled &&
+          ctx->DrawBuffer->_NumColorDrawBuffers <= 1) {
+         cc.AlphaTestEnable = true;
+         cc.AlphaTestFunction =
+            intel_translate_compare_func(ctx->Color.AlphaFunc);
+      }
+
+      cc.ColorDitherEnable = ctx->Color.DitherFlag;
+
+      cc.StatisticsEnable = brw->stats_wm;
+
+      cc.CCViewportStatePointer =
+         instruction_ro_bo(brw->batch.bo, brw->cc.vp_offset);
+#else
       /* _NEW_COLOR */
-      cc.AlphaTestFormat = ALPHATEST_UNORM8;
-      UNCLAMPED_FLOAT_TO_UBYTE(cc.AlphaReferenceValueAsUNORM8,
-                               ctx->Color.AlphaRef);
+      cc.BlendConstantColorRed = ctx->Color.BlendColorUnclamped[0];
+      cc.BlendConstantColorGreen = ctx->Color.BlendColorUnclamped[1];
+      cc.BlendConstantColorBlue = ctx->Color.BlendColorUnclamped[2];
+      cc.BlendConstantColorAlpha = ctx->Color.BlendColorUnclamped[3];
 
 #if GEN_GEN < 9
       /* _NEW_STENCIL */
@@ -2979,34 +3165,42 @@ genX(upload_color_calc_state)(struct brw_context *brw)
          _mesa_get_stencil_ref(ctx, ctx->Stencil._BackFace);
 #endif
 
+#endif
+
       /* _NEW_COLOR */
-      cc.BlendConstantColorRed = ctx->Color.BlendColorUnclamped[0];
-      cc.BlendConstantColorGreen = ctx->Color.BlendColorUnclamped[1];
-      cc.BlendConstantColorBlue = ctx->Color.BlendColorUnclamped[2];
-      cc.BlendConstantColorAlpha = ctx->Color.BlendColorUnclamped[3];
+      UNCLAMPED_FLOAT_TO_UBYTE(cc.AlphaReferenceValueAsUNORM8,
+                               ctx->Color.AlphaRef);
    }
 
+#if GEN_GEN >= 6
    brw_batch_emit(brw, GENX(3DSTATE_CC_STATE_POINTERS), ptr) {
       ptr.ColorCalcStatePointer = brw->cc.state_offset;
 #if GEN_GEN != 7
       ptr.ColorCalcStatePointerValid = true;
 #endif
    }
+#else
+   brw->ctx.NewDriverState |= BRW_NEW_GEN4_UNIT_STATE;
+#endif
 }
 
 static const struct brw_tracked_state genX(color_calc_state) = {
    .dirty = {
       .mesa = _NEW_COLOR |
-              _NEW_STENCIL,
+              _NEW_STENCIL |
+              (GEN_GEN <= 5 ? _NEW_BUFFERS |
+                              _NEW_DEPTH
+                            : 0),
       .brw = BRW_NEW_BATCH |
              BRW_NEW_BLORP |
-             BRW_NEW_CC_STATE |
-             BRW_NEW_STATE_BASE_ADDRESS,
+             (GEN_GEN <= 5 ? BRW_NEW_CC_VP |
+                             BRW_NEW_STATS_WM
+                           : BRW_NEW_CC_STATE |
+                             BRW_NEW_STATE_BASE_ADDRESS),
    },
    .emit = genX(upload_color_calc_state),
 };
 
-#endif
 
 /* ---------------------------------------------------------------------- */
 
@@ -3256,7 +3450,7 @@ genX(upload_3dstate_so_buffers)(struct brw_context *brw)
       assert(start % 4 == 0);
       uint32_t end = ALIGN(start + xfb_obj->Size[i], 4);
       struct brw_bo *bo =
-         intel_bufferobj_buffer(brw, bufferobj, start, end - start);
+         intel_bufferobj_buffer(brw, bufferobj, start, end - start, true);
       assert(end <= bo->size);
 
       brw_batch_emit(brw, GENX(3DSTATE_SO_BUFFER), sob) {
@@ -3456,7 +3650,8 @@ genX(upload_ps)(struct brw_context *brw)
       ps.MaximumNumberofThreads = devinfo->max_wm_threads - 1;
 #endif
 
-      if (prog_data->base.nr_params > 0)
+      if (prog_data->base.nr_params > 0 ||
+          prog_data->base.ubo_ranges[0].length > 0)
          ps.PushConstantEnable = true;
 
 #if GEN_GEN < 8
@@ -3671,8 +3866,6 @@ genX(upload_tes_push_constants)(struct brw_context *brw)
       _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_TESS_EVAL);
       gen6_upload_push_constants(brw, &tep->program, prog_data, stage_state);
    }
-
-   upload_constant_state(brw, stage_state, tep, MESA_SHADER_TESS_EVAL);
 }
 
 static const struct brw_tracked_state genX(tes_push_constants) = {
@@ -3680,7 +3873,6 @@ static const struct brw_tracked_state genX(tes_push_constants) = {
       .mesa  = _NEW_PROGRAM_CONSTANTS,
       .brw   = BRW_NEW_BATCH |
                BRW_NEW_BLORP |
-               BRW_NEW_PUSH_CONSTANT_ALLOCATION |
                BRW_NEW_TESS_PROGRAMS |
                BRW_NEW_TES_PROG_DATA,
    },
@@ -3702,8 +3894,6 @@ genX(upload_tcs_push_constants)(struct brw_context *brw)
       _mesa_shader_write_subroutine_indices(&brw->ctx, MESA_SHADER_TESS_CTRL);
       gen6_upload_push_constants(brw, &tcp->program, prog_data, stage_state);
    }
-
-   upload_constant_state(brw, stage_state, active, MESA_SHADER_TESS_CTRL);
 }
 
 static const struct brw_tracked_state genX(tcs_push_constants) = {
@@ -3712,7 +3902,6 @@ static const struct brw_tracked_state genX(tcs_push_constants) = {
       .brw   = BRW_NEW_BATCH |
                BRW_NEW_BLORP |
                BRW_NEW_DEFAULT_TESS_LEVELS |
-               BRW_NEW_PUSH_CONSTANT_ALLOCATION |
                BRW_NEW_TESS_PROGRAMS |
                BRW_NEW_TCS_PROG_DATA,
    },
@@ -4873,6 +5062,32 @@ const struct brw_tracked_state genX(cs_samplers) = {
 
 /* ---------------------------------------------------------------------- */
 
+#if GEN_GEN <= 5
+
+static void genX(upload_blend_constant_color)(struct brw_context *brw)
+{
+   struct gl_context *ctx = &brw->ctx;
+
+   brw_batch_emit(brw, GENX(3DSTATE_CONSTANT_COLOR), blend_cc) {
+      blend_cc.BlendConstantColorRed = ctx->Color.BlendColorUnclamped[0];
+      blend_cc.BlendConstantColorGreen = ctx->Color.BlendColorUnclamped[1];
+      blend_cc.BlendConstantColorBlue = ctx->Color.BlendColorUnclamped[2];
+      blend_cc.BlendConstantColorAlpha = ctx->Color.BlendColorUnclamped[3];
+   }
+}
+
+static const struct brw_tracked_state genX(blend_constant_color) = {
+   .dirty = {
+      .mesa = _NEW_COLOR,
+      .brw = BRW_NEW_CONTEXT |
+             BRW_NEW_BLORP,
+   },
+   .emit = genX(upload_blend_constant_color)
+};
+#endif
+
+/* ---------------------------------------------------------------------- */
+
 void
 genX(init_atoms)(struct brw_context *brw)
 {
@@ -4887,7 +5102,7 @@ genX(init_atoms)(struct brw_context *brw)
       &brw_recalculate_urb_fence,
 
       &genX(cc_vp),
-      &brw_cc_unit,
+      &genX(color_calc_state),
 
       /* Surface state setup.  Must come before the VS/WM unit.  The binding
        * table upload must be last.
@@ -4909,14 +5124,14 @@ genX(init_atoms)(struct brw_context *brw)
       &genX(sf_state),
       &genX(vs_state), /* always required, enabled or not */
       &brw_clip_unit,
-      &brw_gs_unit,
+      &genX(gs_state),
 
       /* Command packets:
        */
       &brw_invariant_state,
 
       &brw_binding_table_pointers,
-      &brw_blend_constant_color,
+      &genX(blend_constant_color),
 
       &brw_depthbuffer,
 
@@ -5046,6 +5261,9 @@ genX(init_atoms)(struct brw_context *brw)
       &gen6_renderbuffer_surfaces,
       &brw_renderbuffer_read_surfaces,
       &brw_texture_surfaces,
+
+      &genX(push_constant_packets),
+
       &brw_vs_binding_table,
       &brw_tcs_binding_table,
       &brw_tes_binding_table,
@@ -5135,6 +5353,9 @@ genX(init_atoms)(struct brw_context *brw)
       &gen6_renderbuffer_surfaces,
       &brw_renderbuffer_read_surfaces,
       &brw_texture_surfaces,
+
+      &genX(push_constant_packets),
+
       &brw_vs_binding_table,
       &brw_tcs_binding_table,
       &brw_tes_binding_table,

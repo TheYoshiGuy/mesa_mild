@@ -100,6 +100,12 @@ struct brw_compiler {
     * This can negatively impact performance.
     */
    bool precise_trig;
+
+   /**
+    * Is 3DSTATE_CONSTANT_*'s Constant Buffer 0 relative to Dynamic State
+    * Base Address?  (If not, it's a normal GPU address.)
+    */
+   bool constant_buffer_0_is_relative;
 };
 
 
@@ -462,6 +468,13 @@ struct brw_image_param {
  */
 #define BRW_SHADER_TIME_STRIDE 64
 
+struct brw_ubo_range
+{
+   uint16_t block;
+   uint8_t start;
+   uint8_t length;
+};
+
 struct brw_stage_prog_data {
    struct {
       /** size of our binding table. */
@@ -481,6 +494,8 @@ struct brw_stage_prog_data {
       uint32_t plane_start[3];
       /** @} */
    } binding_table;
+
+   struct brw_ubo_range ubo_ranges[4];
 
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;

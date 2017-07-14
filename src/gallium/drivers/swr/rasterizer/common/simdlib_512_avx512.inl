@@ -167,8 +167,8 @@ SIMD_WRAPPER_3(fmsub_ps);   // return (a * b) - c
 SIMD_WRAPPER_2(max_ps);     // return (a > b) ? a : b
 SIMD_WRAPPER_2(min_ps);     // return (a < b) ? a : b
 SIMD_WRAPPER_2(mul_ps);     // return a * b
-SIMD_WRAPPER_1_(rcp_ps, _mm512_rcp28_ps);       // return 1.0f / a
-SIMD_WRAPPER_1_(rsqrt_ps, _mm512_rsqrt28_ps);   // return 1.0f / sqrt(a)
+SIMD_WRAPPER_1_(rcp_ps, _mm512_rcp14_ps);       // return 1.0f / a
+SIMD_WRAPPER_1_(rsqrt_ps, _mm512_rsqrt14_ps);   // return 1.0f / sqrt(a)
 SIMD_WRAPPER_2(sub_ps);     // return a - b
 
 template <RoundMode RMT>
@@ -543,7 +543,7 @@ static SIMDINLINE Float SIMDCALL mask_i32gather_ps(Float old, float const* p, In
 {
     __mmask16 k = _mm512_cmpneq_ps_mask(mask, setzero_ps());
 
-    return _mm512_mask_i32gather_ps(old, k, idx, p, ScaleT);
+    return _mm512_mask_i32gather_ps(old, k, idx, p, static_cast<int>(ScaleT));
 }
 
 static SIMDINLINE void SIMDCALL maskstore_ps(float *p, Integer mask, Float src)

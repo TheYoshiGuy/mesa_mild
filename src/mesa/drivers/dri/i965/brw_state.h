@@ -42,7 +42,6 @@ extern "C" {
 enum intel_msaa_layout;
 
 extern const struct brw_tracked_state brw_blend_constant_color;
-extern const struct brw_tracked_state brw_cc_unit;
 extern const struct brw_tracked_state brw_clip_unit;
 extern const struct brw_tracked_state brw_vs_pull_constants;
 extern const struct brw_tracked_state brw_tcs_pull_constants;
@@ -53,7 +52,6 @@ extern const struct brw_tracked_state brw_cs_pull_constants;
 extern const struct brw_tracked_state brw_constant_buffer;
 extern const struct brw_tracked_state brw_curbe_offsets;
 extern const struct brw_tracked_state brw_invariant_state;
-extern const struct brw_tracked_state brw_gs_unit;
 extern const struct brw_tracked_state brw_binding_table_pointers;
 extern const struct brw_tracked_state brw_depthbuffer;
 extern const struct brw_tracked_state brw_recalculate_urb_fence;
@@ -355,8 +353,6 @@ void gen75_init_atoms(struct brw_context *brw);
 void gen8_init_atoms(struct brw_context *brw);
 void gen9_init_atoms(struct brw_context *brw);
 void gen10_init_atoms(struct brw_context *brw);
-
-void upload_gs_state_for_tf(struct brw_context *brw);
 
 /* Memory Object Control State:
  * Specifying zero for L3 means "uncached in L3", at least on Haswell

@@ -50,6 +50,8 @@ offset(const fs_reg &reg, const brw::fs_builder &bld, unsigned delta)
    return offset(reg, bld.dispatch_width(), delta);
 }
 
+#define UBO_START ((1 << 16) - 4)
+
 /**
  * The fragment shader front-end.
  *
@@ -125,6 +127,8 @@ public:
    void split_virtual_grfs();
    bool compact_virtual_grfs();
    void assign_constant_locations();
+   bool get_pull_locs(const fs_reg &src, unsigned *out_surf_index,
+                      unsigned *out_pull_index);
    void lower_constant_loads();
    void invalidate_live_intervals();
    void calculate_live_intervals();

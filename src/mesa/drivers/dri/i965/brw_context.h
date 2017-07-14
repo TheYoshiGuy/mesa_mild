@@ -214,6 +214,7 @@ enum brw_state_id {
    BRW_STATE_BLORP,
    BRW_STATE_VIEWPORT_COUNT,
    BRW_STATE_CONSERVATIVE_RASTERIZATION,
+   BRW_STATE_DRAW_CALL,
    BRW_NUM_STATE_BITS
 };
 
@@ -304,6 +305,7 @@ enum brw_state_id {
 #define BRW_NEW_CC_STATE                (1ull << BRW_STATE_CC_STATE)
 #define BRW_NEW_BLORP                   (1ull << BRW_STATE_BLORP)
 #define BRW_NEW_CONSERVATIVE_RASTERIZATION (1ull << BRW_STATE_CONSERVATIVE_RASTERIZATION)
+#define BRW_NEW_DRAW_CALL               (1ull << BRW_STATE_DRAW_CALL)
 
 struct brw_state_flags {
    /** State update flags signalled by mesa internals */
@@ -552,7 +554,8 @@ struct brw_stage_state
    /** Offset in the batchbuffer to Gen4-5 pipelined state (VS/WM/GS_STATE). */
    uint32_t state_offset;
 
-   uint32_t push_const_offset; /* Offset in the batchbuffer */
+   struct brw_bo *push_const_bo; /* NULL if using the batchbuffer */
+   uint32_t push_const_offset; /* Offset in the push constant BO or batch */
    int push_const_size; /* in 256-bit register increments */
 
    /* Binding table: pointers to SURFACE_STATE entries. */
@@ -562,6 +565,9 @@ struct brw_stage_state
    /** SAMPLER_STATE count and table offset */
    uint32_t sampler_count;
    uint32_t sampler_offset;
+
+   /** Need to re-emit 3DSTATE_CONSTANT_XS? */
+   bool push_constants_dirty;
 };
 
 enum brw_predicate_state {
