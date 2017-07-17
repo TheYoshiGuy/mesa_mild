@@ -547,6 +547,8 @@ struct radv_device {
 
 	/* Backup in-memory cache to be used if the app doesn't provide one */
 	struct radv_pipeline_cache *                mem_cache;
+
+	uint32_t image_mrt_offset_counter;
 };
 
 struct radv_device_memory {
@@ -869,7 +871,7 @@ void si_cs_emit_cache_flush(struct radeon_winsys_cs *cs,
 			    bool is_mec,
 			    enum radv_cmd_flush_bits flush_bits);
 void si_emit_cache_flush(struct radv_cmd_buffer *cmd_buffer);
-void si_emit_set_pred(struct radv_cmd_buffer *cmd_buffer, uint64_t va);
+void si_emit_set_predication_state(struct radv_cmd_buffer *cmd_buffer, uint64_t va);
 void si_cp_dma_buffer_copy(struct radv_cmd_buffer *cmd_buffer,
 			   uint64_t src_va, uint64_t dest_va,
 			   uint64_t size);
@@ -912,6 +914,9 @@ void radv_set_color_clear_regs(struct radv_cmd_buffer *cmd_buffer,
 			       struct radv_image *image,
 			       int idx,
 			       uint32_t color_values[2]);
+void radv_set_dcc_need_cmask_elim_pred(struct radv_cmd_buffer *cmd_buffer,
+				       struct radv_image *image,
+				       bool value);
 void radv_fill_buffer(struct radv_cmd_buffer *cmd_buffer,
 		      struct radeon_winsys_bo *bo,
 		      uint64_t offset, uint64_t size, uint32_t value);
@@ -1205,6 +1210,8 @@ struct radv_image {
 	bool exclusive;
 	unsigned queue_family_mask;
 
+	bool shareable;
+
 	/* Set when bound */
 	struct radeon_winsys_bo *bo;
 	VkDeviceSize offset;
@@ -1215,6 +1222,7 @@ struct radv_image {
 	struct radv_fmask_info fmask;
 	struct radv_cmask_info cmask;
 	uint32_t clear_value_offset;
+	uint32_t dcc_pred_offset;
 };
 
 /* Whether the image has a htile that is known consistent with the contents of

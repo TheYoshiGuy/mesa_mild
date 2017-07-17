@@ -57,7 +57,8 @@ dri_create_context(gl_api api, const struct gl_config * visual,
    struct st_context_attribs attribs;
    enum st_context_error ctx_err = 0;
    unsigned allowed_flags = __DRI_CTX_FLAG_DEBUG |
-                            __DRI_CTX_FLAG_FORWARD_COMPATIBLE;
+                            __DRI_CTX_FLAG_FORWARD_COMPATIBLE |
+                            __DRI_CTX_FLAG_NO_ERROR;
    const __DRIbackgroundCallableExtension *backgroundCallable =
       screen->sPriv->dri2.backgroundCallable;
 
@@ -106,6 +107,9 @@ dri_create_context(gl_api api, const struct gl_config * visual,
    if (notify_reset)
       attribs.flags |= ST_CONTEXT_FLAG_RESET_NOTIFICATION_ENABLED;
 
+   if (flags & __DRI_CTX_FLAG_NO_ERROR)
+      attribs.flags |= ST_CONTEXT_FLAG_NO_ERROR;
+
    if (sharedContextPrivate) {
       st_share = ((struct dri_context *)sharedContextPrivate)->st;
    }
@@ -119,6 +123,9 @@ dri_create_context(gl_api api, const struct gl_config * visual,
    cPriv->driverPrivate = ctx;
    ctx->cPriv = cPriv;
    ctx->sPriv = sPriv;
+
+   if (driQueryOptionb(&screen->optionCache, "mesa_no_error"))
+      attribs.flags |= ST_CONTEXT_FLAG_NO_ERROR;
 
    attribs.options = screen->options;
    dri_fill_st_visual(&attribs.visual, screen, visual);

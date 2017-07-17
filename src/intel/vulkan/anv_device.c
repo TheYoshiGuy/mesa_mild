@@ -408,6 +408,10 @@ anv_physical_device_finish(struct anv_physical_device *device)
 
 static const VkExtensionProperties global_extensions[] = {
    {
+      .extensionName = VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME,
+      .specVersion = 1,
+   },
+   {
       .extensionName = VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
       .specVersion = 1,
    },
@@ -437,19 +441,27 @@ static const VkExtensionProperties global_extensions[] = {
       .specVersion = 6,
    },
 #endif
-   {
-      .extensionName = VK_KHX_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME,
-      .specVersion = 1,
-   },
-   {
-      .extensionName = VK_KHX_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME,
-      .specVersion = 1,
-   },
 };
 
 static const VkExtensionProperties device_extensions[] = {
    {
+      .extensionName = VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+      .specVersion = 1,
+   },
+   {
       .extensionName = VK_KHR_DESCRIPTOR_UPDATE_TEMPLATE_EXTENSION_NAME,
+      .specVersion = 1,
+   },
+   {
+      .extensionName = VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
+      .specVersion = 1,
+   },
+   {
+      .extensionName = VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+      .specVersion = 1,
+   },
+   {
+      .extensionName = VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
       .specVersion = 1,
    },
    {
@@ -475,22 +487,6 @@ static const VkExtensionProperties device_extensions[] = {
    {
       .extensionName = VK_KHR_SWAPCHAIN_EXTENSION_NAME,
       .specVersion = 68,
-   },
-   {
-      .extensionName = VK_KHX_EXTERNAL_MEMORY_EXTENSION_NAME,
-      .specVersion = 1,
-   },
-   {
-      .extensionName = VK_KHX_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
-      .specVersion = 1,
-   },
-   {
-      .extensionName = VK_KHX_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
-      .specVersion = 1,
-   },
-   {
-      .extensionName = VK_KHX_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
-      .specVersion = 1,
    },
    {
       .extensionName = VK_KHX_MULTIVIEW_EXTENSION_NAME,
@@ -886,7 +882,7 @@ void anv_GetPhysicalDeviceProperties(
    };
 
    *pProperties = (VkPhysicalDeviceProperties) {
-      .apiVersion = VK_MAKE_VERSION(1, 0, 42),
+      .apiVersion = VK_MAKE_VERSION(1, 0, 54),
       .driverVersion = vk_get_driver_version(),
       .vendorID = 0x8086,
       .deviceID = pdevice->chipset_id,
@@ -919,9 +915,9 @@ void anv_GetPhysicalDeviceProperties2KHR(
          break;
       }
 
-      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES_KHX: {
-         VkPhysicalDeviceIDPropertiesKHX *id_props =
-            (VkPhysicalDeviceIDPropertiesKHX *)ext;
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES_KHR: {
+         VkPhysicalDeviceIDPropertiesKHR *id_props =
+            (VkPhysicalDeviceIDPropertiesKHR *)ext;
          memcpy(id_props->deviceUUID, pdevice->device_uuid, VK_UUID_SIZE);
          memcpy(id_props->driverUUID, pdevice->driver_uuid, VK_UUID_SIZE);
          /* The LUID is for Windows. */
@@ -1572,8 +1568,8 @@ VkResult anv_AllocateMemory(
    mem->map = NULL;
    mem->map_size = 0;
 
-   const VkImportMemoryFdInfoKHX *fd_info =
-      vk_find_struct_const(pAllocateInfo->pNext, IMPORT_MEMORY_FD_INFO_KHX);
+   const VkImportMemoryFdInfoKHR *fd_info =
+      vk_find_struct_const(pAllocateInfo->pNext, IMPORT_MEMORY_FD_INFO_KHR);
 
    /* The Vulkan spec permits handleType to be 0, in which case the struct is
     * ignored.
@@ -1583,7 +1579,7 @@ VkResult anv_AllocateMemory(
        * just a GEM buffer.
        */
       assert(fd_info->handleType ==
-             VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHX);
+             VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR);
 
       result = anv_bo_cache_import(device, &device->bo_cache,
                                    fd_info->fd, pAllocateInfo->allocationSize,
@@ -1615,26 +1611,28 @@ VkResult anv_AllocateMemory(
    return result;
 }
 
-VkResult anv_GetMemoryFdKHX(
+VkResult anv_GetMemoryFdKHR(
     VkDevice                                    device_h,
-    VkDeviceMemory                              memory_h,
-    VkExternalMemoryHandleTypeFlagBitsKHX       handleType,
+    const VkMemoryGetFdInfoKHR*                 pGetFdInfo,
     int*                                        pFd)
 {
    ANV_FROM_HANDLE(anv_device, dev, device_h);
-   ANV_FROM_HANDLE(anv_device_memory, mem, memory_h);
+   ANV_FROM_HANDLE(anv_device_memory, mem, pGetFdInfo->memory);
+
+   assert(pGetFdInfo->sType == VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR);
 
    /* We support only one handle type. */
-   assert(handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHX);
+   assert(pGetFdInfo->handleType ==
+          VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR);
 
    return anv_bo_cache_export(dev, &dev->bo_cache, mem->bo, pFd);
 }
 
-VkResult anv_GetMemoryFdPropertiesKHX(
+VkResult anv_GetMemoryFdPropertiesKHR(
     VkDevice                                    device_h,
-    VkExternalMemoryHandleTypeFlagBitsKHX       handleType,
+    VkExternalMemoryHandleTypeFlagBitsKHR       handleType,
     int                                         fd,
-    VkMemoryFdPropertiesKHX*                    pMemoryFdProperties)
+    VkMemoryFdPropertiesKHR*                    pMemoryFdProperties)
 {
    /* The valid usage section for this function says:
     *
@@ -1642,7 +1640,7 @@ VkResult anv_GetMemoryFdPropertiesKHX(
     *
     * Since we only handle opaque handles for now, there are no FD properties.
     */
-   return VK_ERROR_INVALID_EXTERNAL_HANDLE_KHX;
+   return VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR;
 }
 
 void anv_FreeMemory(
@@ -1820,6 +1818,30 @@ void anv_GetBufferMemoryRequirements(
    pMemoryRequirements->memoryTypeBits = memory_types;
 }
 
+void anv_GetBufferMemoryRequirements2KHR(
+    VkDevice                                    _device,
+    const VkBufferMemoryRequirementsInfo2KHR*   pInfo,
+    VkMemoryRequirements2KHR*                   pMemoryRequirements)
+{
+   anv_GetBufferMemoryRequirements(_device, pInfo->buffer,
+                                   &pMemoryRequirements->memoryRequirements);
+
+   vk_foreach_struct(ext, pMemoryRequirements->pNext) {
+      switch (ext->sType) {
+      case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS_KHR: {
+         VkMemoryDedicatedRequirementsKHR *requirements = (void *)ext;
+         requirements->prefersDedicatedAllocation = VK_FALSE;
+         requirements->requiresDedicatedAllocation = VK_FALSE;
+         break;
+      }
+
+      default:
+         anv_debug_ignored_stype(ext->sType);
+         break;
+      }
+   }
+}
+
 void anv_GetImageMemoryRequirements(
     VkDevice                                    _device,
     VkImage                                     _image,
@@ -1845,11 +1867,44 @@ void anv_GetImageMemoryRequirements(
    pMemoryRequirements->memoryTypeBits = memory_types;
 }
 
+void anv_GetImageMemoryRequirements2KHR(
+    VkDevice                                    _device,
+    const VkImageMemoryRequirementsInfo2KHR*    pInfo,
+    VkMemoryRequirements2KHR*                   pMemoryRequirements)
+{
+   anv_GetImageMemoryRequirements(_device, pInfo->image,
+                                  &pMemoryRequirements->memoryRequirements);
+
+   vk_foreach_struct(ext, pMemoryRequirements->pNext) {
+      switch (ext->sType) {
+      case VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS_KHR: {
+         VkMemoryDedicatedRequirementsKHR *requirements = (void *)ext;
+         requirements->prefersDedicatedAllocation = VK_FALSE;
+         requirements->requiresDedicatedAllocation = VK_FALSE;
+         break;
+      }
+
+      default:
+         anv_debug_ignored_stype(ext->sType);
+         break;
+      }
+   }
+}
+
 void anv_GetImageSparseMemoryRequirements(
     VkDevice                                    device,
     VkImage                                     image,
     uint32_t*                                   pSparseMemoryRequirementCount,
     VkSparseImageMemoryRequirements*            pSparseMemoryRequirements)
+{
+   *pSparseMemoryRequirementCount = 0;
+}
+
+void anv_GetImageSparseMemoryRequirements2KHR(
+    VkDevice                                    device,
+    const VkImageSparseMemoryRequirementsInfo2KHR* pInfo,
+    uint32_t*                                   pSparseMemoryRequirementCount,
+    VkSparseImageMemoryRequirements2KHR*        pSparseMemoryRequirements)
 {
    *pSparseMemoryRequirementCount = 0;
 }

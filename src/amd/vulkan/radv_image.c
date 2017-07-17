@@ -27,10 +27,12 @@
 
 #include "radv_private.h"
 #include "vk_format.h"
+#include "vk_util.h"
 #include "radv_radeon_winsys.h"
 #include "sid.h"
 #include "gfx9d.h"
 #include "util/debug.h"
+#include "util/u_atomic.h"
 static unsigned
 radv_choose_tiling(struct radv_device *Device,
 		   const struct radv_image_create_info *create_info)
@@ -209,6 +211,8 @@ si_set_mutable_tex_desc_fields(struct radv_device *device,
 		va += base_level_info->offset;
 
 	state[0] = va >> 8;
+	if (chip_class < GFX9)
+		state[0] |= image->surface.u.legacy.tile_swizzle;
 	state[1] &= C_008F14_BASE_ADDRESS_HI;
 	state[1] |= S_008F14_BASE_ADDRESS_HI(va >> 40);
 	state[3] |= S_008F1C_TILING_INDEX(si_tile_mode_index(image, base_level,
@@ -224,7 +228,8 @@ si_set_mutable_tex_desc_fields(struct radv_device *device,
 				meta_va += base_level_info->dcc_offset;
 			state[6] |= S_008F28_COMPRESSION_EN(1);
 			state[7] = meta_va >> 8;
-
+			if (chip_class < GFX9)
+				state[7] |= image->surface.u.legacy.tile_swizzle;
 		}
 	}
 
@@ -472,6 +477,8 @@ si_make_texture_descriptor(struct radv_device *device,
 		}
 
 		fmask_state[0] = va >> 8;
+		if (device->physical_device->rad_info.chip_class < GFX9)
+			fmask_state[0] |= image->surface.u.legacy.tile_swizzle;
 		fmask_state[1] = S_008F14_BASE_ADDRESS_HI(va >> 40) |
 			S_008F14_DATA_FORMAT_GFX6(fmask_format) |
 			S_008F14_NUM_FORMAT_GFX6(num_format);
@@ -705,12 +712,16 @@ static void
 radv_image_alloc_cmask(struct radv_device *device,
 		       struct radv_image *image)
 {
+	uint32_t clear_value_size = 0;
 	radv_image_get_cmask_info(device, image, &image->cmask);
 
 	image->cmask.offset = align64(image->size, image->cmask.alignment);
 	/* + 8 for storing the clear values */
-	image->clear_value_offset = image->cmask.offset + image->cmask.size;
-	image->size = image->cmask.offset + image->cmask.size + 8;
+	if (!image->clear_value_offset) {
+		image->clear_value_offset = image->cmask.offset + image->cmask.size;
+		clear_value_size = 8;
+	}
+	image->size = image->cmask.offset + image->cmask.size + clear_value_size;
 	image->alignment = MAX2(image->alignment, image->cmask.alignment);
 }
 
@@ -719,9 +730,10 @@ radv_image_alloc_dcc(struct radv_device *device,
 		       struct radv_image *image)
 {
 	image->dcc_offset = align64(image->size, image->surface.dcc_alignment);
-	/* + 8 for storing the clear values */
+	/* + 16 for storing the clear values + dcc pred */
 	image->clear_value_offset = image->dcc_offset + image->surface.dcc_size;
-	image->size = image->dcc_offset + image->surface.dcc_size + 8;
+	image->dcc_pred_offset = image->clear_value_offset + 8;
+	image->size = image->dcc_offset + image->surface.dcc_size + 16;
 	image->alignment = MAX2(image->alignment, image->surface.dcc_alignment);
 }
 
@@ -783,10 +795,16 @@ radv_image_create(VkDevice _device,
 	image->exclusive = pCreateInfo->sharingMode == VK_SHARING_MODE_EXCLUSIVE;
 	if (pCreateInfo->sharingMode == VK_SHARING_MODE_CONCURRENT) {
 		for (uint32_t i = 0; i < pCreateInfo->queueFamilyIndexCount; ++i)
-			if (pCreateInfo->pQueueFamilyIndices[i] == VK_QUEUE_FAMILY_EXTERNAL_KHX)
+			if (pCreateInfo->pQueueFamilyIndices[i] == VK_QUEUE_FAMILY_EXTERNAL_KHR)
 				image->queue_family_mask |= (1u << RADV_MAX_QUEUE_FAMILIES) - 1u;
 			else
 				image->queue_family_mask |= 1u << pCreateInfo->pQueueFamilyIndices[i];
+	}
+
+	image->shareable = vk_find_struct_const(pCreateInfo->pNext,
+	                                        EXTERNAL_MEMORY_IMAGE_CREATE_INFO_KHR) != NULL;
+	if (!vk_format_is_depth(pCreateInfo->format) && !create_info->scanout && !image->shareable) {
+		image->info.surf_index = p_atomic_inc_return(&device->image_mrt_offset_counter) - 1;
 	}
 
 	radv_init_surface(device, &image->surface, create_info);
@@ -965,7 +983,7 @@ unsigned radv_image_queue_family_mask(const struct radv_image *image, uint32_t f
 {
 	if (!image->exclusive)
 		return image->queue_family_mask;
-	if (family == VK_QUEUE_FAMILY_EXTERNAL_KHX)
+	if (family == VK_QUEUE_FAMILY_EXTERNAL_KHR)
 		return (1u << RADV_MAX_QUEUE_FAMILIES) - 1u;
 	if (family == VK_QUEUE_FAMILY_IGNORED)
 		return 1u << queue_family;
