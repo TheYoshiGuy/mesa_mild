@@ -426,7 +426,7 @@ static const VkExtensionProperties global_extensions[] = {
 #ifdef VK_USE_PLATFORM_WAYLAND_KHR
    {
       .extensionName = VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME,
-      .specVersion = 5,
+      .specVersion = 6,
    },
 #endif
 #ifdef VK_USE_PLATFORM_XCB_KHR
@@ -891,8 +891,8 @@ void anv_GetPhysicalDeviceProperties(
       .sparseProperties = {0}, /* Broadwell doesn't do sparse. */
    };
 
-   strncpy(pProperties->deviceName, pdevice->name,
-           VK_MAX_PHYSICAL_DEVICE_NAME_SIZE);
+   snprintf(pProperties->deviceName, sizeof(pProperties->deviceName),
+            "%s", pdevice->name);
    memcpy(pProperties->pipelineCacheUUID,
           pdevice->pipeline_cache_uuid, VK_UUID_SIZE);
 }

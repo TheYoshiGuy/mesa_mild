@@ -580,6 +580,7 @@ anv_CreateImageView(VkDevice _device,
    assert(image->usage & (VK_IMAGE_USAGE_SAMPLED_BIT |
                           VK_IMAGE_USAGE_STORAGE_BIT |
                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                          VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT));
 
    switch (image->type) {
@@ -774,6 +775,11 @@ anv_DestroyImageView(VkDevice _device, VkImageView _iview,
    if (iview->sampler_surface_state.alloc_size > 0) {
       anv_state_pool_free(&device->surface_state_pool,
                           iview->sampler_surface_state);
+   }
+
+   if (iview->no_aux_sampler_surface_state.alloc_size > 0) {
+      anv_state_pool_free(&device->surface_state_pool,
+                          iview->no_aux_sampler_surface_state);
    }
 
    if (iview->storage_surface_state.alloc_size > 0) {

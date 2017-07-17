@@ -141,11 +141,12 @@ si_create_llvm_target_machine(struct si_screen *sscreen)
 	char features[256];
 
 	snprintf(features, sizeof(features),
-		 "+DumpCode,+vgpr-spilling,-fp32-denormals,+fp64-denormals%s%s",
+		 "+DumpCode,+vgpr-spilling,-fp32-denormals,+fp64-denormals%s%s%s",
 		 sscreen->b.chip_class >= GFX9 ? ",+xnack" : ",-xnack",
+		 sscreen->llvm_has_working_vgpr_indexing ? "" : ",-promote-alloca",
 		 sscreen->b.debug_flags & DBG_SI_SCHED ? ",+si-scheduler" : "");
 
-	return LLVMCreateTargetMachine(si_llvm_get_amdgpu_target(triple), triple,
+	return LLVMCreateTargetMachine(ac_get_llvm_target(triple), triple,
 				       r600_get_llvm_processor_name(sscreen->b.family),
 				       features,
 				       LLVMCodeGenLevelDefault,
@@ -163,9 +164,6 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 	if (!sctx)
 		return NULL;
-
-	if (sscreen->b.debug_flags & DBG_CHECK_VM)
-		flags |= PIPE_CONTEXT_DEBUG;
 
 	if (flags & PIPE_CONTEXT_DEBUG)
 		sscreen->record_llvm_ir = true; /* racy but not critical */
@@ -377,7 +375,12 @@ static struct pipe_context *si_pipe_create_context(struct pipe_screen *screen,
 						   void *priv, unsigned flags)
 {
 	struct si_screen *sscreen = (struct si_screen *)screen;
-	struct pipe_context *ctx = si_create_context(screen, flags);
+	struct pipe_context *ctx;
+
+	if (sscreen->b.debug_flags & DBG_CHECK_VM)
+		flags |= PIPE_CONTEXT_DEBUG;
+
+	ctx = si_create_context(screen, flags);
 
 	if (!(flags & PIPE_CONTEXT_PREFER_THREADED))
 		return ctx;
@@ -506,6 +509,8 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_TEX_TXF_LZ:
 	case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
 	case PIPE_CAP_BINDLESS_TEXTURE:
+	case PIPE_CAP_QUERY_TIMESTAMP:
+	case PIPE_CAP_QUERY_TIME_ELAPSED:
 		return 1;
 
 	case PIPE_CAP_INT64:
@@ -642,11 +647,6 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_RENDER_TARGETS:
 		return 8;
 
-	/* Timer queries, present when the clock frequency is non zero. */
-	case PIPE_CAP_QUERY_TIMESTAMP:
-	case PIPE_CAP_QUERY_TIME_ELAPSED:
-		return sscreen->b.info.clock_crystal_freq != 0;
-
  	case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
 	case PIPE_CAP_MIN_TEXEL_OFFSET:
 		return -32;
@@ -757,7 +757,6 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	/* Supported boolean features. */
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
-	case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
 	case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
 	case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
 	case PIPE_SHADER_CAP_INTEGERS:
@@ -767,10 +766,18 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 		return 1;
 
 	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
-		/* TODO: Indirection of geometry shader input dimension is not
-		 * handled yet
-		 */
-		return shader != PIPE_SHADER_GEOMETRY;
+		/* TODO: Indirect indexing of GS inputs is unimplemented. */
+		return shader != PIPE_SHADER_GEOMETRY &&
+		       (sscreen->llvm_has_working_vgpr_indexing ||
+			/* TCS and TES load inputs directly from LDS or
+			 * offchip memory, so indirect indexing is trivial. */
+			shader == PIPE_SHADER_TESS_CTRL ||
+			shader == PIPE_SHADER_TESS_EVAL);
+
+	case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
+		return sscreen->llvm_has_working_vgpr_indexing ||
+		       /* TCS stores outputs directly to memory. */
+		       shader == PIPE_SHADER_TESS_CTRL;
 
 	/* Unsupported boolean features. */
 	case PIPE_SHADER_CAP_SUBROUTINES:
@@ -954,21 +961,17 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 		MIN2(num_threads, ARRAY_SIZE(sscreen->tm_low_priority));
 
 	if (!util_queue_init(&sscreen->shader_compiler_queue, "si_shader",
-			     32, num_compiler_threads, 0)) {
+			     32, num_compiler_threads,
+			     UTIL_QUEUE_INIT_RESIZE_IF_FULL)) {
 		si_destroy_shader_cache(sscreen);
 		FREE(sscreen);
 		return NULL;
 	}
 
-	/* The queue must be large enough so that adding optimized shaders
-	 * doesn't stall draw calls when the queue is full. Especially varying
-	 * packing generates a very high volume of optimized shader compilation
-	 * jobs.
-	 */
 	if (!util_queue_init(&sscreen->shader_compiler_queue_low_priority,
 			     "si_shader_low",
-			     1024, num_compiler_threads,
-			     UTIL_QUEUE_INIT_USE_MINIMUM_PRIORITY)) {
+			     32, num_compiler_threads,
+			     UTIL_QUEUE_INIT_RESIZE_IF_FULL)) {
 	       si_destroy_shader_cache(sscreen);
 	       FREE(sscreen);
 	       return NULL;
@@ -1006,6 +1009,11 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 					    sscreen->b.family <= CHIP_POLARIS12) ||
 					   sscreen->b.family == CHIP_VEGA10 ||
 					   sscreen->b.family == CHIP_RAVEN;
+	/* While it would be nice not to have this flag, we are constrained
+	 * by the reality that LLVM 5.0 doesn't have working VGPR indexing
+	 * on GFX9.
+	 */
+	sscreen->llvm_has_working_vgpr_indexing = sscreen->b.chip_class <= VI;
 
 	sscreen->b.has_cp_dma = true;
 	sscreen->b.has_streamout = true;

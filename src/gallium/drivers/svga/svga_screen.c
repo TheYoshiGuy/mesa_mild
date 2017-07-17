@@ -337,6 +337,9 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_GENERATE_MIPMAP:
       return sws->have_generate_mipmap_cmd;
 
+   case PIPE_CAP_NATIVE_FENCE_FD:
+      return sws->have_fence_fd;
+
    /* Unsupported features */
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
@@ -380,7 +383,6 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_PCI_DEVICE:
    case PIPE_CAP_PCI_FUNCTION:
    case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
-   case PIPE_CAP_NATIVE_FENCE_FD:
       return 0;
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
       return 64;
@@ -854,12 +856,22 @@ svga_fence_finish(struct pipe_screen *screen,
       SVGA_DBG(DEBUG_DMA|DEBUG_PERF, "%s fence_ptr %p\n",
                __FUNCTION__, fence);
 
-      retVal = sws->fence_finish(sws, fence, 0) == 0;
+      retVal = sws->fence_finish(sws, fence, timeout, 0) == 0;
    }
 
    SVGA_STATS_TIME_POP(sws);
 
    return retVal;
+}
+
+
+static int
+svga_fence_get_fd(struct pipe_screen *screen,
+                  struct pipe_fence_handle *fence)
+{
+   struct svga_winsys_screen *sws = svga_screen(screen)->sws;
+
+   return sws->fence_get_fd(sws, fence, TRUE);
 }
 
 
@@ -1024,6 +1036,8 @@ svga_screen_create(struct svga_winsys_screen *sws)
    screen->context_create = svga_context_create;
    screen->fence_reference = svga_fence_reference;
    screen->fence_finish = svga_fence_finish;
+   screen->fence_get_fd = svga_fence_get_fd;
+
    screen->get_driver_query_info = svga_get_driver_query_info;
    svgascreen->sws = sws;
 

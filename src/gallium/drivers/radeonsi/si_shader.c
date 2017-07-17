@@ -1202,6 +1202,24 @@ static int lookup_interp_param_index(unsigned interpolate, unsigned location)
 	}
 }
 
+static LLVMValueRef si_build_fs_interp(struct si_shader_context *ctx,
+				       unsigned attr_index, unsigned chan,
+				       LLVMValueRef prim_mask,
+				       LLVMValueRef i, LLVMValueRef j)
+{
+	if (i || j) {
+		return ac_build_fs_interp(&ctx->ac,
+					  LLVMConstInt(ctx->i32, chan, 0),
+					  LLVMConstInt(ctx->i32, attr_index, 0),
+					  prim_mask, i, j);
+	}
+	return ac_build_fs_interp_mov(&ctx->ac,
+				      LLVMConstInt(ctx->i32, 2, 0), /* P0 */
+				      LLVMConstInt(ctx->i32, chan, 0),
+				      LLVMConstInt(ctx->i32, attr_index, 0),
+				      prim_mask);
+}
+
 /**
  * Interpolate a fragment shader input.
  *
@@ -1228,9 +1246,7 @@ static void interp_fs_input(struct si_shader_context *ctx,
 			    LLVMValueRef result[4])
 {
 	struct gallivm_state *gallivm = &ctx->gallivm;
-	LLVMValueRef attr_number;
-	LLVMValueRef i, j;
-
+	LLVMValueRef i = NULL, j = NULL;
 	unsigned chan;
 
 	/* fs.constant returns the param from the middle vertex, so it's not
@@ -1248,8 +1264,6 @@ static void interp_fs_input(struct si_shader_context *ctx,
 	 */
 	bool interp = interp_param != NULL;
 
-	attr_number = LLVMConstInt(ctx->i32, input_index, 0);
-
 	if (interp) {
 		interp_param = LLVMBuildBitCast(gallivm->builder, interp_param,
 						LLVMVectorType(ctx->f32, 2), "");
@@ -1263,7 +1277,6 @@ static void interp_fs_input(struct si_shader_context *ctx,
 	if (semantic_name == TGSI_SEMANTIC_COLOR &&
 	    ctx->shader->key.part.ps.prolog.color_two_side) {
 		LLVMValueRef is_face_positive;
-		LLVMValueRef back_attr_number;
 
 		/* If BCOLOR0 is used, BCOLOR1 is at offset "num_inputs + 1",
 		 * otherwise it's at offset "num_inputs".
@@ -1272,30 +1285,18 @@ static void interp_fs_input(struct si_shader_context *ctx,
 		if (semantic_index == 1 && colors_read_mask & 0xf)
 			back_attr_offset += 1;
 
-		back_attr_number = LLVMConstInt(ctx->i32, back_attr_offset, 0);
-
 		is_face_positive = LLVMBuildICmp(gallivm->builder, LLVMIntNE,
 						 face, ctx->i32_0, "");
 
 		for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
-			LLVMValueRef llvm_chan = LLVMConstInt(ctx->i32, chan, 0);
 			LLVMValueRef front, back;
 
-			if (interp) {
-				front = ac_build_fs_interp(&ctx->ac, llvm_chan,
-							attr_number, prim_mask,
-							i, j);
-				back = ac_build_fs_interp(&ctx->ac, llvm_chan,
-							back_attr_number, prim_mask,
-							i, j);
-			} else {
-				front = ac_build_fs_interp_mov(&ctx->ac,
-					LLVMConstInt(ctx->i32, 2, 0), /* P0 */
-					llvm_chan, attr_number, prim_mask);
-				back = ac_build_fs_interp_mov(&ctx->ac,
-					LLVMConstInt(ctx->i32, 2, 0), /* P0 */
-					llvm_chan, back_attr_number, prim_mask);
-			}
+			front = si_build_fs_interp(ctx,
+						   input_index, chan,
+						   prim_mask, i, j);
+			back = si_build_fs_interp(ctx,
+						  back_attr_offset, chan,
+						  prim_mask, i, j);
 
 			result[chan] = LLVMBuildSelect(gallivm->builder,
 						is_face_positive,
@@ -1304,29 +1305,16 @@ static void interp_fs_input(struct si_shader_context *ctx,
 						"");
 		}
 	} else if (semantic_name == TGSI_SEMANTIC_FOG) {
-		if (interp) {
-			result[0] = ac_build_fs_interp(&ctx->ac, ctx->i32_0,
-						       attr_number, prim_mask, i, j);
-		} else {
-			result[0] = ac_build_fs_interp_mov(&ctx->ac, ctx->i32_0,
-							   LLVMConstInt(ctx->i32, 2, 0), /* P0 */
-							   attr_number, prim_mask);
-		}
+		result[0] = si_build_fs_interp(ctx, input_index,
+					       0, prim_mask, i, j);
 		result[1] =
 		result[2] = LLVMConstReal(ctx->f32, 0.0f);
 		result[3] = LLVMConstReal(ctx->f32, 1.0f);
 	} else {
 		for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
-			LLVMValueRef llvm_chan = LLVMConstInt(ctx->i32, chan, 0);
-
-			if (interp) {
-				result[chan] = ac_build_fs_interp(&ctx->ac,
-					llvm_chan, attr_number, prim_mask, i, j);
-			} else {
-				result[chan] = ac_build_fs_interp_mov(&ctx->ac,
-					LLVMConstInt(ctx->i32, 2, 0), /* P0 */
-					llvm_chan, attr_number, prim_mask);
-			}
+			result[chan] = si_build_fs_interp(ctx,
+							  input_index, chan,
+							  prim_mask, i, j);
 		}
 	}
 }
@@ -1367,7 +1355,7 @@ static void declare_input_fs(
 	}
 
 	interp_fs_input(ctx, input_index, decl->Semantic.Name,
-			decl->Semantic.Index, shader->selector->info.num_inputs,
+			decl->Semantic.Index, 0, /* this param is unused */
 			shader->selector->info.colors_read, interp_param,
 			LLVMGetParam(main_fn, SI_PARAM_PRIM_MASK),
 			LLVMGetParam(main_fn, SI_PARAM_FRONT_FACE),
@@ -2254,6 +2242,62 @@ static void si_llvm_emit_streamout(struct si_shader_context *ctx,
 	lp_build_endif(&if_ctx);
 }
 
+static void si_export_param(struct si_shader_context *ctx, unsigned index,
+			    LLVMValueRef *values)
+{
+	struct ac_export_args args;
+
+	si_llvm_init_export_args(&ctx->bld_base, values,
+				 V_008DFC_SQ_EXP_PARAM + index, &args);
+	ac_build_export(&ctx->ac, &args);
+}
+
+static void si_build_param_exports(struct si_shader_context *ctx,
+				   struct si_shader_output_values *outputs,
+			           unsigned noutput)
+{
+	struct si_shader *shader = ctx->shader;
+	unsigned param_count = 0;
+
+	for (unsigned i = 0; i < noutput; i++) {
+		unsigned semantic_name = outputs[i].semantic_name;
+		unsigned semantic_index = outputs[i].semantic_index;
+
+		if (outputs[i].vertex_stream[0] != 0 &&
+		    outputs[i].vertex_stream[1] != 0 &&
+		    outputs[i].vertex_stream[2] != 0 &&
+		    outputs[i].vertex_stream[3] != 0)
+			continue;
+
+		switch (semantic_name) {
+		case TGSI_SEMANTIC_LAYER:
+		case TGSI_SEMANTIC_VIEWPORT_INDEX:
+		case TGSI_SEMANTIC_CLIPDIST:
+		case TGSI_SEMANTIC_COLOR:
+		case TGSI_SEMANTIC_BCOLOR:
+		case TGSI_SEMANTIC_PRIMID:
+		case TGSI_SEMANTIC_FOG:
+		case TGSI_SEMANTIC_TEXCOORD:
+		case TGSI_SEMANTIC_GENERIC:
+			break;
+		default:
+			continue;
+		}
+
+		if ((semantic_name != TGSI_SEMANTIC_GENERIC ||
+		     semantic_index < SI_MAX_IO_GENERIC) &&
+		    shader->key.opt.kill_outputs &
+		    (1ull << si_shader_io_get_unique_index(semantic_name, semantic_index)))
+			continue;
+
+		si_export_param(ctx, param_count, outputs[i].values);
+
+		assert(i < ARRAY_SIZE(shader->info.vs_output_param_offset));
+		shader->info.vs_output_param_offset[i] = param_count++;
+	}
+
+	shader->info.nr_param_exports = param_count;
+}
 
 /* Generate export instructions for hardware VS shader stage */
 static void si_llvm_export_vs(struct lp_build_tgsi_context *bld_base,
@@ -2263,111 +2307,46 @@ static void si_llvm_export_vs(struct lp_build_tgsi_context *bld_base,
 	struct si_shader_context *ctx = si_shader_context(bld_base);
 	struct si_shader *shader = ctx->shader;
 	struct lp_build_context *base = &bld_base->base;
-	struct ac_export_args args, pos_args[4] = {};
+	struct ac_export_args pos_args[4] = {};
 	LLVMValueRef psize_value = NULL, edgeflag_value = NULL, layer_value = NULL, viewport_index_value = NULL;
-	unsigned semantic_name, semantic_index;
-	unsigned target;
-	unsigned param_count = 0;
 	unsigned pos_idx;
 	int i;
 
+	/* Build position exports. */
 	for (i = 0; i < noutput; i++) {
-		semantic_name = outputs[i].semantic_name;
-		semantic_index = outputs[i].semantic_index;
-		bool export_param = true;
-
-		switch (semantic_name) {
-		case TGSI_SEMANTIC_POSITION: /* ignore these */
-		case TGSI_SEMANTIC_PSIZE:
-		case TGSI_SEMANTIC_CLIPVERTEX:
-		case TGSI_SEMANTIC_EDGEFLAG:
+		switch (outputs[i].semantic_name) {
+		case TGSI_SEMANTIC_POSITION:
+			si_llvm_init_export_args(bld_base, outputs[i].values,
+						 V_008DFC_SQ_EXP_POS, &pos_args[0]);
 			break;
-		case TGSI_SEMANTIC_GENERIC:
-			/* don't process indices the function can't handle */
-			if (semantic_index >= SI_MAX_IO_GENERIC)
-				break;
-			/* fall through */
-		default:
-			if (shader->key.opt.kill_outputs &
-			    (1ull << si_shader_io_get_unique_index(semantic_name, semantic_index)))
-				export_param = false;
-		}
-
-		if (outputs[i].vertex_stream[0] != 0 &&
-		    outputs[i].vertex_stream[1] != 0 &&
-		    outputs[i].vertex_stream[2] != 0 &&
-		    outputs[i].vertex_stream[3] != 0)
-			export_param = false;
-
-handle_semantic:
-		/* Select the correct target */
-		switch(semantic_name) {
 		case TGSI_SEMANTIC_PSIZE:
 			psize_value = outputs[i].values[0];
-			continue;
-		case TGSI_SEMANTIC_EDGEFLAG:
-			edgeflag_value = outputs[i].values[0];
-			continue;
+			break;
 		case TGSI_SEMANTIC_LAYER:
 			layer_value = outputs[i].values[0];
-			semantic_name = TGSI_SEMANTIC_GENERIC;
-			goto handle_semantic;
+			break;
 		case TGSI_SEMANTIC_VIEWPORT_INDEX:
 			viewport_index_value = outputs[i].values[0];
-			semantic_name = TGSI_SEMANTIC_GENERIC;
-			goto handle_semantic;
-		case TGSI_SEMANTIC_POSITION:
-			target = V_008DFC_SQ_EXP_POS;
+			break;
+		case TGSI_SEMANTIC_EDGEFLAG:
+			edgeflag_value = outputs[i].values[0];
 			break;
 		case TGSI_SEMANTIC_CLIPDIST:
-			if (shader->key.opt.clip_disable) {
-				semantic_name = TGSI_SEMANTIC_GENERIC;
-				goto handle_semantic;
+			if (!shader->key.opt.clip_disable) {
+				unsigned index = 2 + outputs[i].semantic_index;
+				si_llvm_init_export_args(bld_base, outputs[i].values,
+							 V_008DFC_SQ_EXP_POS + index,
+							 &pos_args[index]);
 			}
-			target = V_008DFC_SQ_EXP_POS + 2 + semantic_index;
 			break;
 		case TGSI_SEMANTIC_CLIPVERTEX:
-			if (shader->key.opt.clip_disable)
-				continue;
-			si_llvm_emit_clipvertex(bld_base, pos_args, outputs[i].values);
-			continue;
-		case TGSI_SEMANTIC_COLOR:
-		case TGSI_SEMANTIC_BCOLOR:
-		case TGSI_SEMANTIC_PRIMID:
-		case TGSI_SEMANTIC_FOG:
-		case TGSI_SEMANTIC_TEXCOORD:
-		case TGSI_SEMANTIC_GENERIC:
-			if (!export_param)
-				continue;
-			target = V_008DFC_SQ_EXP_PARAM + param_count;
-			assert(i < ARRAY_SIZE(shader->info.vs_output_param_offset));
-			shader->info.vs_output_param_offset[i] = param_count;
-			param_count++;
+			if (!shader->key.opt.clip_disable) {
+				si_llvm_emit_clipvertex(bld_base, pos_args,
+							outputs[i].values);
+			}
 			break;
-		default:
-			target = 0;
-			fprintf(stderr,
-				"Warning: SI unhandled vs output type:%d\n",
-				semantic_name);
-		}
-
-		si_llvm_init_export_args(bld_base, outputs[i].values, target, &args);
-
-		if (target >= V_008DFC_SQ_EXP_POS &&
-		    target <= (V_008DFC_SQ_EXP_POS + 3)) {
-			memcpy(&pos_args[target - V_008DFC_SQ_EXP_POS],
-			       &args, sizeof(args));
-		} else {
-			ac_build_export(&ctx->ac, &args);
-		}
-
-		if (semantic_name == TGSI_SEMANTIC_CLIPDIST) {
-			semantic_name = TGSI_SEMANTIC_GENERIC;
-			goto handle_semantic;
 		}
 	}
-
-	shader->info.nr_param_exports = param_count;
 
 	/* We need to add the position output manually if it's missing. */
 	if (!pos_args[0].out[0]) {
@@ -2467,6 +2446,9 @@ handle_semantic:
 
 		ac_build_export(&ctx->ac, &pos_args[i]);
 	}
+
+	/* Build parameter exports. */
+	si_build_param_exports(ctx, outputs, noutput);
 }
 
 /**
@@ -3531,7 +3513,7 @@ static void build_interp_intrinsic(const struct lp_build_tgsi_action *action,
 	int input_base, input_array_size;
 	int chan;
 	int i;
-	LLVMValueRef params = LLVMGetParam(ctx->main_fn, SI_PARAM_PRIM_MASK);
+	LLVMValueRef prim_mask = LLVMGetParam(ctx->main_fn, SI_PARAM_PRIM_MASK);
 	LLVMValueRef array_idx;
 	int interp_param_idx;
 	unsigned interp;
@@ -3618,35 +3600,25 @@ static void build_interp_intrinsic(const struct lp_build_tgsi_action *action,
 	}
 
 	for (chan = 0; chan < 4; chan++) {
-		LLVMValueRef llvm_chan;
 		LLVMValueRef gather = LLVMGetUndef(LLVMVectorType(ctx->f32, input_array_size));
-		unsigned schan;
+		unsigned schan = tgsi_util_get_full_src_register_swizzle(&inst->Src[0], chan);
 
-		schan = tgsi_util_get_full_src_register_swizzle(&inst->Src[0], chan);
-		llvm_chan = LLVMConstInt(ctx->i32, schan, 0);
-
-		for (unsigned i = 0; i < input_array_size; ++i) {
-			LLVMValueRef attr_number = LLVMConstInt(ctx->i32, input_base + i, false);
-			LLVMValueRef v;
+		for (unsigned idx = 0; idx < input_array_size; ++idx) {
+			LLVMValueRef v, i = NULL, j = NULL;
 
 			if (interp_param) {
 				interp_param = LLVMBuildBitCast(gallivm->builder,
 					interp_param, LLVMVectorType(ctx->f32, 2), "");
-				LLVMValueRef i = LLVMBuildExtractElement(
+				i = LLVMBuildExtractElement(
 					gallivm->builder, interp_param, ctx->i32_0, "");
-				LLVMValueRef j = LLVMBuildExtractElement(
+				j = LLVMBuildExtractElement(
 					gallivm->builder, interp_param, ctx->i32_1, "");
-				v = ac_build_fs_interp(&ctx->ac,
-					llvm_chan, attr_number, params,
-					i, j);
-			} else {
-				v = ac_build_fs_interp_mov(&ctx->ac,
-					LLVMConstInt(ctx->i32, 2, 0), /* P0 */
-					llvm_chan, attr_number, params);
 			}
+			v = si_build_fs_interp(ctx, input_base + idx, schan,
+					       prim_mask, i, j);
 
 			gather = LLVMBuildInsertElement(gallivm->builder,
-				gather, v, LLVMConstInt(ctx->i32, i, false), "");
+				gather, v, LLVMConstInt(ctx->i32, idx, false), "");
 		}
 
 		emit_data->output[chan] = LLVMBuildExtractElement(
