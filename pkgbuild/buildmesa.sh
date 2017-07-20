@@ -3,13 +3,11 @@
 
 # adding revert git revert 2b8b9a56efc24cc0f27469bf1532c288cdca2076
 # deprecated #NOTICE:WARNING building mesa with -O2 and native optimisations breaks steam with Haswell+
-#NOTICE:WARNING building wine with -O2 and native optimisations breaks rendering
 #NOTICE:INFO Changing RENDERER is sometimes required for intel IGD
 #NOTICE:INFO Ensure MAKEFLAGS is correctly set up in buildpkg (unless you're fond of wasting time)
 #NOTICE:ATTENTION Please, setup (or check it's set) << \\n [mesa-git] \\n Server = http://pkgbuild.com/~lcarlier/$repo/$arch \\n >>  as first entry after [config]'s section in /etc/pacman.conf
-#NOTICE:WARNING If you fail to setup [mesa-git] in pacman.conf in first position ... -> GET LOST ;) 
 #NOTICE:INFO You must edit setting called "flavor" in this script if you want to remove intel IGPU support
-#NOTICE:ATTENTION If it's the first time you build libdrm after changing "flavor", you should install it before restarting script (or  mesa is going to fail because of dependencies)
+#NOTICE:WARNING If installation fails because of dependencies, you will need to force (using sudo pacman -Udd) mesa_mild installation
 
 # Settings
 flavor=""  # "amd-only" or "" for intel's IGD
@@ -19,7 +17,7 @@ declare -A SRC_REPOSITORIES=(  [mesa]="https://github.com/mikakev1/mesa_mild_com
 # GLOBALS
 curdir=$(pwd)
 
-if [ "x${flavor}" == "x" ]; then 
+if [ "x${flavor}" == "x" ]; then
 pckflavor=""
 else
 pckflavor="${flavor}."
@@ -87,8 +85,8 @@ function check_multilib_configured {
 function install_packages {
   Log "INFO" "Installing / updating packages"
   pre_packages="llvm-svn llvm-ocaml-svn llvm-libs-svn  libclc-git  lib32-llvm-svn lib32-llvm-libs-svn clang-tools-extra-svn clang-svn"
-  sudo pacman -Syy  &>/dev/null
-  sudo pacman -Sdd $pre_packages  --noconfirm --needed --force &>/dev/null
+  sudo pacman -Syy  
+  sudo pacman -Sdd $pre_packages  --noconfirm --needed --force 
 }
 
 function clone_repositories {
@@ -101,7 +99,7 @@ done
 }
 
 function pre_check {
-    [ $UID -eq 0 ] &&  die "This script must be ran by and normal user with sudo configured"
+    [ $UID -eq 0 ] && die "This script must be ran by and normal user with sudo configured"
     [ "x[mesa-git]" == "x$(check_mesa_git_configured)" ] || die "Mesa git must be in first position in /etc/pacman.conf"
     check_multilib_configured || die "Multilib must be configured in /etc/pacman.conf"
 }
@@ -110,7 +108,9 @@ function prebuild_all {
     Log "INFO" "Retrieving PKGBUILD for libdrm and mesa"
     mkdir -p PKGBUILD/{mesa64,mesa32,libdrm64,libdrm32}
     PKGBUILD_NAME=( "PKGBUILD.${pckflavor}libdrm64" "PKGBUILD.${pckflavor}libdrm32" "PKGBUILD.${pckflavor}mesa64" "PKGBUILD.${pckflavor}mesa32" )
+    PKGBUILD_LIBDRMDEST=( PKGBUILD/libdrm64 PKGBUILD/libdrm32 )
     PKGBUILD_DEST=( PKGBUILD/libdrm64 PKGBUILD/libdrm32 PKGBUILD/mesa64 PKGBUILD/mesa32 )
+    PKGBUILD_MESADEST=( PKGBUILD/mesa64 PKGBUILD/mesa32 )
     PKGBUILD_URL=( "git+file://${drmsource}" "git+file://${drmsource}" "git+file://${mesasource}#${fragment}"  "git+file://${mesasource}#${fragment}" )
 
     for (( i=0; i < ${#PKGBUILD_DEST[@]}; i++ )); do
@@ -120,20 +120,27 @@ function prebuild_all {
     done
 }
 
-function build_all {
-    for directory in  ${PKGBUILD_DEST[*]}; do
+function build_and_install_libdrm {
+    for directory in  ${PKGBUILD_LIBDRMDEST[*]}; do
         echo "building in $directory"
         cd $directory
-        makepkg -sCcf
+        makepkg -siCcf 
+        cd ..;cd ..
+    done
+}
+
+function build_and_install_mesa {
+    for directory in  ${PKGBUILD_MESADEST[*]}; do
+        echo "building in $directory"
+        cd $directory
+        makepkg -sCcf 
+        sudo find .  -name "*.xz" -exec pacman -Sdd {} --force \;
         cd ..;cd ..
     done
 }
 
 function end_notice {
     Log "WARNING" "if system is unbootable after installation boot kernel with commandline < modprobe.blacklist=amdgpu,radeon > and reinstall normal packages from mesa-git"
-    Log "INFO" "To install packages type"
-    find ./ -name "*.xz" | tr '\n' ' ' |awk '{ printf("sudo pacman -Udd %s --force",$0) }'
-    echo ""
     Log "INFO" "Remember to add 'IgnoreGroup = mesagit' to /etc/pacman.conf if you're satisfied (or take the risk to have it all overwritten)"
 }
 function mesa_revert {
@@ -153,7 +160,9 @@ install_packages
 clone_repositories
 mesa_revert
 prebuild_all
-build_all
+build_and_install_libdrm
+build_and_install_mesa
+
 end_notice
 ask_clean
 
