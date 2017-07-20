@@ -28,30 +28,17 @@
 
 #include "brw_context.h"
 
-static inline unsigned
-isl_tiling_to_bufmgr_tiling(enum isl_tiling tiling)
-{
-   if (tiling == ISL_TILING_X)
-      return I915_TILING_X;
-
-   if (tiling == ISL_TILING_Y0)
-      return I915_TILING_Y;
-
-   /* All other are unknown to buffer allocator. */
-   return I915_TILING_NONE;
-}
-
 bool
 intelEmitCopyBlit(struct brw_context *brw,
                   GLuint cpp,
                   int32_t src_pitch,
                   struct brw_bo *src_buffer,
                   GLuint src_offset,
-                  uint32_t src_tiling,
+                  enum isl_tiling src_tiling,
                   int32_t dst_pitch,
                   struct brw_bo *dst_buffer,
                   GLuint dst_offset,
-                  uint32_t dst_tiling,
+                  enum isl_tiling dst_tiling,
                   GLshort srcx, GLshort srcy,
                   GLshort dstx, GLshort dsty,
                   GLshort w, GLshort h,
@@ -86,7 +73,7 @@ intelEmitImmediateColorExpandBlit(struct brw_context *brw,
 				  GLshort dst_pitch,
 				  struct brw_bo *dst_buffer,
 				  GLuint dst_offset,
-				  uint32_t dst_tiling,
+                                  enum isl_tiling dst_tiling,
 				  GLshort x, GLshort y,
 				  GLshort w, GLshort h,
 				  GLenum logic_op);

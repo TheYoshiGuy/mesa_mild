@@ -158,48 +158,6 @@ struct intel_mipmap_level
    } *slice;
 };
 
-/**
- * Enum for keeping track of the different MSAA layouts supported by Gen7.
- */
-enum intel_msaa_layout
-{
-   /**
-    * Ordinary surface with no MSAA.
-    */
-   INTEL_MSAA_LAYOUT_NONE,
-
-   /**
-    * Interleaved Multisample Surface.  The additional samples are
-    * accommodated by scaling up the width and the height of the surface so
-    * that all the samples corresponding to a pixel are located at nearby
-    * memory locations.
-    *
-    * @see PRM section "Interleaved Multisampled Surfaces"
-    */
-   INTEL_MSAA_LAYOUT_IMS,
-
-   /**
-    * Uncompressed Multisample Surface.  The surface is stored as a 2D array,
-    * with array slice n containing all pixel data for sample n.
-    *
-    * @see PRM section "Uncompressed Multisampled Surfaces"
-    */
-   INTEL_MSAA_LAYOUT_UMS,
-
-   /**
-    * Compressed Multisample Surface.  The surface is stored as in
-    * INTEL_MSAA_LAYOUT_UMS, but there is an additional buffer called the MCS
-    * (Multisample Control Surface) buffer.  Each pixel in the MCS buffer
-    * indicates the mapping from sample number to array slice.  This allows
-    * the common case (where all samples constituting a pixel have the same
-    * color value) to be stored efficiently by just using a single array
-    * slice.
-    *
-    * @see PRM section "Compressed Multisampled Surfaces"
-    */
-   INTEL_MSAA_LAYOUT_CMS,
-};
-
 enum miptree_array_layout {
    /* Each array slice contains all miplevels packed together.
     *
@@ -362,25 +320,6 @@ struct intel_mipmap_tree
    struct brw_bo *bo;
 
    /**
-    * Pitch in bytes.
-    *
-    * @see RENDER_SURFACE_STATE.SurfacePitch
-    * @see RENDER_SURFACE_STATE.AuxiliarySurfacePitch
-    * @see 3DSTATE_DEPTH_BUFFER.SurfacePitch
-    * @see 3DSTATE_HIER_DEPTH_BUFFER.SurfacePitch
-    * @see 3DSTATE_STENCIL_BUFFER.SurfacePitch
-    */
-   uint32_t pitch;
-
-   /**
-    * One of the I915_TILING_* flags.
-    *
-    * @see RENDER_SURFACE_STATE.TileMode
-    * @see 3DSTATE_DEPTH_BUFFER.TileMode
-    */
-   uint32_t tiling;
-
-   /**
     * @brief One of GL_TEXTURE_2D, GL_TEXTURE_2D_ARRAY, etc.
     *
     * @see RENDER_SURFACE_STATE.SurfaceType
@@ -456,12 +395,6 @@ struct intel_mipmap_tree
    /** Bytes per pixel (or bytes per block if compressed) */
    GLuint cpp;
 
-   /**
-    * @see RENDER_SURFACE_STATE.NumberOfMultisamples
-    * @see 3DSTATE_MULTISAMPLE.NumberOfMultisamples
-    */
-   GLuint num_samples;
-
    bool compressed;
 
    /**
@@ -517,13 +450,6 @@ struct intel_mipmap_tree
     * @see 3DSTATE_STENCIL_BUFFER.SurfaceQPitch
     */
    uint32_t qpitch;
-
-   /**
-    * MSAA layout used by this buffer.
-    *
-    * @see RENDER_SURFACE_STATE.MultisampledSurfaceStorageFormat
-    */
-   enum intel_msaa_layout msaa_layout;
 
    /* Derived from the above:
     */
@@ -642,10 +568,6 @@ struct intel_mipmap_tree
 };
 
 bool
-intel_miptree_is_lossless_compressed(const struct brw_context *brw,
-                                     const struct intel_mipmap_tree *mt);
-
-bool
 intel_miptree_alloc_ccs(struct brw_context *brw,
                         struct intel_mipmap_tree *mt);
 
@@ -745,7 +667,8 @@ enum isl_surf_dim
 get_isl_surf_dim(GLenum target);
 
 enum isl_dim_layout
-get_isl_dim_layout(const struct gen_device_info *devinfo, uint32_t tiling,
+get_isl_dim_layout(const struct gen_device_info *devinfo,
+                   enum isl_tiling tiling,
                    GLenum target, enum miptree_array_layout array_layout);
 
 enum isl_tiling
@@ -765,11 +688,11 @@ intel_get_image_dims(struct gl_texture_image *image,
                      int *width, int *height, int *depth);
 
 void
-intel_get_tile_masks(uint32_t tiling, uint32_t cpp,
+intel_get_tile_masks(enum isl_tiling tiling, uint32_t cpp,
                      uint32_t *mask_x, uint32_t *mask_y);
 
 void
-intel_get_tile_dims(uint32_t tiling, uint32_t cpp,
+intel_get_tile_dims(enum isl_tiling tiling, uint32_t cpp,
                     uint32_t *tile_w, uint32_t *tile_h);
 
 uint32_t
@@ -979,15 +902,6 @@ unsigned
 brw_miptree_get_horizontal_slice_pitch(const struct brw_context *brw,
                                        const struct intel_mipmap_tree *mt,
                                        unsigned level);
-
-/**
- * Vertical distance from one slice to the next in the two-dimensional miptree
- * layout.
- */
-unsigned
-brw_miptree_get_vertical_slice_pitch(const struct brw_context *brw,
-                                     const struct intel_mipmap_tree *mt,
-                                     unsigned level);
 
 bool
 brw_miptree_layout(struct brw_context *brw,

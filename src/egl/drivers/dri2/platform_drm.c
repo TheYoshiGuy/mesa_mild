@@ -72,6 +72,7 @@ release_buffer(struct gbm_surface *_surf, struct gbm_bo *bo)
    for (unsigned i = 0; i < ARRAY_SIZE(dri2_surf->color_buffers); i++) {
       if (dri2_surf->color_buffers[i].bo == bo) {
 	 dri2_surf->color_buffers[i].locked = false;
+	 break;
       }
    }
 }
@@ -229,7 +230,8 @@ get_back_bo(struct dri2_egl_surface *dri2_surf)
    if (dri2_surf->back->bo == NULL) {
       if (surf->base.modifiers)
          dri2_surf->back->bo = gbm_bo_create_with_modifiers(&dri2_dpy->gbm_dri->base,
-                                                            surf->base.width, surf->base.height,
+                                                            surf->base.width,
+                                                            surf->base.height,
                                                             surf->base.format,
                                                             surf->base.modifiers,
                                                             surf->base.count);
@@ -321,10 +323,9 @@ dri2_drm_get_buffers_with_format(__DRIdrawable *driDrawable,
    struct dri2_egl_surface *dri2_surf = loaderPrivate;
    int i, j;
 
-   dri2_surf->buffer_count = 0;
    for (i = 0, j = 0; i < 2 * count; i += 2, j++) {
       assert(attachments[i] < __DRI_BUFFER_COUNT);
-      assert(dri2_surf->buffer_count < 5);
+      assert(j < ARRAY_SIZE(dri2_surf->buffers));
 
       switch (attachments[i]) {
       case __DRI_BUFFER_BACK_LEFT:

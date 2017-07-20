@@ -127,7 +127,7 @@ intel_miptree_create_for_teximage(struct brw_context *brw,
 			       width,
 			       height,
 			       depth,
-                               intelImage->base.Base.NumSamples,
+                               MAX2(intelImage->base.Base.NumSamples, 1),
                                layout_flags | MIPTREE_LAYOUT_TILING_ANY);
 }
 
@@ -198,15 +198,22 @@ intel_set_texture_image_mt(struct brw_context *brw,
    struct intel_texture_object *intel_texobj = intel_texture_object(texobj);
    struct intel_texture_image *intel_image = intel_texture_image(image);
 
-   _mesa_init_teximage_fields(&brw->ctx, image,
-			      mt->logical_width0, mt->logical_height0, 1,
-			      0, internal_format, mt->format);
+   if (mt->surf.size > 0) {
+      _mesa_init_teximage_fields(&brw->ctx, image,
+                                 mt->surf.logical_level0_px.width,
+                                 mt->surf.logical_level0_px.height, 1,
+                                 0, internal_format, mt->format);
+   } else {
+      _mesa_init_teximage_fields(&brw->ctx, image,
+                                 mt->logical_width0, mt->logical_height0, 1,
+                                 0, internal_format, mt->format);
+   }
 
    brw->ctx.Driver.FreeTextureImageBuffer(&brw->ctx, image);
 
    intel_texobj->needs_validate = true;
-   intel_image->base.RowStride = mt->pitch / mt->cpp;
-   assert(mt->pitch % mt->cpp == 0);
+   intel_image->base.RowStride = mt->surf.row_pitch / mt->cpp;
+   assert(mt->surf.row_pitch % mt->cpp == 0);
 
    intel_miptree_reference(&intel_image->mt, mt);
 
@@ -264,12 +271,10 @@ intelSetTexBuffer2(__DRIcontext *pDRICtx, GLint target,
    mt = intel_miptree_create_for_bo(brw, rb->mt->bo, texFormat, 0,
                                     rb->Base.Base.Width,
                                     rb->Base.Base.Height,
-                                    1, rb->mt->pitch, 0);
+                                    1, rb->mt->surf.row_pitch, 0);
    if (mt == NULL)
        return;
    mt->target = target;
-   mt->total_width = rb->Base.Base.Width;
-   mt->total_height = rb->Base.Base.Height;
 
    _mesa_lock_texture(&brw->ctx, texObj);
    texImage = _mesa_get_tex_image(ctx, texObj, target, 0);
@@ -435,8 +440,8 @@ intel_gettexsubimage_tiled_memcpy(struct gl_context *ctx,
       return false;
 
    if (!image->mt ||
-       (image->mt->tiling != I915_TILING_X &&
-       image->mt->tiling != I915_TILING_Y)) {
+       (image->mt->surf.tiling != ISL_TILING_X &&
+        image->mt->surf.tiling != ISL_TILING_Y0)) {
       /* The algorithm is written only for X- or Y-tiled memory. */
       return false;
    }
@@ -457,7 +462,12 @@ intel_gettexsubimage_tiled_memcpy(struct gl_context *ctx,
    /* Since we are going to write raw data to the miptree, we need to resolve
     * any pending fast color clears before we start.
     */
-   assert(image->mt->logical_depth0 == 1);
+   if (image->mt->surf.size > 0) {
+      assert(image->mt->surf.logical_level0_px.depth == 1);
+      assert(image->mt->surf.logical_level0_px.array_len == 1);
+   } else {
+      assert(image->mt->logical_depth0 == 1);
+   }
    intel_miptree_access_raw(brw, image->mt, level, 0, true);
 
    bo = image->mt->bo;
@@ -479,22 +489,24 @@ intel_gettexsubimage_tiled_memcpy(struct gl_context *ctx,
        "mesa_format=0x%x tiling=%d "
        "packing=(alignment=%d row_length=%d skip_pixels=%d skip_rows=%d)\n",
        __func__, texImage->Level, xoffset, yoffset, width, height,
-       format, type, texImage->TexFormat, image->mt->tiling,
+       format, type, texImage->TexFormat, image->mt->surf.tiling,
        packing->Alignment, packing->RowLength, packing->SkipPixels,
        packing->SkipRows);
 
    /* Adjust x and y offset based on miplevel */
-   xoffset += image->mt->level[level].level_x;
-   yoffset += image->mt->level[level].level_y;
+   unsigned level_x, level_y;
+   intel_miptree_get_image_offset(image->mt, level, 0, &level_x, &level_y);
+   xoffset += level_x;
+   yoffset += level_y;
 
    tiled_to_linear(
       xoffset * cpp, (xoffset + width) * cpp,
       yoffset, yoffset + height,
       pixels - (ptrdiff_t) yoffset * dst_pitch - (ptrdiff_t) xoffset * cpp,
       map,
-      dst_pitch, image->mt->pitch,
+      dst_pitch, image->mt->surf.row_pitch,
       brw->has_swizzling,
-      image->mt->tiling,
+      image->mt->surf.tiling,
       mem_copy
    );
 

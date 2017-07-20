@@ -2004,7 +2004,7 @@ static const __DRIextension *dri_robust_screen_extensions[] = {
    &dri2FlushExtension.base,
    &dri2ImageExtension.base,
    &dri2RendererQueryExtension.base,
-   &dri2ConfigQueryExtension.base,
+   &dri2GalliumConfigQueryExtension.base,
    &dri2ThrottleExtension.base,
    &dri2FenceExtension.base,
    &dri2InteropExtension.base,
@@ -2251,7 +2251,6 @@ const __DRIextension *galliumdrm_driver_extensions[] = {
     &driImageDriverExtension.base,
     &driDRI2Extension.base,
     &gallium_config_options.base,
-    &dri2FenceExtension.base,
     NULL
 };
 

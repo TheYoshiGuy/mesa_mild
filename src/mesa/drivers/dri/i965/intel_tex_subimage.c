@@ -128,8 +128,8 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
       ctx->Driver.AllocTextureImageBuffer(ctx, texImage);
 
    if (!image->mt ||
-       (image->mt->tiling != I915_TILING_X &&
-       image->mt->tiling != I915_TILING_Y)) {
+       (image->mt->surf.tiling != ISL_TILING_X &&
+        image->mt->surf.tiling != ISL_TILING_Y0)) {
       /* The algorithm is written only for X- or Y-tiled memory. */
       return false;
    }
@@ -150,7 +150,13 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
    /* Since we are going to write raw data to the miptree, we need to resolve
     * any pending fast color clears before we start.
     */
-   assert(image->mt->logical_depth0 == 1);
+   if (image->mt->surf.size > 0) {
+      assert(image->mt->surf.logical_level0_px.depth == 1);
+      assert(image->mt->surf.logical_level0_px.array_len == 1);
+   } else {
+      assert(image->mt->logical_depth0 == 1);
+   }
+
    intel_miptree_access_raw(brw, image->mt, level, 0, true);
 
    bo = image->mt->bo;
@@ -176,22 +182,24 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
        "packing=(alignment=%d row_length=%d skip_pixels=%d skip_rows=%d) "
        "for_glTexImage=%d\n",
        __func__, texImage->Level, xoffset, yoffset, width, height,
-       format, type, texImage->TexFormat, image->mt->tiling,
+       format, type, texImage->TexFormat, image->mt->surf.tiling,
        packing->Alignment, packing->RowLength, packing->SkipPixels,
        packing->SkipRows, for_glTexImage);
 
    /* Adjust x and y offset based on miplevel */
-   xoffset += image->mt->level[level].level_x;
-   yoffset += image->mt->level[level].level_y;
+   unsigned level_x, level_y;
+   intel_miptree_get_image_offset(image->mt, level, 0, &level_x, &level_y);
+   xoffset += level_x;
+   yoffset += level_y;
 
    linear_to_tiled(
       xoffset * cpp, (xoffset + width) * cpp,
       yoffset, yoffset + height,
       map,
       pixels - (ptrdiff_t) yoffset * src_pitch - (ptrdiff_t) xoffset * cpp,
-      image->mt->pitch, src_pitch,
+      image->mt->surf.row_pitch, src_pitch,
       brw->has_swizzling,
-      image->mt->tiling,
+      image->mt->surf.tiling,
       mem_copy
    );
 

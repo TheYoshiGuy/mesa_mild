@@ -75,64 +75,79 @@ uint32_t rb_mocs[] = {
 };
 
 static void
+get_isl_surf(struct brw_context *brw, struct intel_mipmap_tree *mt,
+             GLenum target, struct isl_view *view,
+             uint32_t *tile_x, uint32_t *tile_y,
+             uint32_t *offset, struct isl_surf *surf)
+{
+   if (mt->surf.size > 0) {
+      *surf = mt->surf;
+   } else {
+      intel_miptree_get_isl_surf(brw, mt, surf);
+
+      surf->dim = get_isl_surf_dim(target);
+   }
+
+   const enum isl_dim_layout dim_layout =
+      get_isl_dim_layout(&brw->screen->devinfo, mt->surf.tiling, target,
+                         mt->array_layout);
+
+   if (surf->dim_layout == dim_layout)
+      return;
+
+   /* The layout of the specified texture target is not compatible with the
+    * actual layout of the miptree structure in memory -- You're entering
+    * dangerous territory, this can only possibly work if you only intended
+    * to access a single level and slice of the texture, and the hardware
+    * supports the tile offset feature in order to allow non-tile-aligned
+    * base offsets, since we'll have to point the hardware to the first
+    * texel of the level instead of relying on the usual base level/layer
+    * controls.
+    */
+   assert(brw->has_surface_tile_offset);
+   assert(view->levels == 1 && view->array_len == 1);
+   assert(*tile_x == 0 && *tile_y == 0);
+
+   offset += intel_miptree_get_tile_offsets(mt, view->base_level,
+                                            view->base_array_layer,
+                                            tile_x, tile_y);
+
+   /* Minify the logical dimensions of the texture. */
+   const unsigned l = view->base_level - mt->first_level;
+   surf->logical_level0_px.width = minify(surf->logical_level0_px.width, l);
+   surf->logical_level0_px.height = surf->dim <= ISL_SURF_DIM_1D ? 1 :
+      minify(surf->logical_level0_px.height, l);
+   surf->logical_level0_px.depth = surf->dim <= ISL_SURF_DIM_2D ? 1 :
+      minify(surf->logical_level0_px.depth, l);
+
+   /* Only the base level and layer can be addressed with the overridden
+    * layout.
+    */
+   surf->logical_level0_px.array_len = 1;
+   surf->levels = 1;
+   surf->dim_layout = dim_layout;
+
+   /* The requested slice of the texture is now at the base level and
+    * layer.
+    */
+   view->base_level = 0;
+   view->base_array_layer = 0;
+}
+
+static void
 brw_emit_surface_state(struct brw_context *brw,
                        struct intel_mipmap_tree *mt, uint32_t flags,
                        GLenum target, struct isl_view view,
                        uint32_t mocs, uint32_t *surf_offset, int surf_index,
                        unsigned read_domains, unsigned write_domains)
 {
-   uint32_t tile_x = mt->level[0].slice[0].x_offset;
-   uint32_t tile_y = mt->level[0].slice[0].y_offset;
+   uint32_t tile_x = mt->level[0].level_x;
+   uint32_t tile_y = mt->level[0].level_y;
    uint32_t offset = mt->offset;
 
    struct isl_surf surf;
-   intel_miptree_get_isl_surf(brw, mt, &surf);
 
-   surf.dim = get_isl_surf_dim(target);
-
-   const enum isl_dim_layout dim_layout =
-      get_isl_dim_layout(&brw->screen->devinfo, mt->tiling, target,
-                         mt->array_layout);
-
-   if (surf.dim_layout != dim_layout) {
-      /* The layout of the specified texture target is not compatible with the
-       * actual layout of the miptree structure in memory -- You're entering
-       * dangerous territory, this can only possibly work if you only intended
-       * to access a single level and slice of the texture, and the hardware
-       * supports the tile offset feature in order to allow non-tile-aligned
-       * base offsets, since we'll have to point the hardware to the first
-       * texel of the level instead of relying on the usual base level/layer
-       * controls.
-       */
-      assert(brw->has_surface_tile_offset);
-      assert(view.levels == 1 && view.array_len == 1);
-      assert(tile_x == 0 && tile_y == 0);
-
-      offset += intel_miptree_get_tile_offsets(mt, view.base_level,
-                                               view.base_array_layer,
-                                               &tile_x, &tile_y);
-
-      /* Minify the logical dimensions of the texture. */
-      const unsigned l = view.base_level - mt->first_level;
-      surf.logical_level0_px.width = minify(surf.logical_level0_px.width, l);
-      surf.logical_level0_px.height = surf.dim <= ISL_SURF_DIM_1D ? 1 :
-         minify(surf.logical_level0_px.height, l);
-      surf.logical_level0_px.depth = surf.dim <= ISL_SURF_DIM_2D ? 1 :
-         minify(surf.logical_level0_px.depth, l);
-
-      /* Only the base level and layer can be addressed with the overridden
-       * layout.
-       */
-      surf.logical_level0_px.array_len = 1;
-      surf.levels = 1;
-      surf.dim_layout = dim_layout;
-
-      /* The requested slice of the texture is now at the base level and
-       * layer.
-       */
-      view.base_level = 0;
-      view.base_array_layer = 0;
-   }
+   get_isl_surf(brw, mt, target, &view, &tile_x, &tile_y, &offset, &surf);
 
    union isl_color_value clear_color = { .u32 = { 0, 0, 0, 0 } };
 
@@ -147,7 +162,6 @@ brw_emit_surface_state(struct brw_context *brw,
       if (mt->mcs_buf) {
          aux_surf = &mt->mcs_buf->surf;
 
-         assert(mt->mcs_buf->offset == 0);
          aux_bo = mt->mcs_buf->bo;
          aux_offset = mt->mcs_buf->bo->offset64 + mt->mcs_buf->offset;
       } else {
@@ -216,16 +230,11 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
                     __func__, _mesa_get_format_name(rb_format));
    }
 
-   const unsigned layer_multiplier =
-      (irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_UMS ||
-       irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS) ?
-      MAX2(irb->mt->num_samples, 1) : 1;
-
    struct isl_view view = {
       .format = brw->mesa_to_isl_render_format[rb_format],
       .base_level = irb->mt_level - irb->mt->first_level,
       .levels = 1,
-      .base_array_layer = irb->mt_layer / layer_multiplier,
+      .base_array_layer = irb->mt_layer,
       .array_len = MAX2(irb->layer_count, 1),
       .swizzle = ISL_SWIZZLE_IDENTITY,
       .usage = ISL_SURF_USAGE_RENDER_TARGET_BIT,
@@ -271,12 +280,12 @@ translate_tex_target(GLenum target)
 }
 
 uint32_t
-brw_get_surface_tiling_bits(uint32_t tiling)
+brw_get_surface_tiling_bits(enum isl_tiling tiling)
 {
    switch (tiling) {
-   case I915_TILING_X:
+   case ISL_TILING_X:
       return BRW_SURFACE_TILED;
-   case I915_TILING_Y:
+   case ISL_TILING_Y0:
       return BRW_SURFACE_TILED | BRW_SURFACE_TILED_Y;
    default:
       return 0;
@@ -451,7 +460,7 @@ brw_texture_view_sane(const struct brw_context *brw,
                       const struct isl_view *view)
 {
    /* There are special cases only for lossless compression. */
-   if (!intel_miptree_is_lossless_compressed(brw, mt))
+   if (mt->aux_usage != ISL_AUX_USAGE_CCS_E)
       return true;
 
    if (isl_format_supports_ccs_e(&brw->screen->devinfo, view->format))
@@ -493,7 +502,7 @@ brw_disable_aux_surface(const struct brw_context *brw,
                                  view->base_array_layer, view->array_len);
 
    /* There are special cases only for lossless compression. */
-   if (!intel_miptree_is_lossless_compressed(brw, mt))
+   if (mt->aux_usage != ISL_AUX_USAGE_CCS_E)
       return !is_unresolved;
 
    const struct gl_framebuffer *fb = brw->ctx.DrawBuffer;
@@ -548,9 +557,16 @@ brw_update_texture_surface(struct gl_context *ctx,
       /* If this is a view with restricted NumLayers, then our effective depth
        * is not just the miptree depth.
        */
-      const unsigned view_num_layers =
-         (obj->Immutable && obj->Target != GL_TEXTURE_3D) ? obj->NumLayers :
-                                                            mt->logical_depth0;
+      unsigned view_num_layers;
+      if (obj->Immutable && obj->Target != GL_TEXTURE_3D) {
+         view_num_layers = obj->NumLayers;
+      } else if (mt->surf.size > 0) {
+         view_num_layers = mt->surf.dim == ISL_SURF_DIM_3D ?
+                              mt->surf.logical_level0_px.depth :
+                              mt->surf.logical_level0_px.array_len;
+      } else {
+         view_num_layers = mt->logical_depth0;
+      }
 
       /* Handling GL_ALPHA as a surface format override breaks 1.30+ style
        * texturing functions that return a float, as our code generation always
@@ -1039,10 +1055,10 @@ gen4_update_renderbuffer_surface(struct brw_context *brw,
    surf[2] = ((rb->Width - 1) << BRW_SURFACE_WIDTH_SHIFT |
 	      (rb->Height - 1) << BRW_SURFACE_HEIGHT_SHIFT);
 
-   surf[3] = (brw_get_surface_tiling_bits(mt->tiling) |
-	      (mt->pitch - 1) << BRW_SURFACE_PITCH_SHIFT);
+   surf[3] = (brw_get_surface_tiling_bits(mt->surf.tiling) |
+	      (mt->surf.row_pitch - 1) << BRW_SURFACE_PITCH_SHIFT);
 
-   surf[4] = brw_get_surface_num_multisamples(mt->num_samples);
+   surf[4] = brw_get_surface_num_multisamples(mt->surf.samples);
 
    assert(brw->has_surface_tile_offset || (tile_x == 0 && tile_y == 0));
    /* Note that the low bits of these fields are missing, so
@@ -1202,21 +1218,11 @@ update_renderbuffer_read_surfaces(struct brw_context *brw)
                irb->mt->target == GL_TEXTURE_1D_ARRAY ? GL_TEXTURE_2D_ARRAY :
                irb->mt->target;
 
-            /* intel_renderbuffer::mt_layer is expressed in sample units for
-             * the UMS and CMS multisample layouts, but
-             * intel_renderbuffer::layer_count is expressed in units of whole
-             * logical layers regardless of the multisample layout.
-             */
-            const unsigned mt_layer_unit =
-               (irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_UMS ||
-                irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS) ?
-               MAX2(irb->mt->num_samples, 1) : 1;
-
             const struct isl_view view = {
                .format = format,
                .base_level = irb->mt_level - irb->mt->first_level,
                .levels = 1,
-               .base_array_layer = irb->mt_layer / mt_layer_unit,
+               .base_array_layer = irb->mt_layer,
                .array_len = irb->layer_count,
                .swizzle = ISL_SWIZZLE_IDENTITY,
                .usage = ISL_SURF_USAGE_TEXTURE_BIT,
@@ -1648,71 +1654,21 @@ update_buffer_image_param(struct brw_context *brw,
    param->stride[0] = _mesa_get_format_bytes(u->_ActualFormat);
 }
 
-static void
-update_texture_image_param(struct brw_context *brw,
-                           struct gl_image_unit *u,
-                           unsigned surface_idx,
-                           struct brw_image_param *param)
+static unsigned
+get_image_num_layers(const struct intel_mipmap_tree *mt, GLenum target,
+                     unsigned level)
 {
-   struct intel_mipmap_tree *mt = intel_texture_object(u->TexObj)->mt;
+   if (target == GL_TEXTURE_CUBE_MAP)
+      return 6;
 
-   update_default_image_param(brw, u, surface_idx, param);
-
-   param->size[0] = minify(mt->logical_width0, u->Level);
-   param->size[1] = minify(mt->logical_height0, u->Level);
-   param->size[2] = (!u->Layered ? 1 :
-                     u->TexObj->Target == GL_TEXTURE_CUBE_MAP ? 6 :
-                     u->TexObj->Target == GL_TEXTURE_3D ?
-                     minify(mt->logical_depth0, u->Level) :
-                     mt->logical_depth0);
-
-   intel_miptree_get_image_offset(mt, u->Level, u->_Layer,
-                                  &param->offset[0],
-                                  &param->offset[1]);
-
-   param->stride[0] = mt->cpp;
-   param->stride[1] = mt->pitch / mt->cpp;
-   param->stride[2] =
-      brw_miptree_get_horizontal_slice_pitch(brw, mt, u->Level);
-   param->stride[3] =
-      brw_miptree_get_vertical_slice_pitch(brw, mt, u->Level);
-
-   if (mt->tiling == I915_TILING_X) {
-      /* An X tile is a rectangular block of 512x8 bytes. */
-      param->tiling[0] = _mesa_logbase2(512 / mt->cpp);
-      param->tiling[1] = _mesa_logbase2(8);
-
-      if (brw->has_swizzling) {
-         /* Right shifts required to swizzle bits 9 and 10 of the memory
-          * address with bit 6.
-          */
-         param->swizzling[0] = 3;
-         param->swizzling[1] = 4;
-      }
-   } else if (mt->tiling == I915_TILING_Y) {
-      /* The layout of a Y-tiled surface in memory isn't really fundamentally
-       * different to the layout of an X-tiled surface, we simply pretend that
-       * the surface is broken up in a number of smaller 16Bx32 tiles, each
-       * one arranged in X-major order just like is the case for X-tiling.
-       */
-      param->tiling[0] = _mesa_logbase2(16 / mt->cpp);
-      param->tiling[1] = _mesa_logbase2(32);
-
-      if (brw->has_swizzling) {
-         /* Right shift required to swizzle bit 9 of the memory address with
-          * bit 6.
-          */
-         param->swizzling[0] = 3;
-      }
+   if (mt->surf.size > 0) {
+      return target == GL_TEXTURE_3D ?
+         minify(mt->surf.logical_level0_px.depth, level) :
+         mt->surf.logical_level0_px.array_len;
    }
 
-   /* 3D textures are arranged in 2D in memory with 2^lod slices per row.  The
-    * address calculation algorithm (emit_address_calculation() in
-    * brw_fs_surface_builder.cpp) handles this as a sort of tiling with
-    * modulus equal to the LOD.
-    */
-   param->tiling[2] = (u->TexObj->Target == GL_TEXTURE_3D ? u->Level :
-                       0);
+   return target == GL_TEXTURE_3D ?
+      minify(mt->logical_depth0, level) : mt->logical_depth0;
 }
 
 static void
@@ -1743,6 +1699,18 @@ update_image_surface(struct brw_context *brw,
       } else {
          struct intel_texture_object *intel_obj = intel_texture_object(obj);
          struct intel_mipmap_tree *mt = intel_obj->mt;
+         const unsigned num_layers = u->Layered ?
+            get_image_num_layers(mt, obj->Target, u->Level) : 1;
+
+         struct isl_view view = {
+            .format = format,
+            .base_level = obj->MinLevel + u->Level,
+            .levels = 1,
+            .base_array_layer = obj->MinLayer + u->_Layer,
+            .array_len = num_layers,
+            .swizzle = ISL_SWIZZLE_IDENTITY,
+            .usage = ISL_SURF_USAGE_STORAGE_BIT,
+         };
 
          if (format == ISL_FORMAT_RAW) {
             brw_emit_buffer_surface_state(
@@ -1751,20 +1719,6 @@ update_image_surface(struct brw_context *brw,
                access != GL_READ_ONLY);
 
          } else {
-            const unsigned num_layers = (!u->Layered ? 1 :
-                                         obj->Target == GL_TEXTURE_CUBE_MAP ? 6 :
-                                         mt->logical_depth0);
-
-            struct isl_view view = {
-               .format = format,
-               .base_level = obj->MinLevel + u->Level,
-               .levels = 1,
-               .base_array_layer = obj->MinLayer + u->_Layer,
-               .array_len = num_layers,
-               .swizzle = ISL_SWIZZLE_IDENTITY,
-               .usage = ISL_SURF_USAGE_STORAGE_BIT,
-            };
-
             const int surf_index = surf_offset - &brw->wm.base.surf_offset[0];
             assert(!intel_miptree_has_color_unresolved(mt,
                                                        view.base_level, 1,
@@ -1778,7 +1732,11 @@ update_image_surface(struct brw_context *brw,
                                              I915_GEM_DOMAIN_SAMPLER);
          }
 
-         update_texture_image_param(brw, u, surface_idx, param);
+         struct isl_surf surf;
+         intel_miptree_get_isl_surf(brw, mt, &surf);
+
+         isl_surf_fill_image_param(&brw->isl_dev, param, &surf, &view);
+         param->surface_idx = surface_idx;
       }
 
    } else {

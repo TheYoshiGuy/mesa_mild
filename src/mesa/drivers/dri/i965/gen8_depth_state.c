@@ -67,7 +67,7 @@ emit_depth_packets(struct brw_context *brw,
              (stencil_mt != NULL && stencil_writable) << 27 |
              (hiz ? 1 : 0) << 22 |
              depthbuffer_format << 18 |
-             (depth_mt ? depth_mt->pitch - 1 : 0));
+             (depth_mt ? depth_mt->surf.row_pitch - 1 : 0));
    if (depth_mt) {
       OUT_RELOC64(depth_mt->bo,
                   I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
@@ -78,7 +78,8 @@ emit_depth_packets(struct brw_context *brw,
    OUT_BATCH(((width - 1) << 4) | ((height - 1) << 18) | lod);
    OUT_BATCH(((depth - 1) << 21) | (min_array_element << 10) | mocs_wb);
    OUT_BATCH(0);
-   OUT_BATCH(((depth - 1) << 21) | (depth_mt ? depth_mt->qpitch >> 2 : 0));
+   OUT_BATCH(((depth - 1) << 21) |
+              (depth_mt ? depth_mt->surf.array_pitch_el_rows >> 2 : 0));
    ADVANCE_BATCH();
 
    if (!hiz) {
@@ -111,25 +112,11 @@ emit_depth_packets(struct brw_context *brw,
    } else {
       BEGIN_BATCH(5);
       OUT_BATCH(GEN7_3DSTATE_STENCIL_BUFFER << 16 | (5 - 2));
-      /* The stencil buffer has quirky pitch requirements.  From the Graphics
-       * BSpec: vol2a.11 3D Pipeline Windower > Early Depth/Stencil Processing
-       * > Depth/Stencil Buffer State > 3DSTATE_STENCIL_BUFFER [DevIVB+],
-       * field "Surface Pitch":
-       *
-       *    The pitch must be set to 2x the value computed based on width, as
-       *    the stencil buffer is stored with two rows interleaved.
-       *
-       * (Note that it is not 100% clear whether this intended to apply to
-       * Gen7; the BSpec flags this comment as "DevILK,DevSNB" (which would
-       * imply that it doesn't), however the comment appears on a "DevIVB+"
-       * page (which would imply that it does).  Experiments with the hardware
-       * indicate that it does.
-       */
       OUT_BATCH(HSW_STENCIL_ENABLED | mocs_wb << 22 |
-                (2 * stencil_mt->pitch - 1));
+                (stencil_mt->surf.row_pitch - 1));
       OUT_RELOC64(stencil_mt->bo,
                   I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
-      OUT_BATCH(stencil_mt ? stencil_mt->qpitch >> 2 : 0);
+      OUT_BATCH(stencil_mt->surf.array_pitch_el_rows >> 2);
       ADVANCE_BATCH();
    }
 
@@ -189,7 +176,8 @@ gen8_emit_depth_stencil_hiz(struct brw_context *brw,
       break;
    case GL_TEXTURE_3D:
       assert(mt);
-      depth = MAX2(mt->logical_depth0, 1);
+      depth = mt->surf.size > 0 ? mt->surf.logical_level0_px.depth :
+                                  MAX2(mt->logical_depth0, 1);
       surftype = translate_tex_target(gl_target);
       break;
    case GL_TEXTURE_1D_ARRAY:
@@ -212,7 +200,10 @@ gen8_emit_depth_stencil_hiz(struct brw_context *brw,
 
    lod = irb ? irb->mt_level - irb->mt->first_level : 0;
 
-   if (mt) {
+   if (mt && mt->surf.size > 0) {
+      width = mt->surf.logical_level0_px.width;
+      height = mt->surf.logical_level0_px.height;
+   } else if (mt) {
       width = mt->logical_width0;
       height = mt->logical_height0;
    }

@@ -47,6 +47,8 @@ supported_extensions = [
    'VK_KHR_external_memory_capabilities',
    'VK_KHR_external_memory',
    'VK_KHR_external_memory_fd',
+   'VK_KHR_storage_buffer_storage_class',
+   'VK_KHR_variable_pointers',
 ]
 
 # We generate a static hash table for entry point lookup

@@ -127,8 +127,8 @@ intel_readpixels_tiled_memcpy(struct gl_context * ctx,
       return false;
 
    if (!irb->mt ||
-       (irb->mt->tiling != I915_TILING_X &&
-       irb->mt->tiling != I915_TILING_Y)) {
+       (irb->mt->surf.tiling != ISL_TILING_X &&
+        irb->mt->surf.tiling != ISL_TILING_Y0)) {
       /* The algorithm is written only for X- or Y-tiled memory. */
       return false;
    }
@@ -162,8 +162,11 @@ intel_readpixels_tiled_memcpy(struct gl_context * ctx,
       return false;
    }
 
-   xoffset += irb->mt->level[irb->mt_level].slice[irb->mt_layer].x_offset;
-   yoffset += irb->mt->level[irb->mt_level].slice[irb->mt_layer].y_offset;
+   unsigned slice_offset_x, slice_offset_y;
+   intel_miptree_get_image_offset(irb->mt, irb->mt_level, irb->mt_layer,
+                                  &slice_offset_x, &slice_offset_y);
+   xoffset += slice_offset_x;
+   yoffset += slice_offset_y;
 
    dst_pitch = _mesa_image_row_stride(pack, width, format, type);
 
@@ -189,7 +192,7 @@ intel_readpixels_tiled_memcpy(struct gl_context * ctx,
        "mesa_format=0x%x tiling=%d "
        "pack=(alignment=%d row_length=%d skip_pixels=%d skip_rows=%d)\n",
        __func__, xoffset, yoffset, width, height,
-       format, type, rb->Format, irb->mt->tiling,
+       format, type, rb->Format, irb->mt->surf.tiling,
        pack->Alignment, pack->RowLength, pack->SkipPixels,
        pack->SkipRows);
 
@@ -198,9 +201,9 @@ intel_readpixels_tiled_memcpy(struct gl_context * ctx,
       yoffset, yoffset + height,
       pixels - (ptrdiff_t) yoffset * dst_pitch - (ptrdiff_t) xoffset * cpp,
       map + irb->mt->offset,
-      dst_pitch, irb->mt->pitch,
+      dst_pitch, irb->mt->surf.row_pitch,
       brw->has_swizzling,
-      irb->mt->tiling,
+      irb->mt->surf.tiling,
       mem_copy
    );
 

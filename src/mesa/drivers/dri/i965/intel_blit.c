@@ -131,8 +131,8 @@ set_blitter_tiling(struct brw_context *brw,
 static int
 blt_pitch(struct intel_mipmap_tree *mt)
 {
-   int pitch = mt->pitch;
-   if (mt->tiling)
+   int pitch = mt->surf.row_pitch;
+   if (mt->surf.tiling != ISL_TILING_LINEAR)
       pitch /= 4;
    return pitch;
 }
@@ -172,7 +172,7 @@ get_blit_intratile_offset_el(const struct brw_context *brw,
                              uint32_t *y_offset_el)
 {
    enum isl_tiling tiling = intel_miptree_get_isl_tiling(mt);
-   isl_tiling_get_intratile_offset_el(tiling, mt->cpp * 8, mt->pitch,
+   isl_tiling_get_intratile_offset_el(tiling, mt->cpp * 8, mt->surf.row_pitch,
                                       total_x_offset_el, total_y_offset_el,
                                       base_address_offset,
                                       x_offset_el, y_offset_el);
@@ -187,7 +187,7 @@ get_blit_intratile_offset_el(const struct brw_context *brw,
        * The offsets we get from ISL in the tiled case are already aligned.
        * In the linear case, we need to do some of our own aligning.
        */
-      assert(mt->pitch % 64 == 0);
+      assert(mt->surf.row_pitch % 64 == 0);
       uint32_t delta = *base_address_offset & 63;
       assert(delta % mt->cpp == 0);
       *base_address_offset -= delta;
@@ -251,12 +251,13 @@ emit_miptree_blit(struct brw_context *brw,
 
          if (!intelEmitCopyBlit(brw,
                                 src_mt->cpp,
-                                reverse ? -src_mt->pitch : src_mt->pitch,
+                                reverse ? -src_mt->surf.row_pitch :
+                                           src_mt->surf.row_pitch,
                                 src_mt->bo, src_mt->offset + src_offset,
-                                src_mt->tiling,
-                                dst_mt->pitch,
+                                src_mt->surf.tiling,
+                                dst_mt->surf.row_pitch,
                                 dst_mt->bo, dst_mt->offset + dst_offset,
-                                dst_mt->tiling,
+                                dst_mt->surf.tiling,
                                 src_tile_x, src_tile_y,
                                 dst_tile_x, dst_tile_y,
                                 chunk_w, chunk_h,
@@ -298,7 +299,7 @@ intel_miptree_blit(struct brw_context *brw,
                    GLenum logicop)
 {
    /* The blitter doesn't understand multisampling at all. */
-   if (src_mt->num_samples > 0 || dst_mt->num_samples > 0)
+   if (src_mt->surf.samples > 1 || dst_mt->surf.samples > 1)
       return false;
 
    /* No sRGB decode or encode is done by the hardware blitter, which is
@@ -327,11 +328,17 @@ intel_miptree_blit(struct brw_context *brw,
    intel_miptree_access_raw(brw, src_mt, src_level, src_slice, false);
    intel_miptree_access_raw(brw, dst_mt, dst_level, dst_slice, true);
 
-   if (src_flip)
-      src_y = minify(src_mt->physical_height0, src_level - src_mt->first_level) - src_y - height;
-
-   if (dst_flip)
-      dst_y = minify(dst_mt->physical_height0, dst_level - dst_mt->first_level) - dst_y - height;
+   if (src_flip) {
+      const unsigned h0 = src_mt->surf.size > 0 ?
+         src_mt->surf.phys_level0_sa.height : src_mt->physical_height0;
+      src_y = minify(h0, src_level - src_mt->first_level) - src_y - height;
+   }
+ 
+   if (dst_flip) {
+      const unsigned h0 = dst_mt->surf.size > 0 ?
+         dst_mt->surf.phys_level0_sa.height : dst_mt->physical_height0;
+      dst_y = minify(h0, dst_level - dst_mt->first_level) - dst_y - height;
+   }
 
    uint32_t src_image_x, src_image_y, dst_image_x, dst_image_y;
    intel_miptree_get_image_offset(src_mt, src_level, src_slice,
@@ -371,7 +378,7 @@ intel_miptree_copy(struct brw_context *brw,
                    uint32_t src_width, uint32_t src_height)
 {
    /* The blitter doesn't understand multisampling at all. */
-   if (src_mt->num_samples > 0 || dst_mt->num_samples > 0)
+   if (src_mt->surf.samples > 1 || dst_mt->surf.samples > 1)
       return false;
 
    if (src_mt->format == MESA_FORMAT_S_UINT8)
@@ -399,10 +406,22 @@ intel_miptree_copy(struct brw_context *brw,
        */
       assert(src_x % bw == 0);
       assert(src_y % bh == 0);
-      assert(src_width % bw == 0 ||
-             src_x + src_width == minify(src_mt->logical_width0, src_level));
-      assert(src_height % bh == 0 ||
-             src_y + src_height == minify(src_mt->logical_height0, src_level));
+
+      if (src_mt->surf.size > 0) {
+         assert(src_width % bw == 0 ||
+                src_x + src_width ==
+                minify(src_mt->surf.logical_level0_px.width, src_level));
+         assert(src_height % bh == 0 ||
+                src_y + src_height ==
+                minify(src_mt->surf.logical_level0_px.height, src_level));
+      } else {
+         assert(src_width % bw == 0 ||
+                src_x + src_width ==
+                minify(src_mt->logical_width0, src_level));
+         assert(src_height % bh == 0 ||
+                src_y + src_height ==
+                minify(src_mt->logical_height0, src_level));
+      }
 
       src_x /= (int)bw;
       src_y /= (int)bh;
@@ -435,10 +454,11 @@ intel_miptree_copy(struct brw_context *brw,
 }
 
 static bool
-alignment_valid(struct brw_context *brw, unsigned offset, uint32_t tiling)
+alignment_valid(struct brw_context *brw, unsigned offset,
+                enum isl_tiling tiling)
 {
    /* Tiled buffers must be page-aligned (4K). */
-   if (tiling != I915_TILING_NONE)
+   if (tiling != ISL_TILING_LINEAR)
       return (offset & 4095) == 0;
 
    /* On Gen8+, linear buffers must be cacheline-aligned. */
@@ -449,7 +469,8 @@ alignment_valid(struct brw_context *brw, unsigned offset, uint32_t tiling)
 }
 
 static uint32_t
-xy_blit_cmd(uint32_t src_tiling, uint32_t dst_tiling, uint32_t cpp)
+xy_blit_cmd(enum isl_tiling src_tiling, enum isl_tiling dst_tiling,
+            uint32_t cpp)
 {
    uint32_t CMD = 0;
 
@@ -466,10 +487,10 @@ xy_blit_cmd(uint32_t src_tiling, uint32_t dst_tiling, uint32_t cpp)
       unreachable("not reached");
    }
 
-   if (dst_tiling != I915_TILING_NONE)
+   if (dst_tiling != ISL_TILING_LINEAR)
       CMD |= XY_DST_TILED;
 
-   if (src_tiling != I915_TILING_NONE)
+   if (src_tiling != ISL_TILING_LINEAR)
       CMD |= XY_SRC_TILED;
 
    return CMD;
@@ -483,11 +504,11 @@ intelEmitCopyBlit(struct brw_context *brw,
 		  int32_t src_pitch,
 		  struct brw_bo *src_buffer,
 		  GLuint src_offset,
-		  uint32_t src_tiling,
+		  enum isl_tiling src_tiling,
 		  int32_t dst_pitch,
 		  struct brw_bo *dst_buffer,
 		  GLuint dst_offset,
-		  uint32_t dst_tiling,
+		  enum isl_tiling dst_tiling,
 		  GLshort src_x, GLshort src_y,
 		  GLshort dst_x, GLshort dst_y,
 		  GLshort w, GLshort h,
@@ -496,8 +517,8 @@ intelEmitCopyBlit(struct brw_context *brw,
    GLuint CMD, BR13;
    int dst_y2 = dst_y + h;
    int dst_x2 = dst_x + w;
-   bool dst_y_tiled = dst_tiling == I915_TILING_Y;
-   bool src_y_tiled = src_tiling == I915_TILING_Y;
+   bool dst_y_tiled = dst_tiling == ISL_TILING_Y0;
+   bool src_y_tiled = src_tiling == ISL_TILING_Y0;
    uint32_t src_tile_w, src_tile_h;
    uint32_t dst_tile_w, dst_tile_h;
 
@@ -528,8 +549,8 @@ intelEmitCopyBlit(struct brw_context *brw,
     * (X direction width of the Tile). This is ensured while allocating the
     * buffer object.
     */
-   assert(src_tiling == I915_TILING_NONE || (src_pitch % src_tile_w) == 0);
-   assert(dst_tiling == I915_TILING_NONE || (dst_pitch % dst_tile_w) == 0);
+   assert(src_tiling == ISL_TILING_LINEAR || (src_pitch % src_tile_w) == 0);
+   assert(dst_tiling == ISL_TILING_LINEAR || (dst_pitch % dst_tile_w) == 0);
 
    /* For big formats (such as floating point), do the copy using 16 or
     * 32bpp and multiply the coordinates.
@@ -569,10 +590,10 @@ intelEmitCopyBlit(struct brw_context *brw,
    /* For tiled source and destination, pitch value should be specified
     * as a number of Dwords.
     */
-   if (dst_tiling != I915_TILING_NONE)
+   if (dst_tiling != ISL_TILING_LINEAR)
       dst_pitch /= 4;
 
-   if (src_tiling != I915_TILING_NONE)
+   if (src_tiling != ISL_TILING_LINEAR)
       src_pitch /= 4;
 
    if (dst_y2 <= dst_y || dst_x2 <= dst_x)
@@ -622,7 +643,7 @@ intelEmitImmediateColorExpandBlit(struct brw_context *brw,
 				  GLshort dst_pitch,
 				  struct brw_bo *dst_buffer,
 				  GLuint dst_offset,
-				  uint32_t dst_tiling,
+				  enum isl_tiling dst_tiling,
 				  GLshort x, GLshort y,
 				  GLshort w, GLshort h,
 				  GLenum logic_op)
@@ -630,10 +651,10 @@ intelEmitImmediateColorExpandBlit(struct brw_context *brw,
    int dwords = ALIGN(src_size, 8) / 4;
    uint32_t opcode, br13, blit_cmd;
 
-   if (dst_tiling != I915_TILING_NONE) {
+   if (dst_tiling != ISL_TILING_LINEAR) {
       if (dst_offset & 4095)
 	 return false;
-      if (dst_tiling == I915_TILING_Y)
+      if (dst_tiling == ISL_TILING_Y0)
 	 return false;
    }
 
@@ -654,7 +675,7 @@ intelEmitImmediateColorExpandBlit(struct brw_context *brw,
    opcode = XY_SETUP_BLT_CMD;
    if (cpp == 4)
       opcode |= XY_BLT_WRITE_ALPHA | XY_BLT_WRITE_RGB;
-   if (dst_tiling != I915_TILING_NONE) {
+   if (dst_tiling != ISL_TILING_LINEAR) {
       opcode |= XY_DST_TILED;
       dst_pitch /= 4;
    }
@@ -663,7 +684,7 @@ intelEmitImmediateColorExpandBlit(struct brw_context *brw,
    br13 |= br13_for_cpp(cpp);
 
    blit_cmd = XY_TEXT_IMMEDIATE_BLIT_CMD | XY_TEXT_BYTE_PACKED; /* packing? */
-   if (dst_tiling != I915_TILING_NONE)
+   if (dst_tiling != ISL_TILING_LINEAR)
       blit_cmd |= XY_DST_TILED;
 
    BEGIN_BATCH_BLT(xy_setup_blt_length + 3);
@@ -730,8 +751,10 @@ intel_emit_linear_blit(struct brw_context *brw,
       assert(dst_x + pitch < 1 << 15);
 
       ok = intelEmitCopyBlit(brw, 1,
-                             pitch, src_bo, src_offset - src_x, I915_TILING_NONE,
-                             pitch, dst_bo, dst_offset - dst_x, I915_TILING_NONE,
+                             pitch, src_bo, src_offset - src_x,
+                             ISL_TILING_LINEAR,
+                             pitch, dst_bo, dst_offset - dst_x,
+                             ISL_TILING_LINEAR,
                              src_x, 0, /* src x/y */
                              dst_x, 0, /* dst x/y */
                              MIN2(size, pitch), height, /* w, h */
@@ -768,7 +791,7 @@ intel_miptree_set_alpha_to_one(struct brw_context *brw,
    uint32_t BR13, CMD;
    int pitch, cpp;
 
-   pitch = mt->pitch;
+   pitch = mt->surf.row_pitch;
    cpp = mt->cpp;
 
    DBG("%s dst:buf(%p)/%d %d,%d sz:%dx%d\n",
@@ -778,7 +801,7 @@ intel_miptree_set_alpha_to_one(struct brw_context *brw,
    CMD = XY_COLOR_BLT_CMD;
    CMD |= XY_BLT_WRITE_ALPHA;
 
-   if (mt->tiling != I915_TILING_NONE) {
+   if (mt->surf.tiling != ISL_TILING_LINEAR) {
       CMD |= XY_DST_TILED;
       pitch /= 4;
    }
@@ -789,7 +812,7 @@ intel_miptree_set_alpha_to_one(struct brw_context *brw,
       intel_batchbuffer_flush(brw);
 
    unsigned length = brw->gen >= 8 ? 7 : 6;
-   bool dst_y_tiled = mt->tiling == I915_TILING_Y;
+   const bool dst_y_tiled = mt->surf.tiling == ISL_TILING_Y0;
 
    /* We need to split the blit into chunks that each fit within the blitter's
     * restrictions.  We can't use a chunk size of 32768 because we need to

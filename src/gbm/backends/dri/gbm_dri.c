@@ -48,6 +48,7 @@
 
 #include "gbmint.h"
 #include "loader.h"
+#include "util/macros.h"
 
 /* For importing wl_buffer */
 #if HAVE_WAYLAND_PLATFORM
@@ -541,30 +542,100 @@ dri_screen_create_sw(struct gbm_dri_device *dri)
    return dri_screen_create_swrast(dri);
 }
 
+static const struct {
+   uint32_t gbm_format;
+   int dri_image_format;
+} gbm_to_dri_image_formats[] = {
+   { GBM_FORMAT_R8,          __DRI_IMAGE_FORMAT_R8          },
+   { GBM_FORMAT_GR88,        __DRI_IMAGE_FORMAT_GR88        },
+   { GBM_FORMAT_RGB565,      __DRI_IMAGE_FORMAT_RGB565      },
+   { GBM_FORMAT_XRGB8888,    __DRI_IMAGE_FORMAT_XRGB8888    },
+   { GBM_FORMAT_ARGB8888,    __DRI_IMAGE_FORMAT_ARGB8888    },
+   { GBM_FORMAT_XBGR8888,    __DRI_IMAGE_FORMAT_XBGR8888    },
+   { GBM_FORMAT_ABGR8888,    __DRI_IMAGE_FORMAT_ABGR8888    },
+   { GBM_FORMAT_XRGB2101010, __DRI_IMAGE_FORMAT_XRGB2101010 },
+   { GBM_FORMAT_ARGB2101010, __DRI_IMAGE_FORMAT_ARGB2101010 },
+};
+
+/* The two GBM_BO_FORMAT_[XA]RGB8888 formats alias the GBM_FORMAT_*
+ * formats of the same name. We want to accept them whenever someone
+ * has a GBM format, but never return them to the user. */
+static int
+gbm_format_canonicalize(uint32_t gbm_format)
+{
+   switch (gbm_format) {
+   case GBM_BO_FORMAT_XRGB8888:
+      return GBM_FORMAT_XRGB8888;
+   case GBM_BO_FORMAT_ARGB8888:
+      return GBM_FORMAT_ARGB8888;
+   default:
+      return gbm_format;
+   }
+}
+
+static int
+gbm_format_to_dri_format(uint32_t gbm_format)
+{
+   int i;
+
+   gbm_format = gbm_format_canonicalize(gbm_format);
+   for (i = 0; i < ARRAY_SIZE(gbm_to_dri_image_formats); i++) {
+      if (gbm_to_dri_image_formats[i].gbm_format == gbm_format)
+         return gbm_to_dri_image_formats[i].dri_image_format;
+   }
+
+   return 0;
+}
+
+static uint32_t
+gbm_dri_to_gbm_format(int dri_format)
+{
+   int i;
+
+   for (i = 0; i < ARRAY_SIZE(gbm_to_dri_image_formats); i++) {
+      if (gbm_to_dri_image_formats[i].dri_image_format == dri_format)
+         return gbm_to_dri_image_formats[i].gbm_format;
+   }
+
+   return 0;
+}
+
 static int
 gbm_dri_is_format_supported(struct gbm_device *gbm,
                             uint32_t format,
                             uint32_t usage)
 {
-   switch (format) {
-   case GBM_BO_FORMAT_XRGB8888:
-   case GBM_FORMAT_XBGR8888:
-   case GBM_FORMAT_XRGB8888:
-      break;
-   case GBM_BO_FORMAT_ARGB8888:
-   case GBM_FORMAT_ARGB8888:
-      if (usage & GBM_BO_USE_SCANOUT)
-         return 0;
-      break;
-   default:
+   struct gbm_dri_device *dri = gbm_dri_device(gbm);
+   int count;
+
+   if ((usage & GBM_BO_USE_CURSOR) && (usage & GBM_BO_USE_RENDERING))
       return 0;
+
+   format = gbm_format_canonicalize(format);
+   if (gbm_format_to_dri_format(format) == 0)
+      return 0;
+
+   /* If there is no query, fall back to the small table which was originally
+    * here. */
+   if (dri->image->base.version <= 15 || !dri->image->queryDmaBufModifiers) {
+      switch (format) {
+      case GBM_FORMAT_XRGB8888:
+      case GBM_FORMAT_ARGB8888:
+      case GBM_FORMAT_XBGR8888:
+         return 1;
+      default:
+         return 0;
+      }
    }
 
-   if (usage & GBM_BO_USE_CURSOR &&
-       usage & GBM_BO_USE_RENDERING)
+   /* Check if the driver returns any modifiers for this format; since linear
+    * is counted as a modifier, we will have at least one modifier for any
+    * supported format. */
+   if (!dri->image->queryDmaBufModifiers(dri->screen, format, 0, NULL, NULL,
+                                         &count))
       return 0;
 
-   return 1;
+   return (count > 0);
 }
 
 static int
@@ -786,35 +857,6 @@ gbm_dri_bo_destroy(struct gbm_bo *_bo)
    free(bo);
 }
 
-static uint32_t
-gbm_dri_to_gbm_format(uint32_t dri_format)
-{
-   uint32_t ret = 0;
-
-   switch (dri_format) {
-   case __DRI_IMAGE_FORMAT_RGB565:
-      ret = GBM_FORMAT_RGB565;
-      break;
-   case __DRI_IMAGE_FORMAT_XRGB8888:
-      ret = GBM_FORMAT_XRGB8888;
-      break;
-   case __DRI_IMAGE_FORMAT_ARGB8888:
-      ret = GBM_FORMAT_ARGB8888;
-      break;
-   case __DRI_IMAGE_FORMAT_XBGR8888:
-      ret = GBM_FORMAT_XBGR8888;
-      break;
-   case __DRI_IMAGE_FORMAT_ABGR8888:
-      ret = GBM_FORMAT_ABGR8888;
-      break;
-   default:
-      ret = 0;
-      break;
-   }
-
-   return ret;
-}
-
 static struct gbm_bo *
 gbm_dri_bo_import(struct gbm_device *gbm,
                   uint32_t type, void *buffer, uint32_t usage)
@@ -850,23 +892,9 @@ gbm_dri_bo_import(struct gbm_device *gbm,
 
       image = dri->image->dupImage(wb->driver_buffer, NULL);
 
-      switch (wb->format) {
-      case WL_DRM_FORMAT_XRGB8888:
-         gbm_format = GBM_FORMAT_XRGB8888;
-         break;
-      case WL_DRM_FORMAT_ARGB8888:
-         gbm_format = GBM_FORMAT_ARGB8888;
-         break;
-      case WL_DRM_FORMAT_RGB565:
-         gbm_format = GBM_FORMAT_RGB565;
-         break;
-      case WL_DRM_FORMAT_YUYV:
-         gbm_format = GBM_FORMAT_YUYV;
-         break;
-      default:
-         dri->image->destroyImage(image);
-         return NULL;
-      }
+      /* GBM_FORMAT_* is identical to WL_DRM_FORMAT_*, so no conversion
+       * required. */
+      gbm_format = wb->format;
       break;
    }
 #endif
@@ -895,23 +923,17 @@ gbm_dri_bo_import(struct gbm_device *gbm,
    {
       struct gbm_import_fd_data *fd_data = buffer;
       int stride = fd_data->stride, offset = 0;
-      int dri_format;
+      int fourcc;
 
-      switch (fd_data->format) {
-      case GBM_BO_FORMAT_XRGB8888:
-         dri_format = GBM_FORMAT_XRGB8888;
-         break;
-      case GBM_BO_FORMAT_ARGB8888:
-         dri_format = GBM_FORMAT_ARGB8888;
-         break;
-      default:
-         dri_format = fd_data->format;
-      }
+      /* GBM's GBM_FORMAT_* tokens are a strict superset of the DRI FourCC
+       * tokens accepted by createImageFromFds, except for not supporting
+       * the sARGB format. */
+      fourcc = gbm_format_canonicalize(fd_data->format);
 
       image = dri->image->createImageFromFds(dri->screen,
                                              fd_data->width,
                                              fd_data->height,
-                                             dri_format,
+                                             fourcc,
                                              &fd_data->fd, 1,
                                              &stride, &offset,
                                              NULL);
@@ -936,28 +958,10 @@ gbm_dri_bo_import(struct gbm_device *gbm,
          return NULL;
       }
 
-      switch(fd_data->format) {
-      case GBM_FORMAT_RGB565:
-         fourcc = __DRI_IMAGE_FOURCC_RGB565;
-         break;
-      case GBM_FORMAT_ARGB8888:
-      case GBM_BO_FORMAT_ARGB8888:
-         fourcc = __DRI_IMAGE_FOURCC_ARGB8888;
-         break;
-      case GBM_FORMAT_XRGB8888:
-      case GBM_BO_FORMAT_XRGB8888:
-         fourcc = __DRI_IMAGE_FOURCC_XRGB8888;
-         break;
-      case GBM_FORMAT_ABGR8888:
-         fourcc = __DRI_IMAGE_FOURCC_ABGR8888;
-         break;
-      case GBM_FORMAT_XBGR8888:
-         fourcc = __DRI_IMAGE_FOURCC_XBGR8888;
-         break;
-      default:
-         errno = EINVAL;
-         return NULL;
-      }
+      /* GBM's GBM_FORMAT_* tokens are a strict superset of the DRI FourCC
+       * tokens accepted by createImageFromDmaBufs2, except for not supporting
+       * the sARGB format. */
+      fourcc = gbm_format_canonicalize(fd_data->format);
 
       image = dri->image->createImageFromDmaBufs2(dri->screen, fd_data->width,
                                                   fd_data->height, fourcc,
@@ -973,7 +977,7 @@ gbm_dri_bo_import(struct gbm_device *gbm,
          return NULL;
       }
 
-      gbm_format = fd_data->format;
+      gbm_format = fourcc;
       break;
    }
 
@@ -1018,31 +1022,6 @@ gbm_dri_bo_import(struct gbm_device *gbm,
    return &bo->base;
 }
 
-static bool
-is_planar_format(uint32_t format)
-{
-   switch (format) {
-   case GBM_FORMAT_NV12:
-   case GBM_FORMAT_NV21:
-   case GBM_FORMAT_NV16:
-   case GBM_FORMAT_NV61:
-   case GBM_FORMAT_YUV410:
-   case GBM_FORMAT_YVU410:
-   case GBM_FORMAT_YUV411:
-   case GBM_FORMAT_YVU411:
-   case GBM_FORMAT_YUV420:
-   case GBM_FORMAT_YVU420:
-   case GBM_FORMAT_YUV422:
-   case GBM_FORMAT_YVU422:
-   case GBM_FORMAT_YUV444:
-   case GBM_FORMAT_YVU444:
-      return true;
-   default:
-      return false;
-   }
-
-}
-
 static struct gbm_bo *
 create_dumb(struct gbm_device *gbm,
                   uint32_t width, uint32_t height,
@@ -1060,11 +1039,6 @@ create_dumb(struct gbm_device *gbm,
    is_scanout = (usage & GBM_BO_USE_SCANOUT) != 0 &&
       (format == GBM_FORMAT_XRGB8888 || format == GBM_FORMAT_XBGR8888);
    if (!is_cursor && !is_scanout) {
-      errno = EINVAL;
-      return NULL;
-   }
-
-   if (is_planar_format(format)) {
       errno = EINVAL;
       return NULL;
    }
@@ -1123,6 +1097,8 @@ gbm_dri_bo_create(struct gbm_device *gbm,
     */
    assert(!(usage && count));
 
+   format = gbm_format_canonicalize(format);
+
    if (usage & GBM_BO_USE_WRITE || dri->image == NULL)
       return create_dumb(gbm, width, height, format, usage);
 
@@ -1135,37 +1111,8 @@ gbm_dri_bo_create(struct gbm_device *gbm,
    bo->base.height = height;
    bo->base.format = format;
 
-   switch (format) {
-   case GBM_FORMAT_R8:
-      dri_format = __DRI_IMAGE_FORMAT_R8;
-      break;
-   case GBM_FORMAT_GR88:
-      dri_format = __DRI_IMAGE_FORMAT_GR88;
-      break;
-   case GBM_FORMAT_RGB565:
-      dri_format = __DRI_IMAGE_FORMAT_RGB565;
-      break;
-   case GBM_FORMAT_XRGB8888:
-   case GBM_BO_FORMAT_XRGB8888:
-      dri_format = __DRI_IMAGE_FORMAT_XRGB8888;
-      break;
-   case GBM_FORMAT_ARGB8888:
-   case GBM_BO_FORMAT_ARGB8888:
-      dri_format = __DRI_IMAGE_FORMAT_ARGB8888;
-      break;
-   case GBM_FORMAT_ABGR8888:
-      dri_format = __DRI_IMAGE_FORMAT_ABGR8888;
-      break;
-   case GBM_FORMAT_XBGR8888:
-      dri_format = __DRI_IMAGE_FORMAT_XBGR8888;
-      break;
-   case GBM_FORMAT_ARGB2101010:
-      dri_format = __DRI_IMAGE_FORMAT_ARGB2101010;
-      break;
-   case GBM_FORMAT_XRGB2101010:
-      dri_format = __DRI_IMAGE_FORMAT_XRGB2101010;
-      break;
-   default:
+   dri_format = gbm_format_to_dri_format(format);
+   if (dri_format == 0) {
       errno = EINVAL;
       goto failed;
    }
@@ -1333,7 +1280,7 @@ gbm_dri_surface_create(struct gbm_device *gbm,
    surf->base.gbm = gbm;
    surf->base.width = width;
    surf->base.height = height;
-   surf->base.format = format;
+   surf->base.format = gbm_format_canonicalize(format);
    surf->base.flags = flags;
    if (!modifiers) {
       assert(!count);

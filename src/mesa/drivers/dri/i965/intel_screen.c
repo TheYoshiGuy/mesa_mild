@@ -56,7 +56,6 @@ static const __DRIconfigOptionsExtension brw_config_options = {
    .xml =
 DRI_CONF_BEGIN
    DRI_CONF_SECTION_PERFORMANCE
-      DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_ALWAYS_SYNC)
       /* Options correspond to DRI_CONF_BO_REUSE_DISABLED,
        * DRI_CONF_BO_REUSE_ALL
        */
@@ -297,26 +296,25 @@ static struct intel_image_format intel_image_formats[] = {
 };
 
 static const struct {
-   uint32_t tiling;
    uint64_t modifier;
    unsigned since_gen;
-} tiling_modifier_map[] = {
-   { .tiling = I915_TILING_NONE, .modifier = DRM_FORMAT_MOD_LINEAR,
-     .since_gen = 1 },
-   { .tiling = I915_TILING_X, .modifier = I915_FORMAT_MOD_X_TILED,
-     .since_gen = 1 },
-   { .tiling = I915_TILING_Y, .modifier = I915_FORMAT_MOD_Y_TILED,
-     .since_gen = 6 },
+} supported_modifiers[] = {
+   { .modifier = DRM_FORMAT_MOD_LINEAR       , .since_gen = 1 },
+   { .modifier = I915_FORMAT_MOD_X_TILED     , .since_gen = 1 },
+   { .modifier = I915_FORMAT_MOD_Y_TILED     , .since_gen = 6 },
 };
 
 static bool
-modifier_is_supported(uint64_t modifier)
+modifier_is_supported(const struct gen_device_info *devinfo,
+                      uint64_t modifier)
 {
    int i;
 
-   for (i = 0; i < ARRAY_SIZE(tiling_modifier_map); i++) {
-      if (tiling_modifier_map[i].modifier == modifier)
-         return true;
+   for (i = 0; i < ARRAY_SIZE(supported_modifiers); i++) {
+      if (supported_modifiers[i].modifier != modifier)
+         continue;
+
+      return supported_modifiers[i].since_gen <= devinfo->gen;
    }
 
    return false;
@@ -325,14 +323,15 @@ modifier_is_supported(uint64_t modifier)
 static uint64_t
 tiling_to_modifier(uint32_t tiling)
 {
-   int i;
+   static const uint64_t map[] = {
+      [I915_TILING_NONE]   = DRM_FORMAT_MOD_LINEAR,
+      [I915_TILING_X]      = I915_FORMAT_MOD_X_TILED,
+      [I915_TILING_Y]      = I915_FORMAT_MOD_Y_TILED,
+   };
 
-   for (i = 0; i < ARRAY_SIZE(tiling_modifier_map); i++) {
-      if (tiling_modifier_map[i].tiling == tiling)
-         return tiling_modifier_map[i].modifier;
-   }
+   assert(tiling < ARRAY_SIZE(map));
 
-   unreachable("tiling_to_modifier received unknown tiling mode");
+   return map[tiling];
 }
 
 static void
@@ -412,9 +411,16 @@ intel_setup_image_from_mipmap_tree(struct brw_context *brw, __DRIimage *image,
 
    intel_miptree_check_level_layer(mt, level, zoffset);
 
-   image->width = minify(mt->physical_width0, level - mt->first_level);
-   image->height = minify(mt->physical_height0, level - mt->first_level);
-   image->pitch = mt->pitch;
+   if (mt->surf.size > 0) {
+      image->width = minify(mt->surf.phys_level0_sa.width,
+                            level - mt->first_level);
+      image->height = minify(mt->surf.phys_level0_sa.height,
+                             level - mt->first_level);
+   } else {
+      image->width = minify(mt->physical_width0, level - mt->first_level);
+      image->height = minify(mt->physical_height0, level - mt->first_level);
+   }
+   image->pitch = mt->surf.row_pitch;
 
    image->offset = intel_miptree_get_tile_offsets(mt, level, zoffset,
                                                   &image->tile_x,
@@ -481,7 +487,8 @@ intel_create_image_from_renderbuffer(__DRIcontext *context,
 
    image->internal_format = rb->InternalFormat;
    image->format = rb->Format;
-   image->modifier = tiling_to_modifier(irb->mt->tiling);
+   image->modifier = tiling_to_modifier(
+                        isl_tiling_to_i915_tiling(irb->mt->surf.tiling));
    image->offset = 0;
    image->data = loaderPrivate;
    brw_bo_unreference(image->bo);
@@ -489,7 +496,7 @@ intel_create_image_from_renderbuffer(__DRIcontext *context,
    brw_bo_reference(irb->mt->bo);
    image->width = rb->Width;
    image->height = rb->Height;
-   image->pitch = irb->mt->pitch;
+   image->pitch = irb->mt->surf.row_pitch;
    image->dri_format = driGLFormatToImageFormat(image->format);
    image->has_depthstencil = irb->mt->stencil_mt? true : false;
 
@@ -543,7 +550,8 @@ intel_create_image_from_texture(__DRIcontext *context, int target,
 
    image->internal_format = obj->Image[face][level]->InternalFormat;
    image->format = obj->Image[face][level]->TexFormat;
-   image->modifier = tiling_to_modifier(iobj->mt->tiling);
+   image->modifier = tiling_to_modifier(
+                        isl_tiling_to_i915_tiling(iobj->mt->surf.tiling));
    image->data = loaderPrivate;
    intel_setup_image_from_mipmap_tree(brw, image, iobj->mt, level, zoffset);
    image->dri_format = driGLFormatToImageFormat(image->format);
@@ -587,6 +595,9 @@ select_best_modifier(struct gen_device_info *devinfo,
    enum modifier_priority prio = MODIFIER_PRIORITY_INVALID;
 
    for (int i = 0; i < count; i++) {
+      if (!modifier_is_supported(devinfo, modifiers[i]))
+         continue;
+
       switch (modifiers[i]) {
       case I915_FORMAT_MOD_Y_TILED:
          prio = MAX2(prio, MODIFIER_PRIORITY_Y);
@@ -675,9 +686,13 @@ intel_create_image_common(__DRIscreen *dri_screen,
       return NULL;
    }
 
+   /* We request that the bufmgr zero because, if a buffer gets re-used from
+    * the pool, we don't want to leak random garbage from our process to some
+    * other.
+    */
    image->bo = brw_bo_alloc_tiled(screen->bufmgr, "image", surf.size,
                                   isl_tiling_to_i915_tiling(mod_info->tiling),
-                                  surf.row_pitch, 0);
+                                  surf.row_pitch, BO_ALLOC_ZEROED);
    if (image->bo == NULL) {
       free(image);
       return NULL;
@@ -857,8 +872,9 @@ intel_create_image_from_fds_common(__DRIscreen *dri_screen,
    if (f == NULL)
       return NULL;
 
-   if (modifier != DRM_FORMAT_MOD_INVALID && !modifier_is_supported(modifier))
-         return NULL;
+   if (modifier != DRM_FORMAT_MOD_INVALID &&
+       !modifier_is_supported(&screen->devinfo, modifier))
+      return NULL;
 
    if (f->nplanes == 1)
       image = intel_allocate_image(screen, f->planes[0].dri_format,
@@ -1071,15 +1087,16 @@ intel_query_dma_buf_modifiers(__DRIscreen *_screen, int fourcc, int max,
    if (f == NULL)
       return false;
 
-   for (i = 0; i < ARRAY_SIZE(tiling_modifier_map); i++) {
-      if (screen->devinfo.gen < tiling_modifier_map[i].since_gen)
+   for (i = 0; i < ARRAY_SIZE(supported_modifiers); i++) {
+      uint64_t modifier = supported_modifiers[i].modifier;
+      if (!modifier_is_supported(&screen->devinfo, modifier))
          continue;
 
       num_mods++;
       if (max == 0)
          continue;
 
-      modifiers[num_mods - 1] = tiling_modifier_map[i].modifier;
+      modifiers[num_mods - 1] = modifier;
       if (num_mods >= max)
         break;
    }

@@ -143,7 +143,7 @@ intel_map_renderbuffer(struct gl_context *ctx,
          irb->singlesample_mt =
             intel_miptree_create_for_renderbuffer(brw, irb->mt->format,
                                                   rb->Width, rb->Height,
-                                                  0 /*num_samples*/);
+                                                  1 /*num_samples*/);
          if (!irb->singlesample_mt)
             goto fail;
          irb->singlesample_mt_is_tmp = true;
@@ -303,7 +303,7 @@ intel_alloc_private_renderbuffer_storage(struct gl_context * ctx, struct gl_rend
 
    irb->mt = intel_miptree_create_for_renderbuffer(brw, rb->Format,
 						   width, height,
-                                                   rb->NumSamples);
+                                                   MAX2(rb->NumSamples, 1));
    if (!irb->mt)
       return false;
 
@@ -530,24 +530,19 @@ intel_renderbuffer_update_wrapper(struct brw_context *brw,
 
    intel_miptree_check_level_layer(mt, level, layer);
    irb->mt_level = level;
+   irb->mt_layer = layer;
 
-   int layer_multiplier;
-   switch (mt->msaa_layout) {
-      case INTEL_MSAA_LAYOUT_UMS:
-      case INTEL_MSAA_LAYOUT_CMS:
-         layer_multiplier = MAX2(mt->num_samples, 1);
-         break;
-
-      default:
-         layer_multiplier = 1;
-   }
-
-   irb->mt_layer = layer_multiplier * layer;
+   const unsigned layer_multiplier = 
+      mt->surf.msaa_layout == ISL_MSAA_LAYOUT_ARRAY ? mt->surf.samples : 1;
 
    if (!layered) {
       irb->layer_count = 1;
    } else if (mt->target != GL_TEXTURE_3D && image->TexObject->NumLayers > 0) {
       irb->layer_count = image->TexObject->NumLayers;
+   } else if (mt->surf.size > 0) {
+      irb->layer_count = mt->surf.dim == ISL_SURF_DIM_3D ?
+                            minify(mt->surf.logical_level0_px.depth, level) :
+                            mt->surf.logical_level0_px.array_len;
    } else {
       irb->layer_count = mt->level[level].depth / layer_multiplier;
    }
@@ -555,12 +550,6 @@ intel_renderbuffer_update_wrapper(struct brw_context *brw,
    intel_miptree_reference(&irb->mt, mt);
 
    intel_renderbuffer_set_draw_offset(irb);
-
-   if (mt->aux_usage == ISL_AUX_USAGE_HIZ && !mt->hiz_buf) {
-      intel_miptree_alloc_hiz(brw, mt);
-      if (!mt->hiz_buf)
-	 return false;
-   }
 
    return true;
 }
@@ -985,7 +974,7 @@ intel_renderbuffer_move_to_temp(struct brw_context *brw,
                                  intel_image->base.Base.TexFormat,
                                  0, 0,
                                  width, height, 1,
-                                 irb->mt->num_samples,
+                                 irb->mt->surf.samples,
                                  layout_flags);
 
    if (!invalidate)

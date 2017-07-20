@@ -143,7 +143,7 @@ rebase_depth_stencil(struct brw_context *brw, struct intel_renderbuffer *irb,
    struct gl_context *ctx = &brw->ctx;
    uint32_t tile_mask_x = 0, tile_mask_y = 0;
 
-   intel_get_tile_masks(irb->mt->tiling, irb->mt->cpp,
+   intel_get_tile_masks(irb->mt->surf.tiling, irb->mt->cpp,
                         &tile_mask_x, &tile_mask_y);
    assert(!intel_miptree_level_has_hiz(irb->mt, irb->mt_level));
 
@@ -168,9 +168,11 @@ rebase_depth_stencil(struct brw_context *brw, struct intel_renderbuffer *irb,
                  irb->mt_level, tile_x, tile_y);
       intel_renderbuffer_move_to_temp(brw, irb, invalidate);
 
-      /* Get the new offset. */
-      tile_x = irb->draw_x & tile_mask_x;
-      tile_y = irb->draw_y & tile_mask_y;
+      /* There is now only single slice miptree. */
+      brw->depthstencil.tile_x = 0;
+      brw->depthstencil.tile_y = 0;
+      brw->depthstencil.depth_offset = 0;
+      return true;
    }
 
    /* While we just tried to get everything aligned, we may have failed to do
@@ -192,7 +194,7 @@ rebase_depth_stencil(struct brw_context *brw, struct intel_renderbuffer *irb,
                                        irb->draw_x & ~tile_mask_x,
                                        irb->draw_y & ~tile_mask_y);
 
-   return rebase;
+   return false;
 }
 
 void
@@ -304,8 +306,8 @@ brw_emit_depthbuffer(struct brw_context *brw)
       /* Prior to Gen7, if using separate stencil, hiz must be enabled. */
       assert(brw->gen >= 7 || !separate_stencil || hiz);
 
-      assert(brw->gen < 6 || depth_mt->tiling == I915_TILING_Y);
-      assert(!hiz || depth_mt->tiling == I915_TILING_Y);
+      assert(brw->gen < 6 || depth_mt->surf.tiling == ISL_TILING_Y0);
+      assert(!hiz || depth_mt->surf.tiling == ISL_TILING_Y0);
 
       depthbuffer_format = brw_depthbuffer_format(brw);
       depth_surface_type = BRW_SURFACE_2D;
@@ -378,11 +380,10 @@ brw_emit_depth_stencil_hiz(struct brw_context *brw,
 
    BEGIN_BATCH(len);
    OUT_BATCH(_3DSTATE_DEPTH_BUFFER << 16 | (len - 2));
-   OUT_BATCH((depth_mt ? depth_mt->pitch - 1 : 0) |
+   OUT_BATCH((depth_mt ? depth_mt->surf.row_pitch - 1 : 0) |
              (depthbuffer_format << 18) |
              (BRW_TILEWALK_YMAJOR << 26) |
-             ((depth_mt ? depth_mt->tiling != I915_TILING_NONE : 1)
-              << 27) |
+             (1 << 27) |
              (depth_surface_type << 29));
 
    if (depth_mt) {
