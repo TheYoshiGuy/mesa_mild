@@ -134,7 +134,7 @@ function build_and_install_mesa {
         echo "building in $directory"
         cd $directory
         makepkg -sCcf 
-        sudo find .  -name "*.xz" -exec pacman -Sdd {} --force \;
+        sudo find .  -name "*.xz" -exec pacman -Udd {} --force \;
         cd ..;cd ..
     done
 }
