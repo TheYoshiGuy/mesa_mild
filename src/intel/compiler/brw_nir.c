@@ -553,6 +553,7 @@ nir_optimize(nir_shader *nir, const struct brw_compiler *compiler,
       OPT(nir_opt_dce);
       OPT(nir_opt_cse);
       OPT(nir_opt_peephole_select, 0);
+      OPT(nir_opt_intrinsics);
       OPT(nir_opt_algebraic);
       OPT(nir_opt_constant_folding);
       OPT(nir_opt_dead_cf);
@@ -619,6 +620,7 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir)
 
    OPT(nir_lower_tex, &tex_options);
    OPT(nir_normalize_cubemap_coords);
+   OPT(nir_lower_read_invocation_to_scalar);
 
    OPT(nir_lower_global_vars_to_local);
 
