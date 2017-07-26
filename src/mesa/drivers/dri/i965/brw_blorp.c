@@ -184,6 +184,7 @@ blorp_surf_for_miptree(struct brw_context *brw,
          surf->aux_addr.buffer = mt->mcs_buf->bo;
          surf->aux_addr.offset = mt->mcs_buf->offset;
       } else {
+         assert(mt->hiz_buf);
          assert(surf->aux_usage == ISL_AUX_USAGE_HIZ);
 
          surf->aux_addr.buffer = mt->hiz_buf->bo;
@@ -1103,7 +1104,7 @@ brw_blorp_mcs_partial_resolve(struct brw_context *brw,
    DBG("%s to mt %p layers %u-%u\n", __FUNCTION__, mt,
        start_layer, start_layer + num_layers - 1);
 
-   assert(mt->aux_usage = ISL_AUX_USAGE_MCS);
+   assert(mt->aux_usage == ISL_AUX_USAGE_MCS);
 
    const mesa_format format = _mesa_get_srgb_format_linear(mt->format);
    enum isl_format isl_format = brw_blorp_to_isl_format(brw, format, true);
