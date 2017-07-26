@@ -231,13 +231,19 @@ color_is_zero_one(VkClearColorValue value, enum isl_format format)
 }
 
 static void
-color_attachment_compute_aux_usage(struct anv_device *device,
-                                   struct anv_attachment_state *att_state,
-                                   struct anv_image_view *iview,
-                                   VkRect2D render_area,
+color_attachment_compute_aux_usage(struct anv_device * device,
+                                   struct anv_cmd_state * cmd_state,
+                                   uint32_t att, VkRect2D render_area,
                                    union isl_color_value *fast_clear_color)
 {
-   if (iview->image->aux_surface.isl.size == 0) {
+   struct anv_attachment_state *att_state = &cmd_state->attachments[att];
+   struct anv_image_view *iview = cmd_state->framebuffer->attachments[att];
+
+   if (iview->isl.base_array_layer >=
+       anv_image_aux_layers(iview->image, iview->isl.base_level)) {
+      /* There is no aux buffer which corresponds to the level and layer(s)
+       * being accessed.
+       */
       att_state->aux_usage = ISL_AUX_USAGE_NONE;
       att_state->input_aux_usage = ISL_AUX_USAGE_NONE;
       att_state->fast_clear = false;
@@ -247,12 +253,49 @@ color_attachment_compute_aux_usage(struct anv_device *device,
       att_state->input_aux_usage = ISL_AUX_USAGE_MCS;
       att_state->fast_clear = false;
       return;
+   } else if (iview->image->aux_usage == ISL_AUX_USAGE_CCS_E) {
+      att_state->aux_usage = ISL_AUX_USAGE_CCS_E;
+      att_state->input_aux_usage = ISL_AUX_USAGE_CCS_E;
+   } else {
+      att_state->aux_usage = ISL_AUX_USAGE_CCS_D;
+      /* From the Sky Lake PRM, RENDER_SURFACE_STATE::AuxiliarySurfaceMode:
+       *
+       *    "If Number of Multisamples is MULTISAMPLECOUNT_1, AUX_CCS_D
+       *    setting is only allowed if Surface Format supported for Fast
+       *    Clear. In addition, if the surface is bound to the sampling
+       *    engine, Surface Format must be supported for Render Target
+       *    Compression for surfaces bound to the sampling engine."
+       *
+       * In other words, we can only sample from a fast-cleared image if it
+       * also supports color compression.
+       */
+      if (isl_format_supports_ccs_e(&device->info, iview->isl.format)) {
+         att_state->input_aux_usage = ISL_AUX_USAGE_CCS_D;
+
+         /* While fast-clear resolves and partial resolves are fairly cheap in the
+          * case where you render to most of the pixels, full resolves are not
+          * because they potentially involve reading and writing the entire
+          * framebuffer.  If we can't texture with CCS_E, we should leave it off and
+          * limit ourselves to fast clears.
+          */
+         if (cmd_state->pass->attachments[att].first_subpass_layout ==
+             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+            anv_perf_warn("Not temporarily enabling CCS_E.");
+         }
+      } else {
+         att_state->input_aux_usage = ISL_AUX_USAGE_NONE;
+      }
    }
 
    assert(iview->image->aux_surface.isl.usage & ISL_SURF_USAGE_CCS_BIT);
 
    att_state->clear_color_is_zero_one =
       color_is_zero_one(att_state->clear_value.color, iview->isl.format);
+   att_state->clear_color_is_zero =
+      att_state->clear_value.color.uint32[0] == 0 &&
+      att_state->clear_value.color.uint32[1] == 0 &&
+      att_state->clear_value.color.uint32[2] == 0 &&
+      att_state->clear_value.color.uint32[3] == 0;
 
    if (att_state->pending_clear_aspects == VK_IMAGE_ASPECT_COLOR_BIT) {
       /* Start off assuming fast clears are possible */
@@ -268,20 +311,35 @@ color_attachment_compute_aux_usage(struct anv_device *device,
           render_area.extent.height != iview->extent.height)
          att_state->fast_clear = false;
 
-      if (GEN_GEN <= 7) {
-         /* On gen7, we can't do multi-LOD or multi-layer fast-clears.  We
-          * technically can, but it comes with crazy restrictions that we
-          * don't want to deal with now.
-          */
-         if (iview->isl.base_level > 0 ||
-             iview->isl.base_array_layer > 0 ||
-             iview->isl.array_len > 1)
-            att_state->fast_clear = false;
-      }
-
       /* On Broadwell and earlier, we can only handle 0/1 clear colors */
       if (GEN_GEN <= 8 && !att_state->clear_color_is_zero_one)
          att_state->fast_clear = false;
+
+      /* We allow fast clears when all aux layers of the miplevel are targeted.
+       * See add_fast_clear_state_buffer() for more information. Also, because
+       * we only either do a fast clear or a normal clear and not both, this
+       * complies with the gen7 restriction of not fast-clearing multiple
+       * layers.
+       */
+      if (cmd_state->framebuffer->layers !=
+          anv_image_aux_layers(iview->image, iview->isl.base_level)) {
+         att_state->fast_clear = false;
+         if (GEN_GEN == 7) {
+            anv_perf_warn("Not fast-clearing the first layer in "
+                          "a multi-layer fast clear.");
+         }
+      }
+
+      /* We only allow fast clears in the GENERAL layout if the auxiliary
+       * buffer is always enabled and the fast-clear value is all 0's. See
+       * add_fast_clear_state_buffer() for more information.
+       */
+      if (cmd_state->pass->attachments[att].first_subpass_layout ==
+          VK_IMAGE_LAYOUT_GENERAL &&
+          (!att_state->clear_color_is_zero ||
+           iview->image->aux_usage == ISL_AUX_USAGE_NONE)) {
+         att_state->fast_clear = false;
+      }
 
       if (att_state->fast_clear) {
          memcpy(fast_clear_color->u32, att_state->clear_value.color.uint32,
@@ -289,41 +347,6 @@ color_attachment_compute_aux_usage(struct anv_device *device,
       }
    } else {
       att_state->fast_clear = false;
-   }
-
-   /**
-    * TODO: Consider using a heuristic to determine if temporarily enabling
-    * CCS_E for this image view would be beneficial.
-    *
-    * While fast-clear resolves and partial resolves are fairly cheap in the
-    * case where you render to most of the pixels, full resolves are not
-    * because they potentially involve reading and writing the entire
-    * framebuffer.  If we can't texture with CCS_E, we should leave it off and
-    * limit ourselves to fast clears.
-    */
-   if (iview->image->aux_usage == ISL_AUX_USAGE_CCS_E) {
-      att_state->aux_usage = ISL_AUX_USAGE_CCS_E;
-      att_state->input_aux_usage = ISL_AUX_USAGE_CCS_E;
-   } else if (att_state->fast_clear) {
-      att_state->aux_usage = ISL_AUX_USAGE_CCS_D;
-      /* From the Sky Lake PRM, RENDER_SURFACE_STATE::AuxiliarySurfaceMode:
-       *
-       *    "If Number of Multisamples is MULTISAMPLECOUNT_1, AUX_CCS_D
-       *    setting is only allowed if Surface Format supported for Fast
-       *    Clear. In addition, if the surface is bound to the sampling
-       *    engine, Surface Format must be supported for Render Target
-       *    Compression for surfaces bound to the sampling engine."
-       *
-       * In other words, we can only sample from a fast-cleared image if it
-       * also supports color compression.
-       */
-      if (isl_format_supports_ccs_e(&device->info, iview->isl.format))
-         att_state->input_aux_usage = ISL_AUX_USAGE_CCS_D;
-      else
-         att_state->input_aux_usage = ISL_AUX_USAGE_NONE;
-   } else {
-      att_state->aux_usage = ISL_AUX_USAGE_NONE;
-      att_state->input_aux_usage = ISL_AUX_USAGE_NONE;
    }
 }
 
@@ -384,6 +407,211 @@ transition_depth_buffer(struct anv_cmd_buffer *cmd_buffer,
       anv_gen8_hiz_op_resolve(cmd_buffer, image, hiz_op);
 }
 
+enum fast_clear_state_field {
+   FAST_CLEAR_STATE_FIELD_CLEAR_COLOR,
+   FAST_CLEAR_STATE_FIELD_NEEDS_RESOLVE,
+};
+
+static inline uint32_t
+get_fast_clear_state_offset(const struct anv_device *device,
+                            const struct anv_image *image,
+                            unsigned level, enum fast_clear_state_field field)
+{
+   assert(device && image);
+   assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+   assert(level < anv_image_aux_levels(image));
+   uint32_t offset = image->offset + image->aux_surface.offset +
+                     image->aux_surface.isl.size +
+                     anv_fast_clear_state_entry_size(device) * level;
+
+   switch (field) {
+   case FAST_CLEAR_STATE_FIELD_NEEDS_RESOLVE:
+      offset += device->isl_dev.ss.clear_value_size;
+      /* Fall-through */
+   case FAST_CLEAR_STATE_FIELD_CLEAR_COLOR:
+      break;
+   }
+
+   assert(offset < image->offset + image->size);
+   return offset;
+}
+
+#define MI_PREDICATE_SRC0  0x2400
+#define MI_PREDICATE_SRC1  0x2408
+
+/* Manages the state of an color image subresource to ensure resolves are
+ * performed properly.
+ */
+static void
+genX(set_image_needs_resolve)(struct anv_cmd_buffer *cmd_buffer,
+                        const struct anv_image *image,
+                        unsigned level, bool needs_resolve)
+{
+   assert(cmd_buffer && image);
+   assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+   assert(level < anv_image_aux_levels(image));
+
+   const uint32_t resolve_flag_offset =
+      get_fast_clear_state_offset(cmd_buffer->device, image, level,
+                                  FAST_CLEAR_STATE_FIELD_NEEDS_RESOLVE);
+
+   /* The HW docs say that there is no way to guarantee the completion of
+    * the following command. We use it nevertheless because it shows no
+    * issues in testing is currently being used in the GL driver.
+    */
+   anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
+      sdi.Address = (struct anv_address) { image->bo, resolve_flag_offset };
+      sdi.ImmediateData = needs_resolve;
+   }
+}
+
+static void
+genX(load_needs_resolve_predicate)(struct anv_cmd_buffer *cmd_buffer,
+                                   const struct anv_image *image,
+                                   unsigned level)
+{
+   assert(cmd_buffer && image);
+   assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+   assert(level < anv_image_aux_levels(image));
+
+   const uint32_t resolve_flag_offset =
+      get_fast_clear_state_offset(cmd_buffer->device, image, level,
+                                  FAST_CLEAR_STATE_FIELD_NEEDS_RESOLVE);
+
+   /* Make the pending predicated resolve a no-op if one is not needed.
+    * predicate = do_resolve = resolve_flag != 0;
+    */
+   emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC1    , 0);
+   emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC1 + 4, 0);
+   emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC0    , 0);
+   emit_lrm(&cmd_buffer->batch, MI_PREDICATE_SRC0 + 4,
+            image->bo, resolve_flag_offset);
+   anv_batch_emit(&cmd_buffer->batch, GENX(MI_PREDICATE), mip) {
+      mip.LoadOperation    = LOAD_LOADINV;
+      mip.CombineOperation = COMBINE_SET;
+      mip.CompareOperation = COMPARE_SRCS_EQUAL;
+   }
+}
+
+static void
+init_fast_clear_state_entry(struct anv_cmd_buffer *cmd_buffer,
+                            const struct anv_image *image,
+                            unsigned level)
+{
+   assert(cmd_buffer && image);
+   assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+   assert(level < anv_image_aux_levels(image));
+
+   /* The resolve flag should updated to signify that fast-clear/compression
+    * data needs to be removed when leaving the undefined layout. Such data
+    * may need to be removed if it would cause accesses to the color buffer
+    * to return incorrect data. The fast clear data in CCS_D buffers should
+    * be removed because CCS_D isn't enabled all the time.
+    */
+   genX(set_image_needs_resolve)(cmd_buffer, image, level,
+                                 image->aux_usage == ISL_AUX_USAGE_NONE);
+
+   /* The fast clear value dword(s) will be copied into a surface state object.
+    * Ensure that the restrictions of the fields in the dword(s) are followed.
+    *
+    * CCS buffers on SKL+ can have any value set for the clear colors.
+    */
+   if (image->samples == 1 && GEN_GEN >= 9)
+      return;
+
+   /* Other combinations of auxiliary buffers and platforms require specific
+    * values in the clear value dword(s).
+    */
+   unsigned i = 0;
+   for (; i < cmd_buffer->device->isl_dev.ss.clear_value_size; i += 4) {
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
+         const uint32_t entry_offset =
+            get_fast_clear_state_offset(cmd_buffer->device, image, level,
+                                        FAST_CLEAR_STATE_FIELD_CLEAR_COLOR);
+         sdi.Address = (struct anv_address) { image->bo, entry_offset + i };
+
+         if (GEN_GEN >= 9) {
+            /* MCS buffers on SKL+ can only have 1/0 clear colors. */
+            assert(image->aux_usage == ISL_AUX_USAGE_MCS);
+            sdi.ImmediateData = 0;
+         } else if (GEN_VERSIONx10 >= 75) {
+            /* Pre-SKL, the dword containing the clear values also contains
+             * other fields, so we need to initialize those fields to match the
+             * values that would be in a color attachment.
+             */
+            assert(i == 0);
+            sdi.ImmediateData = ISL_CHANNEL_SELECT_RED   << 25 |
+                                ISL_CHANNEL_SELECT_GREEN << 22 |
+                                ISL_CHANNEL_SELECT_BLUE  << 19 |
+                                ISL_CHANNEL_SELECT_ALPHA << 16;
+         }  else if (GEN_VERSIONx10 == 70) {
+            /* On IVB, the dword containing the clear values also contains
+             * other fields that must be zero or can be zero.
+             */
+            assert(i == 0);
+            sdi.ImmediateData = 0;
+         }
+      }
+   }
+}
+
+/* Copy the fast-clear value dword(s) between a surface state object and an
+ * image's fast clear state buffer.
+ */
+static void
+genX(copy_fast_clear_dwords)(struct anv_cmd_buffer *cmd_buffer,
+                             struct anv_state surface_state,
+                             const struct anv_image *image,
+                             unsigned level,
+                             bool copy_from_surface_state)
+{
+   assert(cmd_buffer && image);
+   assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+   assert(level < anv_image_aux_levels(image));
+
+   struct anv_bo *ss_bo =
+      &cmd_buffer->device->surface_state_pool.block_pool.bo;
+   uint32_t ss_clear_offset = surface_state.offset +
+      cmd_buffer->device->isl_dev.ss.clear_value_offset;
+   uint32_t entry_offset =
+      get_fast_clear_state_offset(cmd_buffer->device, image, level,
+                                  FAST_CLEAR_STATE_FIELD_CLEAR_COLOR);
+   unsigned copy_size = cmd_buffer->device->isl_dev.ss.clear_value_size;
+
+   if (copy_from_surface_state) {
+      genX(cmd_buffer_mi_memcpy)(cmd_buffer, image->bo, entry_offset,
+                                 ss_bo, ss_clear_offset, copy_size);
+   } else {
+      genX(cmd_buffer_mi_memcpy)(cmd_buffer, ss_bo, ss_clear_offset,
+                                 image->bo, entry_offset, copy_size);
+
+      /* Updating a surface state object may require that the state cache be
+       * invalidated. From the SKL PRM, Shared Functions -> State -> State
+       * Caching:
+       *
+       *    Whenever the RENDER_SURFACE_STATE object in memory pointed to by
+       *    the Binding Table Pointer (BTP) and Binding Table Index (BTI) is
+       *    modified [...], the L1 state cache must be invalidated to ensure
+       *    the new surface or sampler state is fetched from system memory.
+       *
+       * In testing, SKL doesn't actually seem to need this, but HSW does.
+       */
+      cmd_buffer->state.pending_pipe_bits |=
+         ANV_PIPE_STATE_CACHE_INVALIDATE_BIT;
+   }
+}
+
+/**
+ * @brief Transitions a color buffer from one layout to another.
+ *
+ * See section 6.1.1. Image Layout Transitions of the Vulkan 1.0.50 spec for
+ * more information.
+ *
+ * @param level_count VK_REMAINING_MIP_LEVELS isn't supported.
+ * @param layer_count VK_REMAINING_ARRAY_LAYERS isn't supported. For 3D images,
+ *                    this represents the maximum layers to transition at each
+ *                    specified miplevel.
+ */
 static void
 transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
                         const struct anv_image *image,
@@ -392,11 +620,27 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
                         VkImageLayout initial_layout,
                         VkImageLayout final_layout)
 {
-   if (image->aux_usage != ISL_AUX_USAGE_CCS_E)
-      return;
+   /* Validate the inputs. */
+   assert(cmd_buffer);
+   assert(image && image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+   /* These values aren't supported for simplicity's sake. */
+   assert(level_count != VK_REMAINING_MIP_LEVELS &&
+          layer_count != VK_REMAINING_ARRAY_LAYERS);
+   /* Ensure the subresource range is valid. */
+   uint64_t last_level_num = base_level + level_count;
+   const uint32_t max_depth = anv_minify(image->extent.depth, base_level);
+   const uint32_t image_layers = MAX2(image->array_size, max_depth);
+   assert((uint64_t)base_layer + layer_count  <= image_layers);
+   assert(last_level_num <= image->levels);
+   /* The spec disallows these final layouts. */
+   assert(final_layout != VK_IMAGE_LAYOUT_UNDEFINED &&
+          final_layout != VK_IMAGE_LAYOUT_PREINITIALIZED);
 
-   if (initial_layout != VK_IMAGE_LAYOUT_UNDEFINED &&
-       initial_layout != VK_IMAGE_LAYOUT_PREINITIALIZED)
+   /* No work is necessary if the layout stays the same or if this subresource
+    * range lacks auxiliary data.
+    */
+   if (initial_layout == final_layout ||
+       base_layer >= anv_image_aux_layers(image, base_level))
       return;
 
    /* A transition of a 3D subresource works on all slices at a time. */
@@ -405,15 +649,158 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
       layer_count = anv_minify(image->extent.depth, base_level);
    }
 
-#if GEN_GEN >= 9
-   /* We're transitioning from an undefined layout so it doesn't really matter
-    * what data ends up in the color buffer.  We do, however, need to ensure
-    * that the CCS has valid data in it.  One easy way to do that is to
-    * fast-clear the specified range.
+   /* We're interested in the subresource range subset that has aux data. */
+   level_count = MIN2(level_count, anv_image_aux_levels(image) - base_level);
+   layer_count = MIN2(layer_count,
+                      anv_image_aux_layers(image, base_level) - base_layer);
+   last_level_num = base_level + level_count;
+
+   /* Record whether or not the layout is undefined. Pre-initialized images
+    * with auxiliary buffers have a non-linear layout and are thus undefined.
     */
-   anv_image_ccs_clear(cmd_buffer, image, base_level, level_count,
-                       base_layer, layer_count);
-#endif
+   assert(image->tiling == VK_IMAGE_TILING_OPTIMAL);
+   const bool undef_layout = initial_layout == VK_IMAGE_LAYOUT_UNDEFINED ||
+                             initial_layout == VK_IMAGE_LAYOUT_PREINITIALIZED;
+
+   /* Do preparatory work before the resolve operation or return early if no
+    * resolve is actually needed.
+    */
+   if (undef_layout) {
+      /* A subresource in the undefined layout may have been aliased and
+       * populated with any arrangement of bits. Therefore, we must initialize
+       * the related aux buffer and clear buffer entry with desirable values.
+       *
+       * Initialize the relevant clear buffer entries.
+       */
+      for (unsigned level = base_level; level < last_level_num; level++)
+         init_fast_clear_state_entry(cmd_buffer, image, level);
+
+      /* Initialize the aux buffers to enable correct rendering. This operation
+       * requires up to two steps: one to rid the aux buffer of data that may
+       * cause GPU hangs, and another to ensure that writes done without aux
+       * will be visible to reads done with aux.
+       *
+       * Having an aux buffer with invalid data is possible for CCS buffers
+       * SKL+ and for MCS buffers with certain sample counts (2x and 8x). One
+       * easy way to get to a valid state is to fast-clear the specified range.
+       *
+       * Even for MCS buffers that have sample counts that don't require
+       * certain bits to be reserved (4x and 8x), we're unsure if the hardware
+       * will be okay with the sample mappings given by the undefined buffer.
+       * We don't have any data to show that this is a problem, but we want to
+       * avoid causing difficult-to-debug problems.
+       */
+      if ((GEN_GEN >= 9 && image->samples == 1) || image->samples > 1) {
+         if (image->samples == 4 || image->samples == 16) {
+            anv_perf_warn("Doing a potentially unnecessary fast-clear to "
+                          "define an MCS buffer.");
+         }
+
+         anv_image_fast_clear(cmd_buffer, image, base_level, level_count,
+                              base_layer, layer_count);
+      }
+      /* At this point, some elements of the CCS buffer may have the fast-clear
+       * bit-arrangement. As the user writes to a subresource, we need to have
+       * the associated CCS elements enter the ambiguated state. This enables
+       * reads (implicit or explicit) to reflect the user-written data instead
+       * of the clear color. The only time such elements will not change their
+       * state as described above, is in a final layout that doesn't have CCS
+       * enabled. In this case, we must force the associated CCS buffers of the
+       * specified range to enter the ambiguated state in advance.
+       */
+      if (image->samples == 1 && image->aux_usage != ISL_AUX_USAGE_CCS_E &&
+          final_layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+         /* The CCS_D buffer may not be enabled in the final layout. Continue
+          * executing this function to perform a resolve.
+          */
+          anv_perf_warn("Performing an additional resolve for CCS_D layout "
+                        "transition. Consider always leaving it on or "
+                        "performing an ambiguation pass.");
+      } else {
+         /* Writes in the final layout will be aware of the auxiliary buffer.
+          * In addition, the clear buffer entries and the auxiliary buffers
+          * have been populated with values that will result in correct
+          * rendering.
+          */
+         return;
+      }
+   } else if (initial_layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+      /* Resolves are only necessary if the subresource may contain blocks
+       * fast-cleared to values unsupported in other layouts. This only occurs
+       * if the initial layout is COLOR_ATTACHMENT_OPTIMAL.
+       */
+      return;
+   } else if (image->samples > 1) {
+      /* MCS buffers don't need resolving. */
+      return;
+   }
+
+   /* Perform a resolve to synchronize data between the main and aux buffer.
+    * Before we begin, we must satisfy the cache flushing requirement specified
+    * in the Sky Lake PRM Vol. 7, "MCS Buffer for Render Target(s)":
+    *
+    *    Any transition from any value in {Clear, Render, Resolve} to a
+    *    different value in {Clear, Render, Resolve} requires end of pipe
+    *    synchronization.
+    *
+    * We perform a flush of the write cache before and after the clear and
+    * resolve operations to meet this requirement.
+    *
+    * Unlike other drawing, fast clear operations are not properly
+    * synchronized. The first PIPE_CONTROL here likely ensures that the
+    * contents of the previous render or clear hit the render target before we
+    * resolve and the second likely ensures that the resolve is complete before
+    * we do any more rendering or clearing.
+    */
+   cmd_buffer->state.pending_pipe_bits |=
+      ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT | ANV_PIPE_CS_STALL_BIT;
+
+   for (uint32_t level = base_level; level < last_level_num; level++) {
+
+      /* The number of layers changes at each 3D miplevel. */
+      if (image->type == VK_IMAGE_TYPE_3D) {
+         layer_count = MIN2(layer_count, anv_image_aux_layers(image, level));
+      }
+
+      genX(load_needs_resolve_predicate)(cmd_buffer, image, level);
+
+      /* Create a surface state with the right clear color and perform the
+       * resolve.
+       */
+      struct anv_state surface_state =
+         anv_cmd_buffer_alloc_surface_state(cmd_buffer);
+      isl_surf_fill_state(&cmd_buffer->device->isl_dev, surface_state.map,
+                          .surf = &image->color_surface.isl,
+                          .view = &(struct isl_view) {
+                              .usage = ISL_SURF_USAGE_RENDER_TARGET_BIT,
+                              .format = image->color_surface.isl.format,
+                              .swizzle = ISL_SWIZZLE_IDENTITY,
+                              .base_level = level,
+                              .levels = 1,
+                              .base_array_layer = base_layer,
+                              .array_len = layer_count,
+                           },
+                          .aux_surf = &image->aux_surface.isl,
+                          .aux_usage = image->aux_usage == ISL_AUX_USAGE_NONE ?
+                                       ISL_AUX_USAGE_CCS_D : image->aux_usage,
+                          .mocs = cmd_buffer->device->default_mocs);
+      add_image_relocs(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                       image->aux_usage == ISL_AUX_USAGE_CCS_E ?
+                       ISL_AUX_USAGE_CCS_E : ISL_AUX_USAGE_CCS_D,
+                       surface_state);
+      anv_state_flush(cmd_buffer->device, surface_state);
+      genX(copy_fast_clear_dwords)(cmd_buffer, surface_state, image, level,
+                                   false /* copy to ss */);
+      anv_ccs_resolve(cmd_buffer, surface_state, image, level, layer_count,
+                      image->aux_usage == ISL_AUX_USAGE_CCS_E ?
+                      BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL :
+                      BLORP_FAST_CLEAR_OP_RESOLVE_FULL);
+
+      genX(set_image_needs_resolve)(cmd_buffer, image, level, false);
+   }
+
+   cmd_buffer->state.pending_pipe_bits |=
+      ANV_PIPE_RENDER_TARGET_CACHE_FLUSH_BIT | ANV_PIPE_CS_STALL_BIT;
 }
 
 /**
@@ -535,8 +922,7 @@ genX(cmd_buffer_setup_attachments)(struct anv_cmd_buffer *cmd_buffer,
          union isl_color_value clear_color = { .u32 = { 0, } };
          if (att_aspects == VK_IMAGE_ASPECT_COLOR_BIT) {
             color_attachment_compute_aux_usage(cmd_buffer->device,
-                                               &state->attachments[i],
-                                               iview, begin->renderArea,
+                                               state, i, begin->renderArea,
                                                &clear_color);
 
             struct isl_view view = iview->isl;
@@ -1198,28 +1584,39 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
          continue;
 
       case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
-      case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-         surface_state = desc->aux_usage == ISL_AUX_USAGE_NONE ?
-            desc->image_view->no_aux_sampler_surface_state :
-            desc->image_view->sampler_surface_state;
+      case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
+         enum isl_aux_usage aux_usage;
+         if (desc->layout == VK_IMAGE_LAYOUT_GENERAL) {
+            surface_state = desc->image_view->general_sampler_surface_state;
+            aux_usage = desc->image_view->general_sampler_aux_usage;
+         } else {
+            surface_state = desc->image_view->optimal_sampler_surface_state;
+            aux_usage = desc->image_view->optimal_sampler_aux_usage;
+         }
          assert(surface_state.alloc_size);
          add_image_relocs(cmd_buffer, desc->image_view->image,
                           desc->image_view->aspect_mask,
-                          desc->aux_usage, surface_state);
+                          aux_usage, surface_state);
          break;
+      }
       case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
          assert(stage == MESA_SHADER_FRAGMENT);
          if (desc->image_view->aspect_mask != VK_IMAGE_ASPECT_COLOR_BIT) {
             /* For depth and stencil input attachments, we treat it like any
              * old texture that a user may have bound.
              */
-            surface_state = desc->aux_usage == ISL_AUX_USAGE_NONE ?
-               desc->image_view->no_aux_sampler_surface_state :
-               desc->image_view->sampler_surface_state;
+            enum isl_aux_usage aux_usage;
+            if (desc->layout == VK_IMAGE_LAYOUT_GENERAL) {
+               surface_state = desc->image_view->general_sampler_surface_state;
+               aux_usage = desc->image_view->general_sampler_aux_usage;
+            } else {
+               surface_state = desc->image_view->optimal_sampler_surface_state;
+               aux_usage = desc->image_view->optimal_sampler_aux_usage;
+            }
             assert(surface_state.alloc_size);
             add_image_relocs(cmd_buffer, desc->image_view->image,
                              desc->image_view->aspect_mask,
-                             desc->aux_usage, surface_state);
+                             aux_usage, surface_state);
          } else {
             /* For color input attachments, we create the surface state at
              * vkBeginRenderPass time so that we can include aux and clear
@@ -2160,9 +2557,6 @@ void genX(CmdDispatch)(
 #define GPGPU_DISPATCHDIMY 0x2504
 #define GPGPU_DISPATCHDIMZ 0x2508
 
-#define MI_PREDICATE_SRC0  0x2400
-#define MI_PREDICATE_SRC1  0x2408
-
 void genX(CmdDispatchIndirect)(
     VkCommandBuffer                             commandBuffer,
     VkBuffer                                    _buffer,
@@ -2473,13 +2867,11 @@ cmd_buffer_subpass_transition_layouts(struct anv_cmd_buffer * const cmd_buffer,
           * this is not the last use of the buffer. The layout should not have
           * changed from the first call and no transition is necessary.
           */
-         assert(att_ref->layout == att_state->current_layout);
+         assert(att_state->current_layout == att_ref->layout ||
+                att_state->current_layout ==
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
          continue;
       }
-
-      /* Get the appropriate target layout for this attachment. */
-      const VkImageLayout target_layout = subpass_end ?
-         att_desc->final_layout : att_ref->layout;
 
       /* The attachment index must be less than the number of attachments
        * within the framebuffer.
@@ -2489,6 +2881,29 @@ cmd_buffer_subpass_transition_layouts(struct anv_cmd_buffer * const cmd_buffer,
       const struct anv_image_view * const iview =
          cmd_state->framebuffer->attachments[att_ref->attachment];
       const struct anv_image * const image = iview->image;
+
+      /* Get the appropriate target layout for this attachment. */
+      VkImageLayout target_layout;
+
+      /* A resolve is necessary before use as an input attachment if the clear
+       * color or auxiliary buffer usage isn't supported by the sampler.
+       */
+      const bool input_needs_resolve =
+            (att_state->fast_clear && !att_state->clear_color_is_zero_one) ||
+            att_state->input_aux_usage != att_state->aux_usage;
+      if (subpass_end) {
+         target_layout = att_desc->final_layout;
+      } else if (iview->aspect_mask == VK_IMAGE_ASPECT_COLOR_BIT &&
+                 !input_needs_resolve) {
+         /* Layout transitions before the final only help to enable sampling as
+          * an input attachment. If the input attachment supports sampling
+          * using the auxiliary surface, we can skip such transitions by making
+          * the target layout one that is CCS-aware.
+          */
+         target_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+      } else {
+         target_layout = att_ref->layout;
+      }
 
       /* Perform the layout transition. */
       if (image->aspects & VK_IMAGE_ASPECT_DEPTH_BIT) {
@@ -2508,6 +2923,81 @@ cmd_buffer_subpass_transition_layouts(struct anv_cmd_buffer * const cmd_buffer,
       att_state->current_layout = target_layout;
    }
 }
+
+/* Update the clear value dword(s) in surface state objects or the fast clear
+ * state buffer entry for the color attachments used in this subpass.
+ */
+static void
+cmd_buffer_subpass_sync_fast_clear_values(struct anv_cmd_buffer *cmd_buffer)
+{
+   assert(cmd_buffer && cmd_buffer->state.subpass);
+
+   const struct anv_cmd_state *state = &cmd_buffer->state;
+
+   /* Iterate through every color attachment used in this subpass. */
+   for (uint32_t i = 0; i < state->subpass->color_count; ++i) {
+
+      /* The attachment should be one of the attachments described in the
+       * render pass and used in the subpass.
+       */
+      const uint32_t a = state->subpass->color_attachments[i].attachment;
+      assert(a < state->pass->attachment_count);
+      if (a == VK_ATTACHMENT_UNUSED)
+         continue;
+
+      /* Store some information regarding this attachment. */
+      const struct anv_attachment_state *att_state = &state->attachments[a];
+      const struct anv_image_view *iview = state->framebuffer->attachments[a];
+      const struct anv_render_pass_attachment *rp_att =
+         &state->pass->attachments[a];
+
+      if (att_state->aux_usage == ISL_AUX_USAGE_NONE)
+         continue;
+
+      /* The fast clear state entry must be updated if a fast clear is going to
+       * happen. The surface state must be updated if the clear value from a
+       * prior fast clear may be needed.
+       */
+      if (att_state->pending_clear_aspects && att_state->fast_clear) {
+         /* Update the fast clear state entry. */
+         genX(copy_fast_clear_dwords)(cmd_buffer, att_state->color_rt_state,
+                                      iview->image, iview->isl.base_level,
+                                      true /* copy from ss */);
+
+         /* Fast-clears impact whether or not a resolve will be necessary. */
+         if (iview->image->aux_usage == ISL_AUX_USAGE_CCS_E &&
+             att_state->clear_color_is_zero) {
+            /* This image always has the auxiliary buffer enabled. We can mark
+             * the subresource as not needing a resolve because the clear color
+             * will match what's in every RENDER_SURFACE_STATE object when it's
+             * being used for sampling.
+             */
+            genX(set_image_needs_resolve)(cmd_buffer, iview->image,
+                                          iview->isl.base_level, false);
+         } else {
+            genX(set_image_needs_resolve)(cmd_buffer, iview->image,
+                                          iview->isl.base_level, true);
+         }
+      } else if (rp_att->load_op == VK_ATTACHMENT_LOAD_OP_LOAD) {
+         /* The attachment may have been fast-cleared in a previous render
+          * pass and the value is needed now. Update the surface state(s).
+          *
+          * TODO: Do this only once per render pass instead of every subpass.
+          */
+         genX(copy_fast_clear_dwords)(cmd_buffer, att_state->color_rt_state,
+                                      iview->image, iview->isl.base_level,
+                                      false /* copy to ss */);
+
+         if (need_input_attachment_state(rp_att) &&
+             att_state->input_aux_usage != ISL_AUX_USAGE_NONE) {
+            genX(copy_fast_clear_dwords)(cmd_buffer, att_state->input_att_state,
+                                         iview->image, iview->isl.base_level,
+                                         false /* copy to ss */);
+         }
+      }
+   }
+}
+
 
 static void
 genX(cmd_buffer_set_subpass)(struct anv_cmd_buffer *cmd_buffer,
@@ -2531,6 +3021,15 @@ genX(cmd_buffer_set_subpass)(struct anv_cmd_buffer *cmd_buffer,
     * occurred.
     */
    cmd_buffer_subpass_transition_layouts(cmd_buffer, false);
+
+   /* Update clear values *after* performing automatic layout transitions.
+    * This ensures that transitions from the UNDEFINED layout have had a chance
+    * to populate the clear value buffer with the correct values for the
+    * LOAD_OP_LOAD loadOp and that the fast-clears will update the buffer
+    * without the aforementioned layout transition overwriting the fast-clear
+    * value.
+    */
+   cmd_buffer_subpass_sync_fast_clear_values(cmd_buffer);
 
    cmd_buffer_emit_depth_stencil(cmd_buffer);
 

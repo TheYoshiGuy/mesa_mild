@@ -383,8 +383,12 @@ brw_predraw_resolve_inputs(struct brw_context *brw)
       if (!tex_obj || !tex_obj->mt)
 	 continue;
 
+      struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, i);
+      enum isl_format view_format =
+         translate_tex_format(brw, tex_obj->_Format, sampler->sRGBDecode);
+
       bool aux_supported;
-      intel_miptree_prepare_texture(brw, tex_obj->mt, tex_obj->_Format,
+      intel_miptree_prepare_texture(brw, tex_obj->mt, view_format,
                                     &aux_supported);
 
       if (!aux_supported && brw->gen >= 9 &&
@@ -469,7 +473,8 @@ brw_predraw_resolve_framebuffer(struct brw_context *brw)
 
       intel_miptree_prepare_render(brw, irb->mt, irb->mt_level,
                                    irb->mt_layer, irb->layer_count,
-                                   ctx->Color.sRGBEnabled);
+                                   ctx->Color.sRGBEnabled,
+                                   ctx->Color.BlendEnabled & (1 << i));
    }
 }
 
@@ -536,7 +541,9 @@ brw_postdraw_set_buffers_need_resolve(struct brw_context *brw)
      
       brw_render_cache_set_add_bo(brw, irb->mt->bo);
       intel_miptree_finish_render(brw, irb->mt, irb->mt_level,
-                                  irb->mt_layer, irb->layer_count);
+                                  irb->mt_layer, irb->layer_count,
+                                  ctx->Color.sRGBEnabled,
+                                  ctx->Color.BlendEnabled & (1 << i));
    }
 }
 

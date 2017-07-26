@@ -24,6 +24,25 @@
 #include "isl_gen7.h"
 #include "isl_priv.h"
 
+static bool
+gen7_format_needs_valign2(const struct isl_device *dev,
+                          enum isl_format format)
+{
+   assert(ISL_DEV_GEN(dev) == 7);
+
+   /* From the Ivybridge PRM (2012-05-31), Volume 4, Part 1, Section 2.12.1,
+    * RENDER_SURFACE_STATE Surface Vertical Alignment:
+    *
+    *    - Value of 1 [VALIGN_4] is not supported for format YCRCB_NORMAL
+    *      (0x182), YCRCB_SWAPUVY (0x183), YCRCB_SWAPUV (0x18f), YCRCB_SWAPY
+    *      (0x190)
+    *
+    *    - VALIGN_4 is not supported for surface format R32G32B32_FLOAT.
+    */
+   return isl_format_is_yuv(format) ||
+          format == ISL_FORMAT_R32G32B32_FLOAT;
+}
+
 bool
 isl_gen7_choose_msaa_layout(const struct isl_device *dev,
                             const struct isl_surf_init_info *info,
@@ -76,8 +95,13 @@ isl_gen7_choose_msaa_layout(const struct isl_device *dev,
     * Note that the above SINT restrictions apply only to *MSRTs* (that is,
     * *multisampled* render targets). The restrictions seem to permit an MCS
     * if the render target is singlesampled.
+    *
+    * Moreover, empirically it looks that hardware can render multisampled
+    * surfaces with RGBA8I, RGBA16I and RGBA32I.
     */
-   if (isl_format_has_sint_channel(info->format))
+
+   /* Multisampling requires vertical alignment of four. */
+   if (info->samples > 1 && gen7_format_needs_valign2(dev, info->format))
       return false;
 
    /* More obvious restrictions */
@@ -149,25 +173,6 @@ isl_gen7_choose_msaa_layout(const struct isl_device *dev,
     */
    *msaa_layout = ISL_MSAA_LAYOUT_ARRAY;
    return true;
-}
-
-static bool
-gen7_format_needs_valign2(const struct isl_device *dev,
-                          enum isl_format format)
-{
-   assert(ISL_DEV_GEN(dev) == 7);
-
-   /* From the Ivybridge PRM (2012-05-31), Volume 4, Part 1, Section 2.12.1,
-    * RENDER_SURFACE_STATE Surface Vertical Alignment:
-    *
-    *    - Value of 1 [VALIGN_4] is not supported for format YCRCB_NORMAL
-    *      (0x182), YCRCB_SWAPUVY (0x183), YCRCB_SWAPUV (0x18f), YCRCB_SWAPY
-    *      (0x190)
-    *
-    *    - VALIGN_4 is not supported for surface format R32G32B32_FLOAT.
-    */
-   return isl_format_is_yuv(format) ||
-          format == ISL_FORMAT_R32G32B32_FLOAT;
 }
 
 /**

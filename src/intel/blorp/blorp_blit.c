@@ -1406,42 +1406,24 @@ blorp_surf_convert_to_single_slice(const struct isl_device *isl_dev,
       layer = info->view.base_array_layer;
 
    uint32_t byte_offset;
-   isl_surf_get_image_offset_B_tile_sa(&info->surf,
-                                       info->view.base_level, layer, z,
-                                       &byte_offset,
-                                       &info->tile_x_sa, &info->tile_y_sa);
+   isl_surf_get_image_surf(isl_dev, &info->surf,
+                           info->view.base_level, layer, z,
+                           &info->surf,
+                           &byte_offset, &info->tile_x_sa, &info->tile_y_sa);
    info->addr.offset += byte_offset;
-
-   const uint32_t slice_width_px =
-      minify(info->surf.logical_level0_px.width, info->view.base_level);
-   const uint32_t slice_height_px =
-      minify(info->surf.logical_level0_px.height, info->view.base_level);
 
    uint32_t tile_x_px, tile_y_px;
    surf_get_intratile_offset_px(info, &tile_x_px, &tile_y_px);
 
-   /* Even for cube maps there will be only single face, therefore drop the
-    * corresponding flag if present.
+   /* Instead of using the X/Y Offset fields in RENDER_SURFACE_STATE, we place
+    * the image at the tile boundary and offset our sampling or rendering.
+    * For this reason, we need to grow the image by the offset to ensure that
+    * the hardware doesn't think we've gone past the edge.
     */
-   const isl_surf_usage_flags_t without_cube_map_flag =
-      info->surf.usage & (~ISL_SURF_USAGE_CUBE_BIT);
-
-   struct isl_surf_init_info init_info = {
-      .dim = ISL_SURF_DIM_2D,
-      .format = info->surf.format,
-      .width = slice_width_px + tile_x_px,
-      .height = slice_height_px + tile_y_px,
-      .depth = 1,
-      .levels = 1,
-      .array_len = 1,
-      .samples = info->surf.samples,
-      .row_pitch = info->surf.row_pitch,
-      .usage = without_cube_map_flag,
-      .tiling_flags = 1 << info->surf.tiling,
-   };
-
-   ok = isl_surf_init_s(isl_dev, &info->surf, &init_info);
-   assert(ok);
+   info->surf.logical_level0_px.w += tile_x_px;
+   info->surf.logical_level0_px.h += tile_y_px;
+   info->surf.phys_level0_sa.w += info->tile_x_sa;
+   info->surf.phys_level0_sa.h += info->tile_y_sa;
 
    /* The view is also different now. */
    info->view.base_level = 0;
@@ -2459,16 +2441,30 @@ blorp_copy(struct blorp_batch *batch,
    }
 
    if (params.src.aux_usage == ISL_AUX_USAGE_CCS_E) {
+      /* It's safe to do a blorp_copy between things which are sRGB with CCS_E
+       * enabled even though CCS_E doesn't technically do sRGB on SKL because
+       * we stomp everything to UINT anyway.  The one thing we have to be
+       * careful of is clear colors.  Because fast clear colors for sRGB on
+       * gen9 are encoded as the float values between format conversion and
+       * sRGB curve application, a given clear color float will convert to the
+       * same bits regardless of whether the format is UNORM or sRGB.
+       * Therefore, we can handle sRGB without any special cases.
+       */
+      UNUSED enum isl_format linear_src_format =
+         isl_format_srgb_to_linear(src_surf->surf->format);
       assert(isl_formats_are_ccs_e_compatible(batch->blorp->isl_dev->info,
-                                              src_surf->surf->format,
+                                              linear_src_format,
                                               params.src.view.format));
       params.src.clear_color =
          bitcast_color_value_to_uint(params.src.clear_color, src_fmtl);
    }
 
    if (params.dst.aux_usage == ISL_AUX_USAGE_CCS_E) {
+      /* See above where we handle linear_src_format */
+      UNUSED enum isl_format linear_dst_format =
+         isl_format_srgb_to_linear(dst_surf->surf->format);
       assert(isl_formats_are_ccs_e_compatible(batch->blorp->isl_dev->info,
-                                              dst_surf->surf->format,
+                                              linear_dst_format,
                                               params.dst.view.format));
       params.dst.clear_color =
          bitcast_color_value_to_uint(params.dst.clear_color, dst_fmtl);

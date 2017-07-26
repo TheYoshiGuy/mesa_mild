@@ -117,6 +117,82 @@ add_surface(struct anv_image *image, struct anv_surface *surf)
 }
 
 /**
+ * For color images that have an auxiliary surface, request allocation for an
+ * additional buffer that mainly stores fast-clear values. Use of this buffer
+ * allows us to access the image's subresources while being aware of their
+ * fast-clear values in non-trivial cases (e.g., outside of a render pass in
+ * which a fast clear has occurred).
+ *
+ * For the purpose of discoverability, the algorithm used to manage this buffer
+ * is described here. A clear value in this buffer is updated when a fast clear
+ * is performed on a subresource. One of two synchronization operations is
+ * performed in order for a following memory access to use the fast-clear
+ * value:
+ *    a. Copy the value from the buffer to the surface state object used for
+ *       reading. This is done implicitly when the value is the clear value
+ *       predetermined to be the default in other surface state objects. This
+ *       is currently only done explicitly for the operation below.
+ *    b. Do (a) and use the surface state object to resolve the subresource.
+ *       This is only done during layout transitions for decent performance.
+ *
+ * With the above scheme, we can fast-clear whenever the hardware allows except
+ * for two cases in which synchronization becomes impossible or undesirable:
+ *    * The subresource is in the GENERAL layout and is cleared to a value
+ *      other than the special default value.
+ *
+ *      Performing a synchronization operation in order to read from the
+ *      subresource is undesirable in this case. Firstly, b) is not an option
+ *      because a layout transition isn't required between a write and read of
+ *      an image in the GENERAL layout. Secondly, it's undesirable to do a)
+ *      explicitly because it would require large infrastructural changes. The
+ *      Vulkan API supports us in deciding not to optimize this layout by
+ *      stating that using this layout may cause suboptimal performance. NOTE:
+ *      the auxiliary buffer must always be enabled to support a) implicitly.
+ *
+ *
+ *    * For the given miplevel, only some of the layers are cleared at once.
+ *
+ *      If the user clears each layer to a different value, then tries to
+ *      render to multiple layers at once, we have no ability to perform a
+ *      synchronization operation in between. a) is not helpful because the
+ *      object can only hold one clear value. b) is not an option because a
+ *      layout transition isn't required in this case.
+ */
+static void
+add_fast_clear_state_buffer(struct anv_image *image,
+                            const struct anv_device *device)
+{
+   assert(image && device);
+   assert(image->aux_surface.isl.size > 0 &&
+          image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+
+   /* The offset to the buffer of clear values must be dword-aligned for GPU
+    * memcpy operations. It is located immediately after the auxiliary surface.
+    */
+
+   /* Tiled images are guaranteed to be 4K aligned, so the image alignment
+    * should also be dword-aligned.
+    */
+   assert(image->alignment % 4 == 0);
+
+   /* Auxiliary buffers should be a multiple of 4K, so the start of the clear
+    * values buffer should already be dword-aligned.
+    */
+   assert(image->aux_surface.isl.size % 4 == 0);
+
+   /* This buffer should be at the very end of the image. */
+   assert(image->size ==
+          image->aux_surface.offset + image->aux_surface.isl.size);
+
+   const unsigned entry_size = anv_fast_clear_state_entry_size(device);
+   /* There's no padding between entries, so ensure that they're always a
+    * multiple of 32 bits in order to enable GPU memcpy operations.
+    */
+   assert(entry_size % 4 == 0);
+   image->size += entry_size * anv_image_aux_levels(image);
+}
+
+/**
  * Initialize the anv_image::*_surface selected by \a aspect. Then update the
  * image's memory requirements (that is, the image's size and alignment).
  *
@@ -214,7 +290,23 @@ make_surface(const struct anv_device *dev,
          ok = isl_surf_get_ccs_surf(&dev->isl_dev, &anv_surf->isl,
                                     &image->aux_surface.isl, 0);
          if (ok) {
+
+            /* Disable CCS when it is not useful (i.e., when you can't render
+             * to the image with CCS enabled).
+             */
+            if (!isl_format_supports_rendering(&dev->info, format)) {
+               /* While it may be technically possible to enable CCS for this
+                * image, we currently don't have things hooked up to get it
+                * working.
+                */
+               anv_perf_warn("This image format doesn't support rendering. "
+                             "Not allocating an CCS buffer.");
+               image->aux_surface.isl.size = 0;
+               return VK_SUCCESS;
+            }
+
             add_surface(image, &image->aux_surface);
+            add_fast_clear_state_buffer(image, dev);
 
             /* For images created without MUTABLE_FORMAT_BIT set, we know that
              * they will always be used with the original format.  In
@@ -238,6 +330,7 @@ make_surface(const struct anv_device *dev,
                                  &image->aux_surface.isl);
       if (ok) {
          add_surface(image, &image->aux_surface);
+         add_fast_clear_state_buffer(image, dev);
          image->aux_usage = ISL_AUX_USAGE_MCS;
       }
    }
@@ -265,12 +358,11 @@ anv_image_create(VkDevice _device,
    anv_assert(pCreateInfo->extent.height > 0);
    anv_assert(pCreateInfo->extent.depth > 0);
 
-   image = vk_alloc2(&device->alloc, alloc, sizeof(*image), 8,
-                      VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
+   image = vk_zalloc2(&device->alloc, alloc, sizeof(*image), 8,
+                       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (!image)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   memset(image, 0, sizeof(*image));
    image->type = pCreateInfo->imageType;
    image->extent = pCreateInfo->extent;
    image->vk_format = pCreateInfo->format;
@@ -569,7 +661,7 @@ anv_CreateImageView(VkDevice _device,
    ANV_FROM_HANDLE(anv_image, image, pCreateInfo->image);
    struct anv_image_view *iview;
 
-   iview = vk_alloc2(&device->alloc, pAllocator, sizeof(*iview), 8,
+   iview = vk_zalloc2(&device->alloc, pAllocator, sizeof(*iview), 8,
                       VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
    if (iview == NULL)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
@@ -655,54 +747,47 @@ anv_CreateImageView(VkDevice _device,
    if (image->usage & VK_IMAGE_USAGE_SAMPLED_BIT ||
        (image->usage & VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT &&
         !(iview->aspect_mask & VK_IMAGE_ASPECT_COLOR_BIT))) {
-      iview->sampler_surface_state = alloc_surface_state(device);
-      iview->no_aux_sampler_surface_state = alloc_surface_state(device);
+      iview->optimal_sampler_surface_state = alloc_surface_state(device);
+      iview->general_sampler_surface_state = alloc_surface_state(device);
 
-      /* Sampling is performed in one of two buffer configurations in anv: with
-       * an auxiliary buffer or without it. Sampler states aren't always needed
-       * for both configurations, but are currently created unconditionally for
-       * simplicity.
-       *
-       * TODO: Consider allocating each surface state only when necessary.
-       */
-
-      /* Create a sampler state with the optimal aux_usage for sampling. This
-       * may use the aux_buffer.
-       */
-      const enum isl_aux_usage surf_usage =
+      iview->general_sampler_aux_usage =
+         anv_layout_to_aux_usage(&device->info, image, iview->aspect_mask,
+                                 VK_IMAGE_LAYOUT_GENERAL);
+      iview->optimal_sampler_aux_usage =
          anv_layout_to_aux_usage(&device->info, image, iview->aspect_mask,
                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
       /* If this is a HiZ buffer we can sample from with a programmable clear
        * value (SKL+), define the clear value to the optimal constant.
        */
-      const float red_clear_color = surf_usage == ISL_AUX_USAGE_HIZ &&
-                                    device->info.gen >= 9 ?
-                                    ANV_HZ_FC_VAL : 0.0f;
+      union isl_color_value clear_color = { .u32 = { 0, } };
+      if ((iview->aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT) &&
+          device->info.gen >= 9)
+         clear_color.f32[0] = ANV_HZ_FC_VAL;
 
       struct isl_view view = iview->isl;
       view.usage |= ISL_SURF_USAGE_TEXTURE_BIT;
+
       isl_surf_fill_state(&device->isl_dev,
-                          iview->sampler_surface_state.map,
+                          iview->optimal_sampler_surface_state.map,
                           .surf = &surface->isl,
                           .view = &view,
-                          .clear_color.f32 = { red_clear_color,},
+                          .clear_color = clear_color,
                           .aux_surf = &image->aux_surface.isl,
-                          .aux_usage = surf_usage,
+                          .aux_usage = iview->optimal_sampler_aux_usage,
                           .mocs = device->default_mocs);
 
-      /* Create a sampler state that only uses the main buffer. */
       isl_surf_fill_state(&device->isl_dev,
-                          iview->no_aux_sampler_surface_state.map,
+                          iview->general_sampler_surface_state.map,
                           .surf = &surface->isl,
                           .view = &view,
+                          .clear_color = clear_color,
+                          .aux_surf = &image->aux_surface.isl,
+                          .aux_usage = iview->general_sampler_aux_usage,
                           .mocs = device->default_mocs);
 
-      anv_state_flush(device, iview->sampler_surface_state);
-      anv_state_flush(device, iview->no_aux_sampler_surface_state);
-   } else {
-      iview->sampler_surface_state.alloc_size = 0;
-      iview->no_aux_sampler_surface_state.alloc_size = 0;
+      anv_state_flush(device, iview->optimal_sampler_surface_state);
+      anv_state_flush(device, iview->general_sampler_surface_state);
    }
 
    /* NOTE: This one needs to go last since it may stomp isl_view.format */
@@ -753,9 +838,6 @@ anv_CreateImageView(VkDevice _device,
 
       anv_state_flush(device, iview->storage_surface_state);
       anv_state_flush(device, iview->writeonly_storage_surface_state);
-   } else {
-      iview->storage_surface_state.alloc_size = 0;
-      iview->writeonly_storage_surface_state.alloc_size = 0;
    }
 
    *pView = anv_image_view_to_handle(iview);
@@ -773,14 +855,14 @@ anv_DestroyImageView(VkDevice _device, VkImageView _iview,
    if (!iview)
       return;
 
-   if (iview->sampler_surface_state.alloc_size > 0) {
+   if (iview->optimal_sampler_surface_state.alloc_size > 0) {
       anv_state_pool_free(&device->surface_state_pool,
-                          iview->sampler_surface_state);
+                          iview->optimal_sampler_surface_state);
    }
 
-   if (iview->no_aux_sampler_surface_state.alloc_size > 0) {
+   if (iview->general_sampler_surface_state.alloc_size > 0) {
       anv_state_pool_free(&device->surface_state_pool,
-                          iview->no_aux_sampler_surface_state);
+                          iview->general_sampler_surface_state);
    }
 
    if (iview->storage_surface_state.alloc_size > 0) {

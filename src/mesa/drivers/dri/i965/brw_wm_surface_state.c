@@ -80,17 +80,10 @@ get_isl_surf(struct brw_context *brw, struct intel_mipmap_tree *mt,
              uint32_t *tile_x, uint32_t *tile_y,
              uint32_t *offset, struct isl_surf *surf)
 {
-   if (mt->surf.size > 0) {
-      *surf = mt->surf;
-   } else {
-      intel_miptree_get_isl_surf(brw, mt, surf);
-
-      surf->dim = get_isl_surf_dim(target);
-   }
+   *surf = mt->surf;
 
    const enum isl_dim_layout dim_layout =
-      get_isl_dim_layout(&brw->screen->devinfo, mt->surf.tiling, target,
-                         mt->array_layout);
+      get_isl_dim_layout(&brw->screen->devinfo, mt->surf.tiling, target);
 
    if (surf->dim_layout == dim_layout)
       return;
@@ -136,8 +129,9 @@ get_isl_surf(struct brw_context *brw, struct intel_mipmap_tree *mt,
 
 static void
 brw_emit_surface_state(struct brw_context *brw,
-                       struct intel_mipmap_tree *mt, uint32_t flags,
+                       struct intel_mipmap_tree *mt,
                        GLenum target, struct isl_view view,
+                       enum isl_aux_usage aux_usage,
                        uint32_t mocs, uint32_t *surf_offset, int surf_index,
                        unsigned read_domains, unsigned write_domains)
 {
@@ -154,23 +148,26 @@ brw_emit_surface_state(struct brw_context *brw,
    struct brw_bo *aux_bo;
    struct isl_surf *aux_surf = NULL;
    uint64_t aux_offset = 0;
-   enum isl_aux_usage aux_usage = ISL_AUX_USAGE_NONE;
-   if ((mt->mcs_buf || intel_miptree_sample_with_hiz(brw, mt)) &&
-       !(flags & INTEL_AUX_BUFFER_DISABLED)) {
-      aux_usage = intel_miptree_get_aux_isl_usage(brw, mt);
+   switch (aux_usage) {
+   case ISL_AUX_USAGE_MCS:
+   case ISL_AUX_USAGE_CCS_D:
+   case ISL_AUX_USAGE_CCS_E:
+      aux_surf = &mt->mcs_buf->surf;
+      aux_bo = mt->mcs_buf->bo;
+      aux_offset = mt->mcs_buf->bo->offset64 + mt->mcs_buf->offset;
+      break;
 
-      if (mt->mcs_buf) {
-         aux_surf = &mt->mcs_buf->surf;
+   case ISL_AUX_USAGE_HIZ:
+      aux_surf = &mt->hiz_buf->surf;
+      aux_bo = mt->hiz_buf->bo;
+      aux_offset = mt->hiz_buf->bo->offset64;
+      break;
 
-         aux_bo = mt->mcs_buf->bo;
-         aux_offset = mt->mcs_buf->bo->offset64 + mt->mcs_buf->offset;
-      } else {
-         aux_surf = &mt->hiz_buf->surf;
+   case ISL_AUX_USAGE_NONE:
+      break;
+   }
 
-         aux_bo = mt->hiz_buf->bo;
-         aux_offset = mt->hiz_buf->bo->offset64;
-      }
-
+   if (aux_usage != ISL_AUX_USAGE_NONE) {
       /* We only really need a clear color if we also have an auxiliary
        * surface.  Without one, it does nothing.
        */
@@ -182,7 +179,7 @@ brw_emit_surface_state(struct brw_context *brw,
                                  brw->isl_dev.ss.align,
                                  surf_offset);
 
-   isl_surf_fill_state(&brw->isl_dev, state, .surf = &surf, .view = &view,
+   isl_surf_fill_state(&brw->isl_dev, state, .surf = &mt->surf, .view = &view,
                        .address = mt->bo->offset64 + offset,
                        .aux_surf = aux_surf, .aux_usage = aux_usage,
                        .aux_address = aux_offset,
@@ -211,15 +208,20 @@ brw_emit_surface_state(struct brw_context *brw,
 uint32_t
 brw_update_renderbuffer_surface(struct brw_context *brw,
                                 struct gl_renderbuffer *rb,
-                                uint32_t flags, unsigned unit /* unused */,
+                                uint32_t flags, unsigned unit,
                                 uint32_t surf_index)
 {
    struct gl_context *ctx = &brw->ctx;
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
    struct intel_mipmap_tree *mt = irb->mt;
 
-   if (brw->gen < 9) {
-      assert(!(flags & INTEL_AUX_BUFFER_DISABLED));
+   enum isl_aux_usage aux_usage =
+      intel_miptree_render_aux_usage(brw, mt, ctx->Color.sRGBEnabled,
+                                     ctx->Color.BlendEnabled & (1 << unit));
+
+   if (flags & INTEL_AUX_BUFFER_DISABLED) {
+      assert(brw->gen >= 9);
+      aux_usage = ISL_AUX_USAGE_NONE;
    }
 
    assert(brw_render_target_supported(brw, rb));
@@ -241,7 +243,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
    };
 
    uint32_t offset;
-   brw_emit_surface_state(brw, mt, flags, mt->target, view,
+   brw_emit_surface_state(brw, mt, mt->target, view, aux_usage,
                           rb_mocs[brw->gen],
                           &offset, surf_index,
                           I915_GEM_DOMAIN_RENDER,
@@ -439,95 +441,21 @@ swizzle_to_scs(GLenum swizzle, bool need_green_to_blue)
    return (need_green_to_blue && scs == HSW_SCS_GREEN) ? HSW_SCS_BLUE : scs;
 }
 
-static unsigned
-brw_find_matching_rb(const struct gl_framebuffer *fb,
-                     const struct intel_mipmap_tree *mt)
+static bool
+brw_aux_surface_disabled(const struct brw_context *brw,
+                         const struct intel_mipmap_tree *mt)
 {
+   const struct gl_framebuffer *fb = brw->ctx.DrawBuffer;
+
    for (unsigned i = 0; i < fb->_NumColorDrawBuffers; i++) {
       const struct intel_renderbuffer *irb =
          intel_renderbuffer(fb->_ColorDrawBuffers[i]);
 
       if (irb && irb->mt == mt)
-         return i;
+         return brw->draw_aux_buffer_disabled[i];
    }
 
-   return fb->_NumColorDrawBuffers;
-}
-
-static inline bool
-brw_texture_view_sane(const struct brw_context *brw,
-                      const struct intel_mipmap_tree *mt,
-                      const struct isl_view *view)
-{
-   /* There are special cases only for lossless compression. */
-   if (mt->aux_usage != ISL_AUX_USAGE_CCS_E)
-      return true;
-
-   if (isl_format_supports_ccs_e(&brw->screen->devinfo, view->format))
-      return true;
-
-   /* Logic elsewhere needs to take care to resolve the color buffer prior
-    * to sampling it as non-compressed.
-    */
-   if (intel_miptree_has_color_unresolved(mt, view->base_level, view->levels,
-                                          view->base_array_layer,
-                                          view->array_len))
-      return false;
-
-   const struct gl_framebuffer *fb = brw->ctx.DrawBuffer;
-   const unsigned rb_index = brw_find_matching_rb(fb, mt);
-
-   if (rb_index == fb->_NumColorDrawBuffers)
-      return true;
-
-   /* Underlying surface is compressed but it is sampled using a format that
-    * the sampling engine doesn't support as compressed. Compression must be
-    * disabled for both sampling engine and data port in case the same surface
-    * is used also as render target.
-    */
-   return brw->draw_aux_buffer_disabled[rb_index];
-}
-
-static bool
-brw_disable_aux_surface(const struct brw_context *brw,
-                        const struct intel_mipmap_tree *mt,
-                        const struct isl_view *view)
-{
-   /* Nothing to disable. */
-   if (!mt->mcs_buf)
-      return false;
-
-   const bool is_unresolved = intel_miptree_has_color_unresolved(
-                                 mt, view->base_level, view->levels,
-                                 view->base_array_layer, view->array_len);
-
-   /* There are special cases only for lossless compression. */
-   if (mt->aux_usage != ISL_AUX_USAGE_CCS_E)
-      return !is_unresolved;
-
-   const struct gl_framebuffer *fb = brw->ctx.DrawBuffer;
-   const unsigned rb_index = brw_find_matching_rb(fb, mt);
-
-   /* If we are drawing into this with compression enabled, then we must also
-    * enable compression when texturing from it regardless of
-    * fast_clear_state.  If we don't then, after the first draw call with
-    * this setup, there will be data in the CCS which won't get picked up by
-    * subsequent texturing operations as required by ARB_texture_barrier.
-    * Since we don't want to re-emit the binding table or do a resolve
-    * operation every draw call, the easiest thing to do is just enable
-    * compression on the texturing side.  This is completely safe to do
-    * since, if compressed texturing weren't allowed, we would have disabled
-    * compression of render targets in whatever_that_function_is_called().
-    */
-   if (rb_index < fb->_NumColorDrawBuffers) {
-      if (brw->draw_aux_buffer_disabled[rb_index]) {
-         assert(!is_unresolved);
-      }
-
-      return brw->draw_aux_buffer_disabled[rb_index];
-   }
-
-   return !is_unresolved;
+   return false;
 }
 
 void
@@ -560,12 +488,10 @@ brw_update_texture_surface(struct gl_context *ctx,
       unsigned view_num_layers;
       if (obj->Immutable && obj->Target != GL_TEXTURE_3D) {
          view_num_layers = obj->NumLayers;
-      } else if (mt->surf.size > 0) {
+      } else {
          view_num_layers = mt->surf.dim == ISL_SURF_DIM_3D ?
                               mt->surf.logical_level0_px.depth :
                               mt->surf.logical_level0_px.array_len;
-      } else {
-         view_num_layers = mt->logical_depth0;
       }
 
       /* Handling GL_ALPHA as a surface format override breaks 1.30+ style
@@ -656,11 +582,13 @@ brw_update_texture_surface(struct gl_context *ctx,
           obj->Target == GL_TEXTURE_CUBE_MAP_ARRAY)
          view.usage |= ISL_SURF_USAGE_CUBE_BIT;
 
-      assert(brw_texture_view_sane(brw, mt, &view));
+      enum isl_aux_usage aux_usage =
+         intel_miptree_texture_aux_usage(brw, mt, format);
 
-      const int flags = brw_disable_aux_surface(brw, mt, &view) ?
-                           INTEL_AUX_BUFFER_DISABLED : 0;
-      brw_emit_surface_state(brw, mt, flags, mt->target, view,
+      if (brw_aux_surface_disabled(brw, mt))
+         aux_usage = ISL_AUX_USAGE_NONE;
+
+      brw_emit_surface_state(brw, mt, mt->target, view, aux_usage,
                              tex_mocs[brw->gen],
                              surf_offset, surf_index,
                              I915_GEM_DOMAIN_SAMPLER, 0);
@@ -1068,7 +996,8 @@ gen4_update_renderbuffer_surface(struct brw_context *brw,
    assert(tile_y % 2 == 0);
    surf[5] = ((tile_x / 4) << BRW_SURFACE_X_OFFSET_SHIFT |
 	      (tile_y / 2) << BRW_SURFACE_Y_OFFSET_SHIFT |
-	      (mt->valign == 4 ? BRW_SURFACE_VERTICAL_ALIGN_ENABLE : 0));
+	      (mt->surf.image_alignment_el.height == 4 ?
+                  BRW_SURFACE_VERTICAL_ALIGN_ENABLE : 0));
 
    if (brw->gen < 6) {
       /* _NEW_COLOR */
@@ -1228,9 +1157,12 @@ update_renderbuffer_read_surfaces(struct brw_context *brw)
                .usage = ISL_SURF_USAGE_TEXTURE_BIT,
             };
 
-            const int flags = brw->draw_aux_buffer_disabled[i] ?
-                                 INTEL_AUX_BUFFER_DISABLED : 0;
-            brw_emit_surface_state(brw, irb->mt, flags, target, view,
+            enum isl_aux_usage aux_usage =
+               intel_miptree_texture_aux_usage(brw, irb->mt, format);
+            if (brw->draw_aux_buffer_disabled[i])
+               aux_usage = ISL_AUX_USAGE_NONE;
+
+            brw_emit_surface_state(brw, irb->mt, target, view, aux_usage,
                                    tex_mocs[brw->gen],
                                    surf_offset, surf_index,
                                    I915_GEM_DOMAIN_SAMPLER, 0);
@@ -1661,14 +1593,9 @@ get_image_num_layers(const struct intel_mipmap_tree *mt, GLenum target,
    if (target == GL_TEXTURE_CUBE_MAP)
       return 6;
 
-   if (mt->surf.size > 0) {
-      return target == GL_TEXTURE_3D ?
-         minify(mt->surf.logical_level0_px.depth, level) :
-         mt->surf.logical_level0_px.array_len;
-   }
-
    return target == GL_TEXTURE_3D ?
-      minify(mt->logical_depth0, level) : mt->logical_depth0;
+      minify(mt->surf.logical_level0_px.depth, level) :
+      mt->surf.logical_level0_px.array_len;
 }
 
 static void
@@ -1724,18 +1651,15 @@ update_image_surface(struct brw_context *brw,
                                                        view.base_level, 1,
                                                        view.base_array_layer,
                                                        view.array_len));
-            brw_emit_surface_state(brw, mt, INTEL_AUX_BUFFER_DISABLED,
-                                   mt->target, view, tex_mocs[brw->gen],
+            brw_emit_surface_state(brw, mt, mt->target, view,
+                                   ISL_AUX_USAGE_NONE, tex_mocs[brw->gen],
                                    surf_offset, surf_index,
                                    I915_GEM_DOMAIN_SAMPLER,
                                    access == GL_READ_ONLY ? 0 :
                                              I915_GEM_DOMAIN_SAMPLER);
          }
 
-         struct isl_surf surf;
-         intel_miptree_get_isl_surf(brw, mt, &surf);
-
-         isl_surf_fill_image_param(&brw->isl_dev, param, &surf, &view);
+         isl_surf_fill_image_param(&brw->isl_dev, param, &mt->surf, &view);
          param->surface_idx = surface_idx;
       }
 

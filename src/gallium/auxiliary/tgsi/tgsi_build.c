@@ -642,6 +642,7 @@ tgsi_default_instruction( void )
    instruction.Label = 0;
    instruction.Texture = 0;
    instruction.Memory = 0;
+   instruction.Precise = 0;
    instruction.Padding = 0;
 
    return instruction;
@@ -650,6 +651,7 @@ tgsi_default_instruction( void )
 static struct tgsi_instruction
 tgsi_build_instruction(unsigned opcode,
                        unsigned saturate,
+                       unsigned precise,
                        unsigned num_dst_regs,
                        unsigned num_src_regs,
                        struct tgsi_header *header)
@@ -664,6 +666,7 @@ tgsi_build_instruction(unsigned opcode,
    instruction = tgsi_default_instruction();
    instruction.Opcode = opcode;
    instruction.Saturate = saturate;
+   instruction.Precise = precise;
    instruction.NumDstRegs = num_dst_regs;
    instruction.NumSrcRegs = num_src_regs;
 
@@ -1060,6 +1063,7 @@ tgsi_build_full_instruction(
 
    *instruction = tgsi_build_instruction(full_inst->Instruction.Opcode,
                                          full_inst->Instruction.Saturate,
+                                         full_inst->Instruction.Precise,
                                          full_inst->Instruction.NumDstRegs,
                                          full_inst->Instruction.NumSrcRegs,
                                          header);

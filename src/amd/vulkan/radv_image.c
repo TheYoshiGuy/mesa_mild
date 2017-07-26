@@ -181,6 +181,11 @@ radv_make_buffer_descriptor(struct radv_device *device,
 	state[0] = va;
 	state[1] = S_008F04_BASE_ADDRESS_HI(va >> 32) |
 		S_008F04_STRIDE(stride);
+
+	if (device->physical_device->rad_info.chip_class < VI && stride) {
+		range /= stride;
+	}
+
 	state[2] = range;
 	state[3] = S_008F0C_DST_SEL_X(radv_map_swizzle(desc->swizzle[0])) |
 		   S_008F0C_DST_SEL_Y(radv_map_swizzle(desc->swizzle[1])) |
@@ -198,7 +203,7 @@ si_set_mutable_tex_desc_fields(struct radv_device *device,
 			       unsigned block_width, bool is_stencil,
 			       uint32_t *state)
 {
-	uint64_t gpu_address = device->ws->buffer_get_va(image->bo) + image->offset;
+	uint64_t gpu_address = image->bo ? device->ws->buffer_get_va(image->bo) + image->offset : 0;
 	uint64_t va = gpu_address;
 	unsigned pitch = base_level_info->nblk_x * block_width;
 	enum chip_class chip_class = device->physical_device->rad_info.chip_class;
@@ -945,10 +950,7 @@ radv_image_view_init(struct radv_image_view *iview,
 	iview->base_mip = range->baseMipLevel;
 
 	radv_image_view_make_descriptor(iview, device, pCreateInfo, false);
-
-	/* For transfers we may use the image as a storage image. */
-	if (image->usage & (VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT))
-		radv_image_view_make_descriptor(iview, device, pCreateInfo, true);
+	radv_image_view_make_descriptor(iview, device, pCreateInfo, true);
 }
 
 bool radv_layout_has_htile(const struct radv_image *image,

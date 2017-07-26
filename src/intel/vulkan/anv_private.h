@@ -1077,13 +1077,9 @@ struct anv_descriptor {
 
    union {
       struct {
+         VkImageLayout layout;
          struct anv_image_view *image_view;
          struct anv_sampler *sampler;
-
-         /* Used to determine whether or not we need the surface state to have
-          * the auxiliary buffer enabled.
-          */
-         enum isl_aux_usage aux_usage;
       };
 
       struct {
@@ -1490,6 +1486,7 @@ struct anv_attachment_state {
    bool                                         fast_clear;
    VkClearValue                                 clear_value;
    bool                                         clear_color_is_zero_one;
+   bool                                         clear_color_is_zero;
 };
 
 /** State required while building cmd buffer */
@@ -2084,6 +2081,23 @@ anv_image_aux_layers(const struct anv_image * const image,
    }
 }
 
+static inline unsigned
+anv_fast_clear_state_entry_size(const struct anv_device *device)
+{
+   assert(device);
+   /* Entry contents:
+    *   +--------------------------------------------+
+    *   | clear value dword(s) | needs resolve dword |
+    *   +--------------------------------------------+
+    */
+
+   /* Ensure that the needs resolve dword is in fact dword-aligned to enable
+    * GPU memcpy operations.
+    */
+   assert(device->isl_dev.ss.clear_value_size % 4 == 0);
+   return device->isl_dev.ss.clear_value_size + 4;
+}
+
 /* Returns true if a HiZ-enabled depth buffer can be sampled from. */
 static inline bool
 anv_can_sample_with_hiz(const struct gen_device_info * const devinfo,
@@ -2108,10 +2122,10 @@ anv_ccs_resolve(struct anv_cmd_buffer * const cmd_buffer,
                 const enum blorp_fast_clear_op op);
 
 void
-anv_image_ccs_clear(struct anv_cmd_buffer *cmd_buffer,
-                    const struct anv_image *image,
-                    const uint32_t base_level, const uint32_t level_count,
-                    const uint32_t base_layer, uint32_t layer_count);
+anv_image_fast_clear(struct anv_cmd_buffer *cmd_buffer,
+                     const struct anv_image *image,
+                     const uint32_t base_level, const uint32_t level_count,
+                     const uint32_t base_layer, uint32_t layer_count);
 
 enum isl_aux_usage
 anv_layout_to_aux_usage(const struct gen_device_info * const devinfo,
@@ -2146,14 +2160,19 @@ struct anv_image_view {
    VkFormat vk_format;
    VkExtent3D extent; /**< Extent of VkImageViewCreateInfo::baseMipLevel. */
 
-   /** RENDER_SURFACE_STATE when using image as a sampler surface. */
-   struct anv_state sampler_surface_state;
+   /**
+    * RENDER_SURFACE_STATE when using image as a sampler surface with an image
+    * layout of SHADER_READ_ONLY_OPTIMAL or DEPTH_STENCIL_READ_ONLY_OPTIMAL.
+    */
+   enum isl_aux_usage optimal_sampler_aux_usage;
+   struct anv_state optimal_sampler_surface_state;
 
    /**
-    * RENDER_SURFACE_STATE when using image as a sampler surface with the
-    * auxiliary buffer disabled.
+    * RENDER_SURFACE_STATE when using image as a sampler surface with an image
+    * layout of GENERAL.
     */
-   struct anv_state no_aux_sampler_surface_state;
+   enum isl_aux_usage general_sampler_aux_usage;
+   struct anv_state general_sampler_surface_state;
 
    /**
     * RENDER_SURFACE_STATE when using image as a storage image. Separate states
@@ -2226,13 +2245,6 @@ void anv_fill_buffer_surface_state(struct anv_device *device,
                                    uint32_t offset, uint32_t range,
                                    uint32_t stride);
 
-void anv_image_view_fill_image_param(struct anv_device *device,
-                                     struct anv_image_view *view,
-                                     struct brw_image_param *param);
-void anv_buffer_view_fill_image_param(struct anv_device *device,
-                                      struct anv_buffer_view *view,
-                                      struct brw_image_param *param);
-
 struct anv_sampler {
    uint32_t state[4];
 };
@@ -2277,13 +2289,6 @@ anv_subpass_view_count(const struct anv_subpass *subpass)
    return MAX2(1, _mesa_bitcount(subpass->view_mask));
 }
 
-enum anv_subpass_usage {
-   ANV_SUBPASS_USAGE_DRAW =         (1 << 0),
-   ANV_SUBPASS_USAGE_INPUT =        (1 << 1),
-   ANV_SUBPASS_USAGE_RESOLVE_SRC =  (1 << 2),
-   ANV_SUBPASS_USAGE_RESOLVE_DST =  (1 << 3),
-};
-
 struct anv_render_pass_attachment {
    /* TODO: Consider using VkAttachmentDescription instead of storing each of
     * its members individually.
@@ -2296,9 +2301,7 @@ struct anv_render_pass_attachment {
    VkAttachmentLoadOp                           stencil_load_op;
    VkImageLayout                                initial_layout;
    VkImageLayout                                final_layout;
-
-   /* An array, indexed by subpass id, of how the attachment will be used. */
-   enum anv_subpass_usage *                     subpass_usage;
+   VkImageLayout                                first_subpass_layout;
 
    /* The subpass id in which the attachment will be used last. */
    uint32_t                                     last_subpass_idx;

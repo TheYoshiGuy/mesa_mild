@@ -81,8 +81,10 @@ build_color_shaders(struct nir_shader **out_vs,
 	vs_out_layer->data.location = VARYING_SLOT_LAYER;
 	vs_out_layer->data.interpolation = INTERP_MODE_FLAT;
 	nir_ssa_def *inst_id = nir_load_system_value(&vs_b, nir_intrinsic_load_instance_id, 0);
+	nir_ssa_def *base_instance = nir_load_system_value(&vs_b, nir_intrinsic_load_base_instance, 0);
 
-	nir_store_var(&vs_b, vs_out_layer, inst_id, 0x1);
+	nir_ssa_def *layer_id = nir_iadd(&vs_b, inst_id, base_instance);
+	nir_store_var(&vs_b, vs_out_layer, layer_id, 0x1);
 
 	*out_vs = vs_b.shader;
 	*out_fs = fs_b.shader;
@@ -398,7 +400,7 @@ emit_color_clear(struct radv_cmd_buffer *cmd_buffer,
 
 	radv_CmdSetScissor(radv_cmd_buffer_to_handle(cmd_buffer), 0, 1, &clear_rect->rect);
 
-	radv_CmdDraw(cmd_buffer_h, 3, clear_rect->layerCount, 0, 0);
+	radv_CmdDraw(cmd_buffer_h, 3, clear_rect->layerCount, 0, clear_rect->baseArrayLayer);
 
 	radv_cmd_buffer_set_subpass(cmd_buffer, subpass, false);
 }
@@ -439,7 +441,10 @@ build_depthstencil_shader(struct nir_shader **out_vs, struct nir_shader **out_fs
 	vs_out_layer->data.location = VARYING_SLOT_LAYER;
 	vs_out_layer->data.interpolation = INTERP_MODE_FLAT;
 	nir_ssa_def *inst_id = nir_load_system_value(&vs_b, nir_intrinsic_load_instance_id, 0);
-	nir_store_var(&vs_b, vs_out_layer, inst_id, 0x1);
+	nir_ssa_def *base_instance = nir_load_system_value(&vs_b, nir_intrinsic_load_base_instance, 0);
+
+	nir_ssa_def *layer_id = nir_iadd(&vs_b, inst_id, base_instance);
+	nir_store_var(&vs_b, vs_out_layer, layer_id, 0x1);
 
 	*out_vs = vs_b.shader;
 	*out_fs = fs_b.shader;
@@ -654,7 +659,7 @@ emit_depthstencil_clear(struct radv_cmd_buffer *cmd_buffer,
 
 	radv_CmdSetScissor(radv_cmd_buffer_to_handle(cmd_buffer), 0, 1, &clear_rect->rect);
 
-	radv_CmdDraw(cmd_buffer_h, 3, clear_rect->layerCount, 0, 0);
+	radv_CmdDraw(cmd_buffer_h, 3, clear_rect->layerCount, 0, clear_rect->baseArrayLayer);
 }
 
 static bool
@@ -1080,7 +1085,8 @@ subpass_needs_clear(const struct radv_cmd_buffer *cmd_buffer)
 	ds = cmd_state->subpass->depth_stencil_attachment.attachment;
 	for (uint32_t i = 0; i < cmd_state->subpass->color_count; ++i) {
 		uint32_t a = cmd_state->subpass->color_attachments[i].attachment;
-		if (cmd_state->attachments[a].pending_clear_aspects) {
+		if (a != VK_ATTACHMENT_UNUSED &&
+		    cmd_state->attachments[a].pending_clear_aspects) {
 			return true;
 		}
 	}
@@ -1120,7 +1126,8 @@ radv_cmd_buffer_clear_subpass(struct radv_cmd_buffer *cmd_buffer)
 	for (uint32_t i = 0; i < cmd_state->subpass->color_count; ++i) {
 		uint32_t a = cmd_state->subpass->color_attachments[i].attachment;
 
-		if (!cmd_state->attachments[a].pending_clear_aspects)
+		if (a == VK_ATTACHMENT_UNUSED ||
+		    !cmd_state->attachments[a].pending_clear_aspects)
 			continue;
 
 		assert(cmd_state->attachments[a].pending_clear_aspects ==

@@ -38,6 +38,7 @@
 #include "main/fbobject.h"
 #include "main/renderbuffer.h"
 #include "main/version.h"
+#include "util/hash_table.h"
 #include "st_texture.h"
 
 #include "st_context.h"
@@ -59,6 +60,14 @@
 #include "util/u_surface.h"
 #include "util/list.h"
 
+struct hash_table;
+struct st_manager_private
+{
+   struct hash_table *stfbi_ht; /* framebuffer iface objects hash table */
+   mtx_t st_mutex;
+};
+
+static void st_manager_destroy(struct st_manager *);
 
 /**
  * Map an attachment to a buffer index.
@@ -490,6 +499,97 @@ st_framebuffer_reference(struct st_framebuffer **ptr,
    _mesa_reference_framebuffer((struct gl_framebuffer **) ptr, fb);
 }
 
+
+static uint32_t
+st_framebuffer_iface_hash(const void *key)
+{
+   return (uintptr_t)key;
+}
+
+
+static bool
+st_framebuffer_iface_equal(const void *a, const void *b)
+{
+   return (struct st_framebuffer_iface *)a == (struct st_framebuffer_iface *)b;
+}
+
+
+static boolean
+st_framebuffer_iface_lookup(struct st_manager *smapi,
+                            const struct st_framebuffer_iface *stfbi)
+{
+   struct st_manager_private *smPriv =
+      (struct st_manager_private *)smapi->st_manager_private;
+   struct hash_entry *entry;
+
+   assert(smPriv);
+   assert(smPriv->stfbi_ht);
+
+   mtx_lock(&smPriv->st_mutex);
+   entry = _mesa_hash_table_search(smPriv->stfbi_ht, stfbi);
+   mtx_unlock(&smPriv->st_mutex);
+
+   return entry != NULL;
+}
+
+
+static boolean
+st_framebuffer_iface_insert(struct st_manager *smapi,
+                            struct st_framebuffer_iface *stfbi)
+{
+   struct st_manager_private *smPriv =
+      (struct st_manager_private *)smapi->st_manager_private;
+   struct hash_entry *entry;
+
+   assert(smPriv);
+   assert(smPriv->stfbi_ht);
+
+   mtx_lock(&smPriv->st_mutex);
+   entry = _mesa_hash_table_insert(smPriv->stfbi_ht, stfbi, stfbi);
+   mtx_unlock(&smPriv->st_mutex);
+
+   return entry != NULL;
+}
+
+
+static void
+st_framebuffer_iface_remove(struct st_manager *smapi,
+                            struct st_framebuffer_iface *stfbi)
+{
+   struct st_manager_private *smPriv =
+      (struct st_manager_private *)smapi->st_manager_private;
+   struct hash_entry *entry;
+
+   if (!smPriv || !smPriv->stfbi_ht);
+      return;
+
+   mtx_lock(&smPriv->st_mutex);
+   entry = _mesa_hash_table_search(smPriv->stfbi_ht, stfbi);
+   if (!entry)
+      goto unlock;
+
+   _mesa_hash_table_remove(smPriv->stfbi_ht, entry);
+
+unlock:
+   mtx_unlock(&smPriv->st_mutex);
+}
+
+
+/**
+ * The framebuffer interface object is no longer valid.
+ * Remove the object from the framebuffer interface hash table.
+ */
+static void
+st_api_destroy_drawable(struct st_api *stapi,
+                        struct st_framebuffer_iface *stfbi)
+{
+   if (stfbi)
+      return;
+
+   st_framebuffer_iface_remove(stfbi->state_manager, stfbi);
+}
+
+
 /**
  * Purge the winsys buffers list to remove any references to
  * non-existing framebuffer interface objects.
@@ -497,16 +597,24 @@ st_framebuffer_reference(struct st_framebuffer **ptr,
 static void
 st_framebuffers_purge(struct st_context *st)
 {
+   struct st_context_iface *st_iface = &st->iface;
+   struct st_manager *smapi = st_iface->state_manager;
    struct st_framebuffer *stfb, *next;
 
+   assert(smapi);
+
    LIST_FOR_EACH_ENTRY_SAFE_REV(stfb, next, &st->winsys_buffers, head) {
+      struct st_framebuffer_iface *stfbi = stfb->iface;
+
+      assert(stfbi);
+
       /**
        * If the corresponding framebuffer interface object no longer exists,
        * remove the framebuffer object from the context's winsys buffers list,
        * and unreference the framebuffer object, so its resources can be
        * deleted.
        */
-      if (stfb->iface->ID != stfb->iface_ID) {
+      if (!st_framebuffer_iface_lookup(smapi, stfbi)) {
          LIST_DEL(&stfb->head);
          st_framebuffer_reference(&stfb, NULL);
       }
@@ -703,6 +811,21 @@ st_api_create_context(struct st_api *stapi, struct st_manager *smapi,
       return NULL;
    }
 
+   /* Create a hash table for the framebuffer interface objects
+    * if it has not been created for this st manager.
+    */
+   if (smapi->st_manager_private == NULL) {
+      struct st_manager_private *smPriv;
+
+      smPriv = CALLOC_STRUCT(st_manager_private);
+      mtx_init(&smPriv->st_mutex, mtx_plain);
+      smPriv->stfbi_ht = _mesa_hash_table_create(NULL,
+                                                 st_framebuffer_iface_hash,
+                                                 st_framebuffer_iface_equal);
+      smapi->st_manager_private = smPriv;
+      smapi->destroy = st_manager_destroy;
+   }
+
    if (attribs->flags & ST_CONTEXT_FLAG_ROBUST_ACCESS)
       ctx_flags |= PIPE_CONTEXT_ROBUST_BUFFER_ACCESS;
 
@@ -771,6 +894,7 @@ st_api_create_context(struct st_api *stapi, struct st_manager *smapi,
    st->iface.st_context_private = (void *) smapi;
    st->iface.cso_context = st->cso_context;
    st->iface.pipe = st->pipe;
+   st->iface.state_manager = smapi;
 
    *error = ST_CONTEXT_SUCCESS;
    return &st->iface;
@@ -810,6 +934,14 @@ st_framebuffer_reuse_or_create(struct st_context *st,
       cur = st_framebuffer_create(st, stfbi);
 
       if (cur) {
+         /* add the referenced framebuffer interface object to
+          * the framebuffer interface object hash table.
+          */
+         if (!st_framebuffer_iface_insert(stfbi->state_manager, stfbi)) {
+            st_framebuffer_reference(&cur, NULL);
+            return NULL;
+         }
+
          /* add to the context's winsys buffers list */
          LIST_ADD(&cur->head, &st->winsys_buffers);
 
@@ -966,6 +1098,19 @@ st_manager_add_color_renderbuffer(struct st_context *st,
    return TRUE;
 }
 
+static void
+st_manager_destroy(struct st_manager *smapi)
+{
+   struct st_manager_private *smPriv = smapi->st_manager_private;
+
+   if (smPriv && smPriv->stfbi_ht) {
+      _mesa_hash_table_destroy(smPriv->stfbi_ht, NULL);
+      mtx_destroy(&smPriv->st_mutex);
+      free(smPriv);
+      smapi->st_manager_private = NULL;
+   }
+}
+
 static unsigned
 get_version(struct pipe_screen *screen,
             struct st_config_options *options, gl_api api)
@@ -1015,6 +1160,7 @@ static const struct st_api st_gl_api = {
    .create_context = st_api_create_context,
    .make_current = st_api_make_current,
    .get_current = st_api_get_current,
+   .destroy_drawable = st_api_destroy_drawable,
 };
 
 struct st_api *

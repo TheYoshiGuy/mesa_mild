@@ -167,8 +167,8 @@ struct svga_shader_emitter_v10
 
    /* For fragment shaders only */
    struct {
-      /* apha test */
       unsigned color_out_index[PIPE_MAX_COLOR_BUFS];  /**< the real color output regs */
+      unsigned num_color_outputs;
       unsigned color_tmp_index;  /**< fake/temp color output reg */
       unsigned alpha_ref_index;  /**< immediate constant for alpha ref */
 
@@ -2499,6 +2499,9 @@ emit_output_declarations(struct svga_shader_emitter_v10 *emit)
 
             emit->fs.color_out_index[semantic_index] = index;
 
+            emit->fs.num_color_outputs = MAX2(emit->fs.num_color_outputs,
+                                              index + 1);
+
             /* The semantic index is the shader's color output/buffer index */
             emit_output_declaration(emit,
                                     VGPU10_OPCODE_DCL_OUTPUT, semantic_index,
@@ -2521,6 +2524,9 @@ emit_output_declarations(struct svga_shader_emitter_v10 *emit)
                                         VGPU10_OPERAND_4_COMPONENT_MASK_ALL);
                      emit->info.output_semantic_index[idx] = j;
                   }
+
+                  emit->fs.num_color_outputs =
+                     emit->key.fs.write_color0_to_n_cbufs;
                }
             }
             else {
@@ -2707,7 +2713,6 @@ emit_temporaries_declaration(struct svga_shader_emitter_v10 *emit)
    }
    else if (emit->unit == PIPE_SHADER_FRAGMENT) {
       if (emit->key.fs.alpha_func != SVGA3D_CMP_ALWAYS ||
-          emit->key.fs.white_fragments ||
           emit->key.fs.write_color0_to_n_cbufs > 1) {
          /* Allocate a temp to hold the output color */
          emit->fs.color_tmp_index = total_temps;
@@ -2881,17 +2886,14 @@ emit_constant_declaration(struct svga_shader_emitter_v10 *emit)
       }
    }
 
-   /* Texcoord scale factors for RECT textures */
-   {
-      for (i = 0; i < emit->num_samplers; i++) {
-         if (emit->key.tex[i].unnormalized) {
-            emit->texcoord_scale_index[i] = total_consts++;
-         }
-      }
-   }
-
-   /* Texture buffer sizes */
    for (i = 0; i < emit->num_samplers; i++) {
+
+      /* Texcoord scale factors for RECT textures */
+      if (emit->key.tex[i].unnormalized) {
+         emit->texcoord_scale_index[i] = total_consts++;
+      }
+
+      /* Texture buffer sizes */
       if (emit->sampler_target[i] == TGSI_TEXTURE_BUFFER) {
          emit->texture_buffer_size_index[i] = total_consts++;
       }
@@ -4854,9 +4856,24 @@ setup_texcoord(struct svga_shader_emitter_v10 *emit,
       struct tgsi_full_dst_register tmp_dst = make_dst_temp_reg(tmp);
       struct tgsi_full_src_register scale_src = make_src_const_reg(scale_index);
 
-      /* MUL tmp, coord, const[] */
-      emit_instruction_op2(emit, VGPU10_OPCODE_MUL, &tmp_dst,
-                           coord, &scale_src, FALSE);
+      if (emit->key.tex[unit].texel_bias) {
+         /* to fix texture coordinate rounding issue, 0.0001 offset is
+          * been added. This fixes piglit test fbo-blit-scaled-linear. */
+         struct tgsi_full_src_register offset =
+            make_immediate_reg_float(emit, 0.0001f);
+
+         /* ADD tmp, coord, offset */
+         emit_instruction_op2(emit, VGPU10_OPCODE_ADD, &tmp_dst,
+                              coord, &offset, FALSE);
+         /* MUL tmp, tmp, scale */
+         emit_instruction_op2(emit, VGPU10_OPCODE_MUL, &tmp_dst,
+                              &tmp_src, &scale_src, FALSE);
+      }
+      else {
+         /* MUL tmp, coord, const[] */
+         emit_instruction_op2(emit, VGPU10_OPCODE_MUL, &tmp_dst,
+                              coord, &scale_src, FALSE);
+      }
       return tmp_src;
    }
    else {
@@ -6263,15 +6280,17 @@ alloc_common_immediates(struct svga_shader_emitter_v10 *emit)
    emit->common_immediate_pos[n++] =
       alloc_immediate_float4(emit, 0.0f, 1.0f, 0.5f, -1.0f);
 
-   emit->common_immediate_pos[n++] =
-      alloc_immediate_float4(emit, 128.0f, -128.0f, 2.0f, 3.0f);
+   if (emit->info.opcode_count[TGSI_OPCODE_LIT] > 0) {
+      emit->common_immediate_pos[n++] =
+         alloc_immediate_float4(emit, 128.0f, -128.0f, 0.0f, 0.0f);
+   }
 
    emit->common_immediate_pos[n++] =
       alloc_immediate_int4(emit, 0, 1, 0, -1);
 
    if (emit->key.vs.attrib_puint_to_snorm) {
       emit->common_immediate_pos[n++] =
-         alloc_immediate_float4(emit, -2.0f, -2.0f, -2.0f, -1.66666f);
+         alloc_immediate_float4(emit, -2.0f, 2.0f, 3.0f, -1.66666f);
    }
 
    if (emit->key.vs.attrib_puint_to_uscaled) {
@@ -6285,6 +6304,17 @@ alloc_common_immediates(struct svga_shader_emitter_v10 *emit)
 
       emit->common_immediate_pos[n++] =
          alloc_immediate_int4(emit, 22, 30, 0, 0);
+   }
+
+   unsigned i;
+
+   for (i = 0; i < PIPE_MAX_SAMPLERS; i++) {
+      if (emit->key.tex[i].texel_bias) {
+         /* Replace 0.0f if more immediate float value is needed */
+         emit->common_immediate_pos[n++] =
+            alloc_immediate_float4(emit, 0.0001f, 0.0f, 0.0f, 0.0f);
+         break;
+      }
    }
 
    assert(n <= ARRAY_SIZE(emit->common_immediate_pos));
@@ -6354,6 +6384,47 @@ emit_pre_helpers(struct svga_shader_emitter_v10 *emit)
 
 
 /**
+ * The device has no direct support for the pipe_blend_state::alpha_to_one
+ * option so we implement it here with shader code.
+ *
+ * Note that this is kind of pointless, actually.  Here we're clobbering
+ * the alpha value with 1.0.  So if alpha-to-coverage is enabled, we'll wind
+ * up with 100% coverage.  That's almost certainly not what the user wants.
+ * The work-around is to add extra shader code to compute coverage from alpha
+ * and write it to the coverage output register (if the user's shader doesn't
+ * do so already).  We'll probably do that in the future.
+ */
+static void
+emit_alpha_to_one_instructions(struct svga_shader_emitter_v10 *emit,
+                               unsigned fs_color_tmp_index)
+{
+   struct tgsi_full_src_register one = make_immediate_reg_float(emit, 1.0f);
+   unsigned i;
+
+   /* Note: it's not 100% clear from the spec if we're supposed to clobber
+    * the alpha for all render targets.  But that's what NVIDIA does and
+    * that's what Piglit tests.
+    */
+   for (i = 0; i < emit->fs.num_color_outputs; i++) {
+      struct tgsi_full_dst_register color_dst;
+
+      if (fs_color_tmp_index != INVALID_INDEX && i == 0) {
+         /* write to the temp color register */
+         color_dst = make_dst_temp_reg(fs_color_tmp_index);
+      }
+      else {
+         /* write directly to the color[i] output */
+         color_dst = make_dst_output_reg(emit->fs.color_out_index[i]);
+      }
+
+      color_dst = writemask_dst(&color_dst, TGSI_WRITEMASK_W);
+
+      emit_instruction_op1(emit, VGPU10_OPCODE_MOV, &color_dst, &one, FALSE);
+   }
+}
+
+
+/**
  * Emit alpha test code.  This compares TEMP[fs_color_tmp_index].w
  * against the alpha reference value and discards the fragment if the
  * comparison fails.
@@ -6389,34 +6460,15 @@ emit_alpha_test_instructions(struct svga_shader_emitter_v10 *emit,
    emit_src_register(emit, &tmp_src_x);
    end_emit_instruction(emit);
 
-   /* If we don't need to broadcast the color below or set fragments to
-    * white, emit final color here.
+   /* If we don't need to broadcast the color below, emit the final color here.
     */
-   if (emit->key.fs.write_color0_to_n_cbufs <= 1 &&
-       !emit->key.fs.white_fragments) {
+   if (emit->key.fs.write_color0_to_n_cbufs <= 1) {
       /* MOV output.color, tempcolor */
       emit_instruction_op1(emit, VGPU10_OPCODE_MOV, &color_dst,
                            &color_src, FALSE);     /* XXX saturate? */
    }
 
    free_temp_indexes(emit);
-}
-
-
-/**
- * When we need to emit white for all fragments (for emulating XOR logicop
- * mode), this function copies white into the temporary color output register.
- */
-static void
-emit_set_color_white(struct svga_shader_emitter_v10 *emit,
-                     unsigned fs_color_tmp_index)
-{
-   struct tgsi_full_dst_register color_dst =
-      make_dst_temp_reg(fs_color_tmp_index);
-   struct tgsi_full_src_register white =
-      make_immediate_reg_float(emit, 1.0f);
-
-   emit_instruction_op1(emit, VGPU10_OPCODE_MOV, &color_dst, &white, FALSE);
 }
 
 
@@ -6435,8 +6487,17 @@ emit_broadcast_color_instructions(struct svga_shader_emitter_v10 *emit,
 {
    const unsigned n = emit->key.fs.write_color0_to_n_cbufs;
    unsigned i;
-   struct tgsi_full_src_register color_src =
-      make_src_temp_reg(fs_color_tmp_index);
+   struct tgsi_full_src_register color_src;
+
+   if (emit->key.fs.white_fragments) {
+      /* set all color outputs to white */
+      color_src = make_immediate_reg_float(emit, 1.0f);
+   }
+   else {
+      /* set all color outputs to TEMP[fs_color_tmp_index] */
+      assert(fs_color_tmp_index != INVALID_INDEX);
+      color_src = make_src_temp_reg(fs_color_tmp_index);
+   }
 
    assert(emit->unit == PIPE_SHADER_FRAGMENT);
 
@@ -6472,16 +6533,19 @@ emit_post_helpers(struct svga_shader_emitter_v10 *emit)
    else if (emit->unit == PIPE_SHADER_FRAGMENT) {
       const unsigned fs_color_tmp_index = emit->fs.color_tmp_index;
 
+      assert(!(emit->key.fs.white_fragments &&
+               emit->key.fs.write_color0_to_n_cbufs == 0));
+
       /* We no longer want emit_dst_register() to substitute the
        * temporary fragment color register for the real color output.
        */
       emit->fs.color_tmp_index = INVALID_INDEX;
 
+      if (emit->key.fs.alpha_to_one) {
+         emit_alpha_to_one_instructions(emit, fs_color_tmp_index);
+      }
       if (emit->key.fs.alpha_func != SVGA3D_CMP_ALWAYS) {
          emit_alpha_test_instructions(emit, fs_color_tmp_index);
-      }
-      if (emit->key.fs.white_fragments) {
-         emit_set_color_white(emit, fs_color_tmp_index);
       }
       if (emit->key.fs.write_color0_to_n_cbufs > 1 ||
           emit->key.fs.white_fragments) {

@@ -1,5 +1,6 @@
 BROADCOM_GENXML_GENERATED_FILES = \
 	cle/v3d_packet_v21_pack.h \
+	cle/v3d_xml.h \
 	$()
 
 BROADCOM_GENXML_XML_FILES = \
@@ -8,6 +9,11 @@ BROADCOM_GENXML_XML_FILES = \
 
 BROADCOM_FILES = \
 	cle/v3d_packet_helpers.h \
-	common/v3d_devinfo.h \
+	common/v3d_device_info.h \
+	$()
+
+BROADCOM_DECODER_FILES = \
+	cle/v3d_decoder.c \
+	cle/v3d_decoder.h \
 	$()
 

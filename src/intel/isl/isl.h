@@ -618,7 +618,11 @@ enum isl_aux_usage {
  *       color by simply changing the clear color without modifying either
  *       surface.
  *
- *    2) Compressed w/ Clear:  In this state, neither the auxiliary surface
+ *    2) Partial Clear:  In this state, each block in the auxiliary surface
+ *       contains either the magic clear or pass-through value.  See Clear and
+ *       Pass-through for more details.
+ *
+ *    3) Compressed w/ Clear:  In this state, neither the auxiliary surface
  *       nor the primary surface has a complete representation of the data.
  *       Instead, both surfaces must be used together or else rendering
  *       corruption may occur.  Depending on the auxiliary compression format
@@ -627,19 +631,19 @@ enum isl_aux_usage {
  *       values.  Blocks may also be in the clear state (see Clear) and have
  *       their value taken from outside the surface.
  *
- *    3) Compressed w/o Clear:  This state is identical to the state above
+ *    4) Compressed w/o Clear:  This state is identical to the state above
  *       except that no blocks are in the clear state.  In this state, all of
  *       the data required to reconstruct the final sample values is contained
  *       in the auxiliary and primary surface and the clear value is not
  *       considered.
  *
- *    4) Resolved:  In this state, the primary surface contains 100% of the
+ *    5) Resolved:  In this state, the primary surface contains 100% of the
  *       data.  The auxiliary surface is also valid so the surface can be
  *       validly used with or without aux enabled.  The auxiliary surface may,
  *       however, contain non-trivial data and any update to the primary
  *       surface with aux disabled will cause the two to get out of sync.
  *
- *    5) Pass-through:  In this state, the primary surface contains 100% of the
+ *    6) Pass-through:  In this state, the primary surface contains 100% of the
  *       data and every block in the auxiliary surface contains a magic value
  *       which indicates that the auxiliary surface should be ignored and the
  *       only the primary surface should be considered.  Updating the primary
@@ -648,7 +652,7 @@ enum isl_aux_usage {
  *       cause the auxiliary buffer to contain non-trivial data and no longer
  *       be in the pass-through state.
  *
- *    5) Aux Invalid:  In this state, the primary surface contains 100% of the
+ *    7) Aux Invalid:  In this state, the primary surface contains 100% of the
  *       data and the auxiliary surface is completely bogus.  Any attempt to
  *       use the auxiliary surface is liable to result in rendering
  *       corruption.  The only thing that one can do to re-enable aux once
@@ -662,7 +666,8 @@ enum isl_aux_usage {
  *    1) Fast Clear:  This operation writes the magic "clear" value to the
  *       auxiliary surface.  This operation will safely transition any slice
  *       of a surface from any state to the clear state so long as the entire
- *       slice is fast cleared at once.
+ *       slice is fast cleared at once.  A fast clear that only covers part of
+ *       a slice of a surface is called a partial fast clear.
  *
  *    2) Full Resolve:  This operation combines the auxiliary surface data
  *       with the primary surface data and writes the result to the primary.
@@ -689,34 +694,46 @@ enum isl_aux_usage {
  *   Draw w/ Aux
  *   +----------+
  *   |          |
- *   |       +-------------+     Draw w/ Aux      +-------------+
- *   +------>| Compressed  |<---------------------|    Clear    |
- *           |  w/ Clear   |                      |             |
- *           +-------------+                      +-------------+
- *                  |   |                                |
- *          Partial |   |                                |
- *          Resolve |   |        Full Resolve            |
- *                  |   +----------------------------+   |  Full
- *                  |                                |   | Resolve
- *   Draw w/ aux    |                                |   |
- *   +----------+   |                                |   |
- *   |          |  \|/                              \|/ \|/
- *   |       +-------------+     Full Resolve     +-------------+
- *   +------>| Compressed  |--------------------->|  Resolved   |
- *           |  w/o Clear  |<---------------------|             |
- *           +-------------+     Draw w/ Aux      +-------------+
- *                 /|\                               |   |
- *                  |  Draw                          |   |  Draw
- *                  | w/ Aux                         |   | w/o Aux
- *                  |             Ambiguate          |   |
- *                  |   +----------------------------+   |
- *   Draw w/o Aux   |   |                                |   Draw w/o Aux
- *   +----------+   |   |                                |   +----------+
- *   |          |   |  \|/                              \|/  |          |
- *   |       +-------------+      Ambiguate       +-------------+       |
- *   +------>|    Pass-    |<---------------------|     Aux     |<------+
- *           |   through   |                      |   Invalid   |
- *           +-------------+                      +-------------+
+ *   |       +-------------+    Draw w/ Aux     +-------------+
+ *   +------>| Compressed  |<-------------------|    Clear    |
+ *           |  w/ Clear   |----->----+         |             |
+ *           +-------------+          |         +-------------+
+ *                  |  /|\            |            |   |
+ *                  |   |             |            |   |
+ *                  |   |             +------<-----+   |  Draw w/
+ *                  |   |             |                | Clear Only
+ *                  |   |      Full   |                |   +----------+
+ *          Partial |   |     Resolve |               \|/  |          |
+ *          Resolve |   |             |         +-------------+       |
+ *                  |   |             |         |   Partial   |<------+
+ *                  |   |             |         |    Clear    |<----------+
+ *                  |   |             |         +-------------+           |
+ *                  |   |             |                |                  |
+ *                  |   |             +------>---------+  Full            |
+ *                  |   |                              | Resolve          |
+ *   Draw w/ aux    |   |   Partial Fast Clear         |                  |
+ *   +----------+   |   +--------------------------+   |                  |
+ *   |          |  \|/                             |  \|/                 |
+ *   |       +-------------+    Full Resolve    +-------------+           |
+ *   +------>| Compressed  |------------------->|  Resolved   |           |
+ *           |  w/o Clear  |<-------------------|             |           |
+ *           +-------------+    Draw w/ Aux     +-------------+           |
+ *                 /|\                             |   |                  |
+ *                  |  Draw                        |   |  Draw            |
+ *                  | w/ Aux                       |   | w/o Aux          |
+ *                  |            Ambiguate         |   |                  |
+ *                  |   +--------------------------+   |                  |
+ *   Draw w/o Aux   |   |                              |   Draw w/o Aux   |
+ *   +----------+   |   |                              |   +----------+   |
+ *   |          |   |  \|/                            \|/  |          |   |
+ *   |       +-------------+     Ambiguate      +-------------+       |   |
+ *   +------>|    Pass-    |<-------------------|     Aux     |<------+   |
+ *   +------>|   through   |                    |   Invalid   |           |
+ *   |       +-------------+                    +-------------+           |
+ *   |          |   |                                                     |
+ *   +----------+   +-----------------------------------------------------+
+ *     Draw w/                       Partial Fast Clear
+ *    Clear Only
  *
  *
  * While the above general theory applies to all forms of auxiliary
@@ -742,7 +759,7 @@ enum isl_aux_usage {
  * CCS_D:   Single-sample fast-clears (also called CCS_D in ISL) are one of
  *          the simplest forms of compression since they don't do anything
  *          beyond clear color tracking.  They really only support three of
- *          the six states: Clear, Compressed w/ Clear, and Pass-through.  The
+ *          the six states: Clear, Partial Clear, and Pass-through.  The
  *          only CCS_D operation is "Resolve" which maps to a full resolve
  *          followed by an ambiguate.
  *
@@ -762,6 +779,7 @@ enum isl_aux_usage {
  */
 enum isl_aux_state {
    ISL_AUX_STATE_CLEAR = 0,
+   ISL_AUX_STATE_PARTIAL_CLEAR,
    ISL_AUX_STATE_COMPRESSED_CLEAR,
    ISL_AUX_STATE_COMPRESSED_NO_CLEAR,
    ISL_AUX_STATE_RESOLVED,
@@ -919,6 +937,10 @@ struct isl_device {
       uint8_t align;
       uint8_t addr_offset;
       uint8_t aux_addr_offset;
+
+      /* Rounded up to the nearest dword to simplify GPU memcpy operations. */
+      uint8_t clear_value_size;
+      uint8_t clear_value_offset;
    } ss;
 
    /**
@@ -1477,6 +1499,14 @@ isl_format_block_is_1x1x1(enum isl_format fmt)
 }
 
 static inline bool
+isl_format_is_srgb(enum isl_format fmt)
+{
+   return isl_format_layouts[fmt].colorspace == ISL_COLORSPACE_SRGB;
+}
+
+enum isl_format isl_format_srgb_to_linear(enum isl_format fmt);
+
+static inline bool
 isl_format_is_rgb(enum isl_format fmt)
 {
    return isl_format_layouts[fmt].channels.r.bits > 0 &&
@@ -1606,6 +1636,9 @@ isl_extent4d(uint32_t width, uint32_t height, uint32_t depth,
 
    return e;
 }
+
+bool isl_color_value_is_zero_one(union isl_color_value value,
+                                 enum isl_format format);
 
 #define isl_surf_init(dev, surf, ...) \
    isl_surf_init_s((dev), (surf), \
@@ -1807,6 +1840,29 @@ isl_surf_get_image_offset_B_tile_sa(const struct isl_surf *surf,
                                     uint32_t *offset_B,
                                     uint32_t *x_offset_sa,
                                     uint32_t *y_offset_sa);
+
+/**
+ * Create an isl_surf that represents a particular subimage in the surface.
+ *
+ * The newly created surface will have a single miplevel and array slice.  The
+ * surface lives at the returned byte and intratile offsets, in samples.
+ *
+ * It is safe to call this function with surf == image_surf.
+ *
+ * @invariant level < surface levels
+ * @invariant logical_array_layer < logical array length of surface
+ * @invariant logical_z_offset_px < logical depth of surface at level
+ */
+void
+isl_surf_get_image_surf(const struct isl_device *dev,
+                        const struct isl_surf *surf,
+                        uint32_t level,
+                        uint32_t logical_array_layer,
+                        uint32_t logical_z_offset_px,
+                        struct isl_surf *image_surf,
+                        uint32_t *offset_B,
+                        uint32_t *x_offset_sa,
+                        uint32_t *y_offset_sa);
 
 /**
  * @brief Calculate the intratile offsets to a surface.
