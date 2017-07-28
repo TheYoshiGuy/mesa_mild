@@ -33,8 +33,14 @@ pkgbuilddir="$mesasource/pkgbuild"
 function ask_clean {
 [ -d "${curdir}/mesa" ]  && Log "WARNING" "Please remove ${curdir}/mesa unless you know why you need it"
 [ -d "${curdir}/libdrm" ]  && Log "WARNING" "Please remove ${curdir}/libdrm  unless you know why you need it"
-[ -d "${curdir}/PKGBUILD" ]  && Log "WARNING" "Please remove ${curdir}/PKGBUILD  unless you know why you need it"
 }
+
+
+function pre_clean {
+[ -d "${curdir}/PKGBUILD" ]  && rm -rf ${curdir}/PKGBUILD
+}
+
+
 
 function Log {
 declare -A ColorStatus=( [CRITICAL]='\e[31m' [reset]='\e[39m' [NORMAL]='\e[39m' [OK]='\e[32m' [ATTENTION]='\e[31m'   [WARNING]='\e[33m' [INFO]='\e[36m'  )
@@ -55,19 +61,19 @@ function display_notices {
 }
 
 function die {
-  Log "CRITICAL" $message 
+  Log "CRITICAL" $message
   exit -1
 }
 
 function check_available {
   program=$1
-  which $program &> /dev/null 
+  which $program &> /dev/null
 }
 
 function program_check {
     Log "INFO" "Checking availability of required binaries"
 
-    for program in pacman makepkg sudo git gcc; do 
+    for program in pacman makepkg sudo gcc; do
         echo -n " > checking  $program :"
         check_available $program  || die "program $program must be installed";
         echo "ok"
@@ -84,9 +90,9 @@ function check_multilib_configured {
 
 function install_packages {
   Log "INFO" "Installing / updating packages"
-  pre_packages="llvm-svn llvm-ocaml-svn llvm-libs-svn  libclc-git  lib32-llvm-svn lib32-llvm-libs-svn clang-tools-extra-svn clang-svn libunwind lib32-libunwind"
-  sudo pacman -Syy  
-  sudo pacman -Sdd $pre_packages  --noconfirm --needed --force 
+  pre_packages="llvm-svn llvm-ocaml-svn llvm-libs-svn  libclc-git  lib32-llvm-svn lib32-llvm-libs-svn clang-tools-extra-svn clang-svn libunwind lib32-libunwindi git"
+  sudo pacman -Syy
+  sudo pacman -Sdd $pre_packages  --noconfirm --needed --force
 }
 
 function clone_repositories {
@@ -124,7 +130,7 @@ function build_and_install_libdrm {
     for directory in  ${PKGBUILD_LIBDRMDEST[*]}; do
         echo "building in $directory"
         cd $directory
-        makepkg -siCcf 
+        makepkg -siCcf
         cd ..;cd ..
     done
 }
@@ -133,7 +139,7 @@ function build_and_install_mesa {
     for directory in  ${PKGBUILD_MESADEST[*]}; do
         echo "building in $directory"
         cd $directory
-        makepkg -sCcf 
+        makepkg -sCcf
         sudo find .  -name "*.xz" -exec pacman -Udd {} --force \;
         cd ..;cd ..
     done
@@ -152,7 +158,7 @@ function mesa_revert {
 
 #MAIN
 trap "die 'Interrupted by user'" SIGHUP SIGINT SIGTERM
-ask_clean
+pre_clean
 display_notices
 pre_check
 program_check
