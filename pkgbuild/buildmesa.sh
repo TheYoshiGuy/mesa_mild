@@ -90,7 +90,7 @@ function check_multilib_configured {
 
 function install_packages {
   Log "INFO" "Installing / updating packages"
-  pre_packages="llvm-svn llvm-ocaml-svn llvm-libs-svn  libclc-git  lib32-llvm-svn lib32-llvm-libs-svn clang-tools-extra-svn clang-svn libunwind lib32-libunwindi git"
+  pre_packages="llvm-svn llvm-ocaml-svn llvm-libs-svn  libclc-git  lib32-llvm-svn lib32-llvm-libs-svn clang-tools-extra-svn clang-svn libunwind lib32-libunwind git"
   sudo pacman -Syy
   sudo pacman -Sdd $pre_packages  --noconfirm --needed --force
 }
