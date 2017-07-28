@@ -48,6 +48,7 @@
 #include "st_cb_fbo.h"
 #include "st_cb_flush.h"
 #include "st_manager.h"
+#include "st_sampler_view.h"
 
 #include "state_tracker/st_gl_api.h"
 
@@ -560,7 +561,7 @@ st_framebuffer_iface_remove(struct st_manager *smapi,
       (struct st_manager_private *)smapi->st_manager_private;
    struct hash_entry *entry;
 
-   if (!smPriv || !smPriv->stfbi_ht);
+   if (!smPriv || !smPriv->stfbi_ht)
       return;
 
    mtx_lock(&smPriv->st_mutex);
@@ -583,7 +584,7 @@ static void
 st_api_destroy_drawable(struct st_api *stapi,
                         struct st_framebuffer_iface *stfbi)
 {
-   if (stfbi)
+   if (!stfbi)
       return;
 
    st_framebuffer_iface_remove(stfbi->state_manager, stfbi);
@@ -642,6 +643,16 @@ st_context_flush(struct st_context_iface *stctxi, unsigned flags,
 
    if (flags & ST_FLUSH_FRONT)
       st_manager_flush_frontbuffer(st);
+
+   /* DRI3 changes the framebuffer after SwapBuffers, but we need to invoke
+    * st_manager_validate_framebuffers to notice that.
+    *
+    * Set gfx_shaders_may_be_dirty to invoke st_validate_state in the next
+    * draw call, which will invoke st_manager_validate_framebuffers, but it
+    * won't dirty states if there is no change.
+    */
+   if (flags & ST_FLUSH_END_OF_FRAME)
+      st->gfx_shaders_may_be_dirty = true;
 }
 
 static boolean
@@ -725,6 +736,7 @@ st_context_teximage(struct st_context_iface *stctxi,
    pipe_resource_reference(&stImage->pt, tex);
    stObj->surface_format = pipe_format;
 
+   st_texture_release_all_sampler_views(st, stObj);
    stObj->needs_validation = true;
 
    _mesa_dirty_texobj(ctx, texObj);

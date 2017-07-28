@@ -311,7 +311,7 @@ radv_physical_device_init(struct radv_physical_device *device,
 		goto fail;
 	}
 
-	if (radv_device_get_cache_uuid(device->rad_info.family, device->uuid)) {
+	if (radv_device_get_cache_uuid(device->rad_info.family, device->cache_uuid)) {
 		radv_finish_wsi(device);
 		device->ws->destroy(device->ws);
 		result = vk_errorf(VK_ERROR_INITIALIZATION_FAILED,
@@ -775,7 +775,7 @@ void radv_GetPhysicalDeviceProperties(
 	};
 
 	strcpy(pProperties->deviceName, pdevice->name);
-	memcpy(pProperties->pipelineCacheUUID, pdevice->uuid, VK_UUID_SIZE);
+	memcpy(pProperties->pipelineCacheUUID, pdevice->cache_uuid, VK_UUID_SIZE);
 }
 
 void radv_GetPhysicalDeviceProperties2KHR(
@@ -3246,6 +3246,8 @@ radv_initialise_ds_surface(struct radv_device *device,
 			ds->db_z_info |= S_028040_TILE_MODE_INDEX(tile_mode_index);
 			tile_mode_index = si_tile_mode_index(iview->image, level, true);
 			ds->db_stencil_info |= S_028044_TILE_MODE_INDEX(tile_mode_index);
+			if (stencil_only)
+				ds->db_z_info |= S_028040_TILE_MODE_INDEX(tile_mode_index);
 		}
 
 		ds->db_depth_size = S_028058_PITCH_TILE_MAX((level_info->nblk_x / 8) - 1) |
