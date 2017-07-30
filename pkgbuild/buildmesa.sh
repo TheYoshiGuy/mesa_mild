@@ -40,6 +40,31 @@ function pre_clean {
 [ -d "${curdir}/PKGBUILD" ]  && rm -rf ${curdir}/PKGBUILD
 }
 
+function check_mesagit_enabled {
+value=$(cat /etc/pacman.conf | grep -Ev '^#' | grep -q mesa-git && echo "enabled")
+
+if [ "x$value" != "xenabled" ];then
+  die "You must enable  [mesa-git] repository in /etc/pacman.conf"
+else
+  Log OK "Repository [mesa-git] is enabled"
+fi
+}
+
+
+function check_multilib_enabled {
+value=$(cat /etc/pacman.conf | grep -Ev '^#' | grep -q multilib && echo "enabled")
+
+if [ "x$value" != "xenabled" ];then
+  die "You must enable a [multilib] repository in /etc/pacman.conf"
+else
+  Log OK "Multilib is enabled"
+fi
+}
+
+function install_build_tools {
+sudo pacman --needed --noconfirm -S git $(pacman -Ss base-devel | grep base-devel | tr "/" " " | awk '{print $2}' | grep -v gcc | tr '\n' ' ')
+pacman -Q | grep -q gcc-multilib || (yes | LC_ALL=C sudo pacman -S  gcc-multilib)
+}
 
 
 function Log {
@@ -80,19 +105,11 @@ function program_check {
     done
 }
 
-function check_mesa_git_configured {
-  cat /etc/pacman.conf  |grep -E '(\[.*\])' |grep -v "#" |head -2 |tail -1
-}
-
-function check_multilib_configured {
-  cat /etc/pacman.conf  |grep -E '(\[.*\])' |grep -v "#" |grep -q multilib
-}
-
 function install_packages {
   Log "INFO" "Installing / updating packages"
-  pre_packages="llvm-svn llvm-ocaml-svn llvm-libs-svn  libclc-git  lib32-llvm-svn lib32-llvm-libs-svn clang-tools-extra-svn clang-svn libunwind lib32-libunwind git"
+  pre_packages="llvm-svn llvm-ocaml-svn llvm-libs-svn  libclc-git  lib32-llvm-svn lib32-llvm-libs-svn clang-tools-extra-svn clang-svn libunwind lib32-libunwind"
   sudo pacman -Syy
-  sudo pacman -Sdd $pre_packages  --noconfirm --needed --force
+  sudo pacman -S $pre_packages  --noconfirm --needed --force
 }
 
 function clone_repositories {
@@ -106,8 +123,6 @@ done
 
 function pre_check {
     [ $UID -eq 0 ] && die "This script must be ran by and normal user with sudo configured"
-    [ "x[mesa-git]" == "x$(check_mesa_git_configured)" ] || die "Mesa git must be in first position in /etc/pacman.conf"
-    check_multilib_configured || die "Multilib must be configured in /etc/pacman.conf"
 }
 
 function prebuild_all {
@@ -160,6 +175,9 @@ function mesa_revert {
 trap "die 'Interrupted by user'" SIGHUP SIGINT SIGTERM
 pre_clean
 display_notices
+check_multilib_enabled
+check_mesagit_enabled
+install_build_tools
 pre_check
 program_check
 install_packages
