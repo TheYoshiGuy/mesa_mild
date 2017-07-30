@@ -17,7 +17,7 @@ pkgrel=1
 arch=('x86_64')
 makedepends=('python2-mako' 'lib32-libxml2' 'lib32-libx11' 'glproto' 'lib32-libdrm' 'dri2proto' 'dri3proto' 'presentproto' 
              'lib32-libxshmfence' 'lib32-libxxf86vm'  'lib32-libxdamage' 'gcc-multilib' 'lib32-libvdpau' 'lib32-wayland' 'lib32-libelf' 'lib32-llvm-svn'
-              'git' 'lib32-libtxc_dxtn' 'lib32-libgcrypt' 'lib32-systemd'
+              'git' 'lib32-libtxc_dxtn' 'lib32-libgcrypt' 'lib32-systemd' 'lib32-libunwind' 'wayland-protocols'
               'mesa-git' 'lib32-llvm-libs-svn' )
 url="http://mesa3d.sourceforge.net"
 license=('custom')

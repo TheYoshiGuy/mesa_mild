@@ -18,7 +18,7 @@ arch=('x86_64')
 makedepends=('git' 'python2-mako' 'llvm-svn' 'libclc' 'clang-svn' 'libdrm' 'glproto'
              'dri2proto' 'dri3proto' 'presentproto' 'libxml2' 'libx11' 'libxshmfence' 
              'libxxf86vm'  'libxdamage' 'libvdpau' 'libva' 'wayland' 'elfutils' 'libomxil-bellagio'
-             'libtxc_dxtn' 'ocl-icd' 'vulkan-icd-loader' 'libgcrypt')
+             'libtxc_dxtn' 'ocl-icd' 'vulkan-icd-loader' 'libgcrypt' 'wayland-protocols')
 url="http://mesa3d.sourceforge.net"
 license=('custom')
 source=('mesa::git+https://github.com/mikakev1/mesa_mild_compatibility.git')
