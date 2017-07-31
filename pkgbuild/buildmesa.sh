@@ -145,7 +145,7 @@ function build_and_install_libdrm {
     for directory in  ${PKGBUILD_LIBDRMDEST[*]}; do
         echo "building in $directory"
         cd $directory
-        makepkg -siCcf
+        makepkg -siCcf --noconfirm
         cd ..;cd ..
     done
 }
@@ -154,7 +154,7 @@ function build_and_install_mesa {
     for directory in  ${PKGBUILD_MESADEST[*]}; do
         echo "building in $directory"
         cd $directory
-        makepkg -sCcf
+        makepkg -sCcf --noconfirm
         sudo find .  -name "*.xz" -exec pacman -Udd {} --force \;
         cd ..;cd ..
     done
