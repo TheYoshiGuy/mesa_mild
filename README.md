@@ -45,16 +45,6 @@ WINEDEBUG="+opengl" MESA_DEBUG=context MESA_GLSL=log  wine MyApplication.exe |& 
 of course you can prepend with a proper MESA_GL_VERSION_OVERRIDE.
 
 
-Note :
-
-This version is unsupported upstream, if it breaks your system, blame me, blame the world, but don't blame people from mesa's developpement team.
-
-They do an excellent job, and I do not :)
-
-http://www.phoronix.com/scan.php?page=article&item=amdgpu-1730-radeonsi&num=1
-
-
-
 Building :
 
 Just pay attention to libdrm's version, (and LLVM/CLANG, eventually)  all should be bleeding edge.
@@ -66,6 +56,11 @@ If you run archlinux's derivative, you can use the script buildmesa.sh available
 - You probably need to check your /etc/makepkg.conf options (CFLAGS, CXXFLAGS, LDFLAGS, MAKEFLAGS)
 
 
-NOTE: buildmesa.sh isn't supported, and is going to be deprecated in favor of a container based approach.
+Notes:
 
+ buildmesa.sh isn't supported, and is going to be deprecated in favor of a container based approach.
+
+ This version is unsupported upstream, if it breaks your system, blame me, blame the world, but don't blame people from mesa's developpement team.
+
+ They do an excellent job, and I do not :) [ http://www.phoronix.com/scan.php?page=article&item=amdgpu-1730-radeonsi&num=1 ]
 
