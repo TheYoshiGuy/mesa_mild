@@ -17,7 +17,7 @@ Some applications will require additionaly "Force GLSL extension behavior to 'wa
 
 Cemu specifics :
 
- - In the binary, replace "#version 420" with "#version 450"
+ - In the binary Cemu.exe, search & replace "#version 420" by "#version 450"
  - Enable "Force GLSL extension behavior to 'warn'" in driconf
  - If you're brave enough to use an intel IGD, you must set
 
@@ -28,6 +28,43 @@ In all cases, use  :
 
 MESA_GL_VERSION_OVERRIDE=4.5COMPAT wine Cemu.exe
 
+Others applications :
 
 
-If you run arch linux derivative, you can use the script buildmesa.sh available in pkgbuild subdirectoryi*might help*
+Somme applications need a compatibility profile, this fork can help, BUT
+Be sure to check at first (to cope with the burden of building this) if mesa is working, for this check perticulary :
+- That your tried with "Allow an higher compat profile for application that request it" enabled
+- That your tried to start the application with  MESA_GL_VERSION_OVERRIDE=4.5CCOMPAT environment's variable set
+
+
+Debugging :
+
+As ususal you can debug like this, for a wine application, (and fill entirely your storage at the same time) :
+WINEDEBUG="+opengl" MESA_DEBUG=context MESA_GLSL=log  wine MyApplication.exe |& tee -a logerr
+
+of course you can prepend with a proper MESA_GL_VERSION_OVERRIDE.
+
+
+Note :
+
+This version is unsupported upstream, if it breaks your system, blame me, blame the world, but don't blame people from mesa's developpement team.
+
+They do an excellent job, and I do not :)
+http://www.phoronix.com/scan.php?page=article&item=amdgpu-1730-radeonsi&num=1
+
+
+
+Building :
+
+Just pay attention to libdrm's version, (and LLVM/CLANG, eventually)  all should be bleeding edge.
+
+
+If you run archlinux's derivative, you can use the script buildmesa.sh available in pkgbuild subdirectory it *might help*:
+You need to have at least a [multilib] repository enabled  in /etc/pacman.conf
+You need to have [mesa-git] repository  enabled in /etc/pacman.conf
+You must check your /etc/makepkg.conf options
+
+
+NOTE: buildmesa.sh isn't supported, and is going to be deprecated in favor of a container based approach.
+
+
