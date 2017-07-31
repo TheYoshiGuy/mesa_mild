@@ -61,9 +61,9 @@ Just pay attention to libdrm's version, (and LLVM/CLANG, eventually)  all should
 
 
 If you run archlinux's derivative, you can use the script buildmesa.sh available in pkgbuild subdirectory it *might help*:
-You need to have at least a [multilib] repository enabled  in /etc/pacman.conf
-You need to have [mesa-git] repository  enabled in /etc/pacman.conf
-You must check your /etc/makepkg.conf options
+- You need to have at least a [multilib] repository enabled  in /etc/pacman.conf
+- You need to have [mesa-git] repository  enabled in /etc/pacman.conf
+- You probably need to check your /etc/makepkg.conf options (CFLAGS, CXXFLAGS, LDFLAGS, MAKEFLAGS)
 
 
 NOTE: buildmesa.sh isn't supported, and is going to be deprecated in favor of a container based approach.
