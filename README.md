@@ -50,6 +50,7 @@ Note :
 This version is unsupported upstream, if it breaks your system, blame me, blame the world, but don't blame people from mesa's developpement team.
 
 They do an excellent job, and I do not :)
+
 http://www.phoronix.com/scan.php?page=article&item=amdgpu-1730-radeonsi&num=1
 
 
