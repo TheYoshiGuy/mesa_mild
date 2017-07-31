@@ -22,7 +22,10 @@ Cemu specifics :
  - If you're brave enough to use an intel IGD, you must set
 
   MESA_VENDOR_OVERRIDE="mesa" MESA_RENDERER_OVERRIDE="mesa"
-  (if you endup with a letter box display, it means it's not set)
+
+
+  (Of course, unless you want to endup letter box display)
+
 
 In all cases, use  :
 
