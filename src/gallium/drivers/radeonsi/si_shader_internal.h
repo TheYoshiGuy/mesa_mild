@@ -29,6 +29,7 @@
 #include "gallivm/lp_bld_init.h"
 #include "gallivm/lp_bld_tgsi.h"
 #include "tgsi/tgsi_parse.h"
+#include "ac_shader_abi.h"
 #include "ac_llvm_util.h"
 #include "ac_llvm_build.h"
 
@@ -66,6 +67,8 @@ struct si_shader_context {
 
 	/* Whether the prolog will be compiled separately. */
 	bool separate_prolog;
+
+	struct ac_shader_abi abi;
 
 	/** This function is responsible for initilizing the inputs array and will be
 	  * called once for each input declared in the TGSI shader.
@@ -125,13 +128,8 @@ struct si_shader_context {
 	int param_merged_scratch_offset;
 	/* API VS */
 	int param_vertex_buffers;
-	int param_base_vertex;
-	int param_start_instance;
-	int param_draw_id;
-	int param_vertex_id;
 	int param_rel_auto_id;
 	int param_vs_prim_id;
-	int param_instance_id;
 	int param_vertex_index0;
 	/* VS states and layout of LS outputs / TCS inputs at the end
 	 *   [0] = clamp vertex color
@@ -247,6 +245,13 @@ si_shader_context(struct lp_build_tgsi_context *bld_base)
 	return (struct si_shader_context*)bld_base;
 }
 
+static inline struct si_shader_context *
+si_shader_context_from_abi(struct ac_shader_abi *abi)
+{
+	struct si_shader_context *ctx = NULL;
+	return container_of(abi, ctx, abi);
+}
+
 void si_llvm_add_attribute(LLVMValueRef F, const char *name, int value);
 
 unsigned si_llvm_compile(LLVMModuleRef M, struct ac_shader_binary *binary,
@@ -300,6 +305,9 @@ void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 
 void si_emit_waitcnt(struct si_shader_context *ctx, unsigned simm16);
 
+LLVMValueRef si_get_indirect_index(struct si_shader_context *ctx,
+				   const struct tgsi_ind_register *ind,
+				   int rel_index);
 LLVMValueRef si_get_bounded_indirect_index(struct si_shader_context *ctx,
 					   const struct tgsi_ind_register *ind,
 					   int rel_index, unsigned num);
@@ -308,5 +316,23 @@ LLVMTypeRef si_const_array(LLVMTypeRef elem_type, int num_elements);
 
 void si_shader_context_init_alu(struct lp_build_tgsi_context *bld_base);
 void si_shader_context_init_mem(struct si_shader_context *ctx);
+
+LLVMValueRef si_load_sampler_desc(struct si_shader_context *ctx,
+				  LLVMValueRef list, LLVMValueRef index,
+				  enum ac_descriptor_type type);
+LLVMValueRef si_load_image_desc(struct si_shader_context *ctx,
+				LLVMValueRef list, LLVMValueRef index,
+				enum ac_descriptor_type desc_type, bool dcc_off);
+
+void si_llvm_load_input_vs(
+	struct si_shader_context *ctx,
+	unsigned input_index,
+	LLVMValueRef out[4]);
+void si_llvm_load_input_fs(
+	struct si_shader_context *ctx,
+	unsigned input_index,
+	LLVMValueRef out[4]);
+
+bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir);
 
 #endif

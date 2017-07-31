@@ -34,6 +34,8 @@
 #include "vl/vl_decoder.h"
 #include "../ddebug/dd_util.h"
 
+#include "compiler/nir/nir.h"
+
 /*
  * pipe_context
  */
@@ -511,6 +513,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_BINDLESS_TEXTURE:
 	case PIPE_CAP_QUERY_TIMESTAMP:
 	case PIPE_CAP_QUERY_TIME_ELAPSED:
+	case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
 		return 1;
 
 	case PIPE_CAP_INT64:
@@ -553,6 +556,8 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 4;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
+		if (sscreen->b.debug_flags & DBG_NIR)
+			return 140; /* no geometry and tessellation shaders yet */
 		if (si_have_tgsi_compute(sscreen))
 			return 450;
 		return 420;
@@ -750,6 +755,10 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
 		return 32;
 	case PIPE_SHADER_CAP_PREFERRED_IR:
+		if (sscreen->b.debug_flags & DBG_NIR &&
+		    (shader == PIPE_SHADER_VERTEX ||
+		     shader == PIPE_SHADER_FRAGMENT))
+			return PIPE_SHADER_IR_NIR;
 		return PIPE_SHADER_IR_TGSI;
 	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
 		return 3;
@@ -787,6 +796,36 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 		return 0;
 	}
 	return 0;
+}
+
+static const struct nir_shader_compiler_options nir_options = {
+	.vertex_id_zero_based = true,
+	.lower_scmp = true,
+	.lower_flrp32 = true,
+	.lower_fsat = true,
+	.lower_fdiv = true,
+	.lower_sub = true,
+	.lower_pack_snorm_2x16 = true,
+	.lower_pack_snorm_4x8 = true,
+	.lower_pack_unorm_2x16 = true,
+	.lower_pack_unorm_4x8 = true,
+	.lower_unpack_snorm_2x16 = true,
+	.lower_unpack_snorm_4x8 = true,
+	.lower_unpack_unorm_2x16 = true,
+	.lower_unpack_unorm_4x8 = true,
+	.lower_extract_byte = true,
+	.lower_extract_word = true,
+	.max_unroll_iterations = 32,
+	.native_integers = true,
+};
+
+static const void *
+si_get_compiler_options(struct pipe_screen *screen,
+			enum pipe_shader_ir ir,
+			enum pipe_shader_type shader)
+{
+	assert(ir == PIPE_SHADER_IR_NIR);
+	return &nir_options;
 }
 
 static void si_destroy_screen(struct pipe_screen* pscreen)
@@ -940,6 +979,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	sscreen->b.b.destroy = si_destroy_screen;
 	sscreen->b.b.get_param = si_get_param;
 	sscreen->b.b.get_shader_param = si_get_shader_param;
+	sscreen->b.b.get_compiler_options = si_get_compiler_options;
 	sscreen->b.b.resource_create = r600_resource_create_common;
 
 	si_init_screen_state_functions(sscreen);

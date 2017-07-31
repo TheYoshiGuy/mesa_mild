@@ -67,7 +67,7 @@
 /* Debug flags. */
 /* logging */
 #define DBG_TEX			(1 << 0)
-/* gap - reuse */
+#define DBG_NIR			(1 << 1)
 #define DBG_COMPUTE		(1 << 2)
 #define DBG_VM			(1 << 3)
 /* gap - reuse */
@@ -587,6 +587,7 @@ struct r600_common_context {
 	unsigned			num_cs_dw_queries_suspend;
 	/* Misc stats. */
 	unsigned			num_draw_calls;
+	unsigned			num_mrt_draw_calls;
 	unsigned			num_prim_restart_calls;
 	unsigned			num_spill_draw_calls;
 	unsigned			num_compute_calls;
