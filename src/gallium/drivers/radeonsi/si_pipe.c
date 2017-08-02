@@ -31,6 +31,7 @@
 #include "util/u_memory.h"
 #include "util/u_suballoc.h"
 #include "util/u_tests.h"
+#include "util/xmlconfig.h"
 #include "vl/vl_decoder.h"
 #include "../ddebug/dd_util.h"
 
@@ -514,6 +515,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_QUERY_TIMESTAMP:
 	case PIPE_CAP_QUERY_TIME_ELAPSED:
 	case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
+	case PIPE_CAP_QUERY_SO_OVERFLOW:
 		return 1;
 
 	case PIPE_CAP_INT64:
@@ -965,7 +967,7 @@ static void si_test_vmfault(struct si_screen *sscreen)
 }
 
 struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
-					   unsigned flags)
+					   const struct pipe_screen_config *config)
 {
 	struct si_screen *sscreen = CALLOC_STRUCT(si_screen);
 	unsigned num_threads, num_compiler_threads, num_compiler_threads_lowprio, i;
@@ -984,12 +986,15 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 
 	si_init_screen_state_functions(sscreen);
 
-	if (!r600_common_screen_init(&sscreen->b, ws, flags) ||
+	if (!r600_common_screen_init(&sscreen->b, ws, config->flags) ||
 	    !si_init_gs_info(sscreen) ||
 	    !si_init_shader_cache(sscreen)) {
 		FREE(sscreen);
 		return NULL;
 	}
+
+	if (driQueryOptionb(config->options, "radeonsi_enable_sisched"))
+		sscreen->b.debug_flags |= DBG_SI_SCHED;
 
 	/* Only enable as many threads as we have target machines, but at most
 	 * the number of CPUs - 1 if there is more than one.

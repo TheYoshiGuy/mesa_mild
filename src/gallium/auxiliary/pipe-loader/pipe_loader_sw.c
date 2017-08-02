@@ -282,8 +282,7 @@ pipe_loader_sw_release(struct pipe_loader_device **dev)
       close(sdev->fd);
 #endif
 
-   FREE(sdev);
-   *dev = NULL;
+   pipe_loader_base_release(dev);
 }
 
 static const struct drm_conf_ret *
@@ -295,7 +294,7 @@ pipe_loader_sw_configuration(struct pipe_loader_device *dev,
 
 static struct pipe_screen *
 pipe_loader_sw_create_screen(struct pipe_loader_device *dev,
-                             unsigned flags)
+                             const struct pipe_screen_config *config)
 {
    struct pipe_loader_sw_device *sdev = pipe_loader_sw_device(dev);
    struct pipe_screen *screen;

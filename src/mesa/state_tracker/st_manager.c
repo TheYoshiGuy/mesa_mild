@@ -48,7 +48,6 @@
 #include "st_cb_fbo.h"
 #include "st_cb_flush.h"
 #include "st_manager.h"
-#include "st_sampler_view.h"
 
 #include "state_tracker/st_gl_api.h"
 
@@ -736,7 +735,6 @@ st_context_teximage(struct st_context_iface *stctxi,
    pipe_resource_reference(&stImage->pt, tex);
    stObj->surface_format = pipe_format;
 
-   st_texture_release_all_sampler_views(st, stObj);
    stObj->needs_validation = true;
 
    _mesa_dirty_texobj(ctx, texObj);
@@ -1038,11 +1036,15 @@ st_manager_flush_frontbuffer(struct st_context *st)
 
    if (stfb)
       strb = st_renderbuffer(stfb->Base.Attachment[BUFFER_FRONT_LEFT].Renderbuffer);
-   if (!strb)
-      return;
 
-   /* never a dummy fb */
-   stfb->iface->flush_front(&st->iface, stfb->iface, ST_ATTACHMENT_FRONT_LEFT);
+   /* Do we have a front color buffer and has it been drawn to since last
+    * frontbuffer flush?
+    */
+   if (strb && strb->defined) {
+      stfb->iface->flush_front(&st->iface, stfb->iface,
+                               ST_ATTACHMENT_FRONT_LEFT);
+      strb->defined = GL_FALSE;
+   }
 }
 
 /**

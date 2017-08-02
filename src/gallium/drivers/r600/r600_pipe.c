@@ -399,6 +399,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_POST_DEPTH_COVERAGE:
 	case PIPE_CAP_BINDLESS_TEXTURE:
 	case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
+	case PIPE_CAP_QUERY_SO_OVERFLOW:
 		return 0;
 
 	case PIPE_CAP_DOUBLES:
@@ -633,7 +634,8 @@ static struct pipe_resource *r600_resource_create(struct pipe_screen *screen,
 	return r600_resource_create_common(screen, templ);
 }
 
-struct pipe_screen *r600_screen_create(struct radeon_winsys *ws, unsigned flags)
+struct pipe_screen *r600_screen_create(struct radeon_winsys *ws,
+				       const struct pipe_screen_config *config)
 {
 	struct r600_screen *rscreen = CALLOC_STRUCT(r600_screen);
 
@@ -648,7 +650,7 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws, unsigned flags)
 	rscreen->b.b.get_shader_param = r600_get_shader_param;
 	rscreen->b.b.resource_create = r600_resource_create;
 
-	if (!r600_common_screen_init(&rscreen->b, ws, flags)) {
+	if (!r600_common_screen_init(&rscreen->b, ws, config->flags)) {
 		FREE(rscreen);
 		return NULL;
 	}

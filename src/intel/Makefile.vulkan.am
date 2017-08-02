@@ -24,11 +24,17 @@
 # out and we'll fail at `make dist'
 vulkan_api_xml = $(top_srcdir)/src/vulkan/registry/vk.xml
 
-vulkan/anv_entrypoints.c: vulkan/anv_entrypoints_gen.py $(vulkan_api_xml)
+vulkan/anv_entrypoints.c: vulkan/anv_entrypoints_gen.py \
+			  vulkan/anv_extensions.py $(vulkan_api_xml)
 	$(MKDIR_GEN)
 	$(AM_V_GEN)$(PYTHON2) $(srcdir)/vulkan/anv_entrypoints_gen.py \
 		--xml $(vulkan_api_xml) --outdir $(builddir)/vulkan
 vulkan/anv_entrypoints.h: vulkan/anv_entrypoints.c
+
+vulkan/anv_extensions.c: vulkan/anv_extensions.py $(vulkan_api_xml)
+	$(MKDIR_GEN)
+	$(AM_V_GEN)$(PYTHON2) $(srcdir)/vulkan/anv_extensions.py \
+		--xml $(vulkan_api_xml) --out $@
 
 BUILT_SOURCES += $(VULKAN_GENERATED_FILES)
 CLEANFILES += \
@@ -39,6 +45,7 @@ CLEANFILES += \
 EXTRA_DIST += \
 	$(top_srcdir)/include/vulkan/vk_icd.h \
 	vulkan/anv_entrypoints_gen.py \
+	vulkan/anv_extensions.py \
 	vulkan/dev_icd.json.in \
 	vulkan/intel_icd.json.in \
 	vulkan/TODO

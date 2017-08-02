@@ -59,6 +59,7 @@ struct pipe_transfer;
 struct pipe_box;
 struct pipe_memory_info;
 struct disk_cache;
+struct driOptionCache;
 
 
 /**
@@ -357,6 +358,15 @@ struct pipe_screen {
                                   enum pipe_format format, int max,
                                   uint64_t *modifiers,
                                   unsigned int *external_only, int *count);
+};
+
+
+/**
+ * Global configuration options for screen creation.
+ */
+struct pipe_screen_config {
+   unsigned flags;
+   const struct driOptionCache *options;
 };
 
 

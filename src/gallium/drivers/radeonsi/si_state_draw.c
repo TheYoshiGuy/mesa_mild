@@ -1145,10 +1145,10 @@ void si_ce_pre_draw_synchronization(struct si_context *sctx)
 {
 	if (sctx->ce_need_synchronization) {
 		radeon_emit(sctx->ce_ib, PKT3(PKT3_INCREMENT_CE_COUNTER, 0, 0));
-		radeon_emit(sctx->ce_ib, 1);
+		radeon_emit(sctx->ce_ib, 1); /* 1 = increment CE counter */
 
 		radeon_emit(sctx->b.gfx.cs, PKT3(PKT3_WAIT_ON_CE_COUNTER, 0, 0));
-		radeon_emit(sctx->b.gfx.cs, 1);
+		radeon_emit(sctx->b.gfx.cs, 0); /* 0 = don't flush sL1 conditionally */
 	}
 }
 
@@ -1156,7 +1156,7 @@ void si_ce_post_draw_synchronization(struct si_context *sctx)
 {
 	if (sctx->ce_need_synchronization) {
 		radeon_emit(sctx->b.gfx.cs, PKT3(PKT3_INCREMENT_DE_COUNTER, 0, 0));
-		radeon_emit(sctx->b.gfx.cs, 0);
+		radeon_emit(sctx->b.gfx.cs, 0); /* unused */
 
 		sctx->ce_need_synchronization = false;
 	}
@@ -1409,6 +1409,7 @@ void si_trace_emit(struct si_context *sctx)
 	sctx->trace_id++;
 	radeon_add_to_buffer_list(&sctx->b, &sctx->b.gfx, sctx->trace_buf,
 			      RADEON_USAGE_READWRITE, RADEON_PRIO_TRACE);
+
 	radeon_emit(cs, PKT3(PKT3_WRITE_DATA, 3, 0));
 	radeon_emit(cs, S_370_DST_SEL(V_370_MEMORY_SYNC) |
 		    S_370_WR_CONFIRM(1) |
@@ -1418,4 +1419,18 @@ void si_trace_emit(struct si_context *sctx)
 	radeon_emit(cs, sctx->trace_id);
 	radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 	radeon_emit(cs, AC_ENCODE_TRACE_POINT(sctx->trace_id));
+
+	if (sctx->ce_ib) {
+		struct radeon_winsys_cs *ce = sctx->ce_ib;
+
+		radeon_emit(ce, PKT3(PKT3_WRITE_DATA, 3, 0));
+		radeon_emit(ce, S_370_DST_SEL(V_370_MEM_ASYNC) |
+			    S_370_WR_CONFIRM(1) |
+			    S_370_ENGINE_SEL(V_370_CE));
+		radeon_emit(ce, sctx->trace_buf->gpu_address + 4);
+		radeon_emit(ce, (sctx->trace_buf->gpu_address + 4) >> 32);
+		radeon_emit(ce, sctx->trace_id);
+		radeon_emit(ce, PKT3(PKT3_NOP, 0, 0));
+		radeon_emit(ce, AC_ENCODE_TRACE_POINT(sctx->trace_id));
+	}
 }
