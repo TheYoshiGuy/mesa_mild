@@ -572,7 +572,7 @@ struct PA_STATE_CUT : public PA_STATE
     {
         uint32_t vertexIndex = vertex / SIMD_WIDTH;
         uint32_t vertexOffset = vertex & (SIMD_WIDTH - 1);
-        return _bittest((const LONG*)&this->pCutIndices[vertexIndex], vertexOffset) == 1;
+        return CheckBit(this->pCutIndices[vertexIndex], vertexOffset);
     }
 
     // iterates across the unprocessed verts until we hit the end or we 
@@ -703,7 +703,9 @@ struct PA_STATE_CUT : public PA_STATE
 #if USE_SIMD16_FRONTEND
                 simd16scalar temp = _simd16_i32gather_ps(pBase, offsets, 1);
 
-                verts[v].v[c] = useAlternateOffset ? _simd16_extract_ps(temp, 1) : _simd16_extract_ps(temp, 0);
+                // Assigning to a temporary first to avoid an MSVC 2017 compiler bug
+                simdscalar t = useAlternateOffset ? _simd16_extract_ps(temp, 1) : _simd16_extract_ps(temp, 0);
+                verts[v].v[c] = t;
 #else
                 verts[v].v[c] = _simd_i32gather_ps(pBase, offsets, 1);
 #endif

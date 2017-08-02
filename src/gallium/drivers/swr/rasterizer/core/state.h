@@ -577,6 +577,12 @@ struct SWR_FETCH_CONTEXT
     uint32_t StartInstance;                     // IN: start instance
     simdscalari VertexID;                       // OUT: vector of vertex IDs
     simdscalari CutMask;                        // OUT: vector mask of indices which have the cut index value
+#if USE_SIMD16_SHADERS
+//    simd16scalari VertexID;                     // OUT: vector of vertex IDs
+//    simd16scalari CutMask;                      // OUT: vector mask of indices which have the cut index value
+    simdscalari VertexID2;                      // OUT: vector of vertex IDs
+    simdscalari CutMask2;                       // OUT: vector mask of indices which have the cut index value
+#endif
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -830,7 +836,11 @@ static_assert(sizeof(SWR_BLEND_STATE) == 36, "Invalid SWR_BLEND_STATE size");
 //////////////////////////////////////////////////////////////////////////
 /// FUNCTION POINTERS FOR SHADERS
 
+#if USE_SIMD16_SHADERS
+typedef void(__cdecl *PFN_FETCH_FUNC)(SWR_FETCH_CONTEXT& fetchInfo, simd16vertex& out);
+#else
 typedef void(__cdecl *PFN_FETCH_FUNC)(SWR_FETCH_CONTEXT& fetchInfo, simdvertex& out);
+#endif
 typedef void(__cdecl *PFN_VERTEX_FUNC)(HANDLE hPrivateData, SWR_VS_CONTEXT* pVsContext);
 typedef void(__cdecl *PFN_HS_FUNC)(HANDLE hPrivateData, SWR_HS_CONTEXT* pHsContext);
 typedef void(__cdecl *PFN_DS_FUNC)(HANDLE hPrivateData, SWR_DS_CONTEXT* pDsContext);
@@ -842,7 +852,7 @@ typedef void(__cdecl *PFN_CPIXEL_KERNEL)(HANDLE hPrivateData, SWR_PS_CONTEXT *pC
 typedef void(__cdecl *PFN_BLEND_JIT_FUNC)(const SWR_BLEND_STATE*, 
     simdvector& vSrc, simdvector& vSrc1, simdscalar& vSrc0Alpha, uint32_t sample, 
     uint8_t* pDst, simdvector& vResult, simdscalari* vOMask, simdscalari* vCoverageMask);
-typedef simdscalar(*PFN_QUANTIZE_DEPTH)(simdscalar);
+typedef simdscalar(*PFN_QUANTIZE_DEPTH)(simdscalar const &);
 
 
 

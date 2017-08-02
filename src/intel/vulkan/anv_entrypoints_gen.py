@@ -30,9 +30,7 @@ import xml.etree.cElementTree as et
 
 from mako.template import Template
 
-import anv_extensions
-
-MAX_API_VERSION = 1.0
+from anv_extensions import *
 
 # We generate a static hash table for entry point lookup
 # (vkGetProcAddress). We use a linear congruential generator for our hash
@@ -262,13 +260,13 @@ def get_entrypoints(doc, entrypoints_to_defines):
     enabled_commands = set()
     for feature in doc.findall('./feature'):
         assert feature.attrib['api'] == 'vulkan'
-        if float(feature.attrib['number']) > MAX_API_VERSION:
+        if VkVersion(feature.attrib['number']) > MAX_API_VERSION:
             continue
 
         for command in feature.findall('./require/command'):
             enabled_commands.add(command.attrib['name'])
 
-    supported = set(ext.name for ext in anv_extensions.EXTENSIONS)
+    supported = set(ext.name for ext in EXTENSIONS)
     for extension in doc.findall('.extensions/extension'):
         if extension.attrib['name'] not in supported:
             continue

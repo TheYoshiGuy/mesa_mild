@@ -481,7 +481,7 @@ static INLINE simdscalari GenerateMask(uint32_t numItemsRemaining)
 {
     uint32_t numActive = (numItemsRemaining >= KNOB_SIMD_WIDTH) ? KNOB_SIMD_WIDTH : numItemsRemaining;
     uint32_t mask = (numActive > 0) ? ((1 << numActive) - 1) : 0;
-    return _simd_castps_si(vMask(mask));
+    return _simd_castps_si(_simd_vmask_ps(mask));
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -770,7 +770,7 @@ static void GeometryShaderStage(
 #if USE_SIMD16_FRONTEND
     uint32_t numPrims_simd8,
 #endif
-    simdscalari primID)
+    simdscalari const &primID)
 {
     SWR_CONTEXT *pContext = pDC->pContext;
 
@@ -1069,7 +1069,7 @@ static void TessellationStages(
 #if USE_SIMD16_FRONTEND
     uint32_t numPrims_simd8,
 #endif
-    simdscalari primID)
+    simdscalari const &primID)
 {
     SWR_CONTEXT *pContext = pDC->pContext;
     const API_STATE& state = GetApiState(pDC);
@@ -1332,7 +1332,7 @@ static void TessellationStages(
     TSDestroyCtx(tsCtx);
 }
 
-THREAD PA_STATE::SIMDVERTEX *pVertexStore = nullptr;
+THREAD PA_STATE::SIMDVERTEX *gpVertexStore = nullptr;
 THREAD uint32_t gVertexStoreSize = 0;
 
 //////////////////////////////////////////////////////////////////////////
@@ -1459,29 +1459,41 @@ void ProcessDraw(
     // grow the vertex store for the PA as necessary
     if (gVertexStoreSize < vertexStoreSize)
     {
-        if (pVertexStore != nullptr)
+        if (gpVertexStore != nullptr)
         {
-            AlignedFree(pVertexStore);
+            AlignedFree(gpVertexStore);
+            gpVertexStore = nullptr;
         }
 
-        pVertexStore = reinterpret_cast<PA_STATE::SIMDVERTEX *>(AlignedMalloc(vertexStoreSize, 64));
+        SWR_ASSERT(gpVertexStore == nullptr);
+
+        gpVertexStore = reinterpret_cast<PA_STATE::SIMDVERTEX *>(AlignedMalloc(vertexStoreSize, 64));
         gVertexStoreSize = vertexStoreSize;
 
-        SWR_ASSERT(pVertexStore != nullptr);
+        SWR_ASSERT(gpVertexStore != nullptr);
     }
 
     // choose primitive assembler
-    PA_FACTORY<IsIndexedT, IsCutIndexEnabledT> paFactory(pDC, state.topology, work.numVerts, pVertexStore, numVerts, state.frontendState.vsVertexSize);
+    PA_FACTORY<IsIndexedT, IsCutIndexEnabledT> paFactory(pDC, state.topology, work.numVerts, gpVertexStore, numVerts, state.frontendState.vsVertexSize);
     PA_STATE& pa = paFactory.GetPA();
 
 #if USE_SIMD16_FRONTEND
+#if USE_SIMD16_SHADERS
+    simd16vertex        vin;
+#else
     simdvertex          vin_lo;
     simdvertex          vin_hi;
+#endif
     SWR_VS_CONTEXT      vsContext_lo;
     SWR_VS_CONTEXT      vsContext_hi;
 
+#if USE_SIMD16_SHADERS
+    vsContext_lo.pVin = reinterpret_cast<simdvertex *>(&vin);
+    vsContext_hi.pVin = reinterpret_cast<simdvertex *>(&vin);
+#else
     vsContext_lo.pVin = &vin_lo;
     vsContext_hi.pVin = &vin_hi;
+#endif
     vsContext_lo.AlternateOffset = 0;
     vsContext_hi.AlternateOffset = 1;
 
@@ -1562,17 +1574,31 @@ void ProcessDraw(
             {
                 // 1. Execute FS/VS for a single SIMD.
                 AR_BEGIN(FEFetchShader, pDC->drawId);
+#if USE_SIMD16_SHADERS
+                state.pfnFetchFunc(fetchInfo_lo, vin);
+#else
                 state.pfnFetchFunc(fetchInfo_lo, vin_lo);
 
                 if ((i + KNOB_SIMD_WIDTH) < endVertex)  // 1/2 of KNOB_SIMD16_WIDTH
                 {
                     state.pfnFetchFunc(fetchInfo_hi, vin_hi);
                 }
+#endif
                 AR_END(FEFetchShader, 0);
 
                 // forward fetch generated vertex IDs to the vertex shader
+#if USE_SIMD16_SHADERS
+#if 0
+                vsContext_lo.VertexID = _simd16_extract(fetchInfo_lo.VertexID, 0);
+                vsContext_hi.VertexID = _simd16_extract(fetchInfo_lo.VertexID, 1);
+#else
+                vsContext_lo.VertexID = fetchInfo_lo.VertexID;
+                vsContext_hi.VertexID = fetchInfo_lo.VertexID2;
+#endif
+#else
                 vsContext_lo.VertexID = fetchInfo_lo.VertexID;
                 vsContext_hi.VertexID = fetchInfo_hi.VertexID;
+#endif
 
                 // Setup active mask for vertex shader.
                 vsContext_lo.mask = GenerateMask(endVertex - i);
@@ -1581,8 +1607,18 @@ void ProcessDraw(
                 // forward cut mask to the PA
                 if (IsIndexedT::value)
                 {
+#if USE_SIMD16_SHADERS
+#if 0
+                    *pvCutIndices_lo = _simd_movemask_ps(_simd_castsi_ps(_simd16_extract(fetchInfo_lo.CutMask, 0)));
+                    *pvCutIndices_hi = _simd_movemask_ps(_simd_castsi_ps(_simd16_extract(fetchInfo_lo.CutMask, 1)));
+#else
+                    *pvCutIndices_lo = _simd_movemask_ps(_simd_castsi_ps(fetchInfo_lo.CutMask));
+                    *pvCutIndices_hi = _simd_movemask_ps(_simd_castsi_ps(fetchInfo_lo.CutMask2));
+#endif
+#else
                     *pvCutIndices_lo = _simd_movemask_ps(_simd_castsi_ps(fetchInfo_lo.CutMask));
                     *pvCutIndices_hi = _simd_movemask_ps(_simd_castsi_ps(fetchInfo_hi.CutMask));
+#endif
                 }
 
                 UPDATE_STAT_FE(IaVertices, GetNumInvocations(i, endVertex));
