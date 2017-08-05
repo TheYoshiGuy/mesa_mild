@@ -390,12 +390,6 @@ enum pipe_flush_flags
  */
 #define PIPE_CONTEXT_PREFER_THREADED   (1 << 3)
 
-/**
- * Implicit and explicit derivatives after KILL behave as if KILL didn't
- * happen.
- */
-#define PIPE_SCREEN_ENABLE_CORRECT_TGSI_DERIVATIVES_AFTER_KILL (1 << 0)
-
 
 /**
  * Flags for pipe_context::memory_barrier.
@@ -783,6 +777,7 @@ enum pipe_cap
    PIPE_CAP_BINDLESS_TEXTURE,
    PIPE_CAP_NIR_SAMPLERS_AS_DEREF,
    PIPE_CAP_QUERY_SO_OVERFLOW,
+   PIPE_CAP_MEMOBJ,
 };
 
 #define PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50 (1 << 0)

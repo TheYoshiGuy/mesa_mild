@@ -861,6 +861,21 @@ dri2_flush_frontbuffer(struct dri_context *ctx,
    }
 }
 
+/**
+ * The struct dri_drawable flush_swapbuffers callback
+ */
+static void
+dri2_flush_swapbuffers(struct dri_context *ctx,
+                       struct dri_drawable *drawable)
+{
+   __DRIdrawable *dri_drawable = drawable->dPriv;
+   const __DRIimageLoaderExtension *image = drawable->sPriv->image.loader;
+
+   if (image && image->base.version >= 3 && image->flushSwapBuffers) {
+      image->flushSwapBuffers(dri_drawable, dri_drawable->loaderPrivate);
+   }
+}
+
 static void
 dri2_update_tex_buffer(struct dri_drawable *drawable,
                        struct dri_context *ctx,
@@ -2056,12 +2071,9 @@ dri2_init_screen(__DRIscreen * sPriv)
 
 
    if (pipe_loader_drm_probe_fd(&screen->dev, fd)) {
-      struct pipe_screen_config config = {};
+      dri_init_options(screen);
 
-      config.flags =
-         dri_init_options_get_screen_flags(screen);
-
-      pscreen = pipe_loader_create_screen(screen->dev, &config);
+      pscreen = pipe_loader_create_screen(screen->dev);
    }
 
    if (!pscreen)
@@ -2152,12 +2164,10 @@ dri_kms_init_screen(__DRIscreen * sPriv)
    if (screen->fd < 0 || (fd = fcntl(screen->fd, F_DUPFD_CLOEXEC, 3)) < 0)
       goto free_screen;
 
-   struct pipe_screen_config config = {};
-
-   config.flags = dri_init_options_get_screen_flags(screen);
+   dri_init_options(screen);
 
    if (pipe_loader_sw_probe_kms(&screen->dev, fd))
-      pscreen = pipe_loader_create_screen(screen->dev, &config);
+      pscreen = pipe_loader_create_screen(screen->dev);
 
    if (!pscreen)
        goto release_pipe;
@@ -2218,6 +2228,7 @@ dri2_create_buffer(__DRIscreen * sPriv,
    drawable->allocate_textures = dri2_allocate_textures;
    drawable->flush_frontbuffer = dri2_flush_frontbuffer;
    drawable->update_tex_buffer = dri2_update_tex_buffer;
+   drawable->flush_swapbuffers = dri2_flush_swapbuffers;
 
    return TRUE;
 }

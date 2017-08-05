@@ -95,10 +95,12 @@ dri_loader_get_cap(struct dri_screen *screen, enum dri_loader_cap cap)
    const __DRIdri2LoaderExtension *dri2_loader = screen->sPriv->dri2.loader;
    const __DRIimageLoaderExtension *image_loader = screen->sPriv->image.loader;
 
-   if (dri2_loader && dri2_loader->base.version >= 4)
+   if (dri2_loader && dri2_loader->base.version >= 4 &&
+       dri2_loader->getCapability)
       return dri2_loader->getCapability(screen->sPriv->loaderPrivate, cap);
 
-   if (image_loader && image_loader->base.version >= 2)
+   if (image_loader && image_loader->base.version >= 2 &&
+       image_loader->getCapability)
       return image_loader->getCapability(screen->sPriv->loaderPrivate, cap);
 
    return 0;
@@ -478,20 +480,12 @@ dri_set_background_context(struct st_context_iface *st,
       hud_add_queue_for_monitoring(ctx->hud, queue_info);
 }
 
-unsigned
-dri_init_options_get_screen_flags(struct dri_screen *screen)
+void
+dri_init_options(struct dri_screen *screen)
 {
-   unsigned flags = 0;
-
    pipe_loader_load_options(screen->dev);
 
    dri_fill_st_options(screen);
-
-   if (driQueryOptionb(&screen->dev->option_cache,
-                       "glsl_correct_derivatives_after_discard"))
-      flags |= PIPE_SCREEN_ENABLE_CORRECT_TGSI_DERIVATIVES_AFTER_KILL;
-
-   return flags;
 }
 
 const __DRIconfig **

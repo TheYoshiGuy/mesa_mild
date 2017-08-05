@@ -62,7 +62,7 @@ intel_batchbuffer_init(struct intel_batchbuffer *batch,
                        struct brw_bufmgr *bufmgr,
                        bool has_llc)
 {
-   intel_batchbuffer_reset(batch, bufmgr, has_llc);
+   struct brw_context *brw = container_of(batch, brw, batch);
 
    if (!has_llc) {
       batch->cpu_map = malloc(BATCH_SZ);
@@ -85,6 +85,60 @@ intel_batchbuffer_init(struct intel_batchbuffer *batch,
       batch->state_batch_sizes =
          _mesa_hash_table_create(NULL, uint_key_hash, uint_key_compare);
    }
+
+   batch->use_batch_first =
+      brw->screen->kernel_features & KERNEL_ALLOWS_EXEC_BATCH_FIRST;
+
+   /* PIPE_CONTROL needs a w/a but only on gen6 */
+   batch->valid_reloc_flags = EXEC_OBJECT_WRITE;
+   if (brw->gen == 6)
+      batch->valid_reloc_flags |= EXEC_OBJECT_NEEDS_GTT;
+
+   intel_batchbuffer_reset(batch, bufmgr, has_llc);
+}
+
+#define READ_ONCE(x) (*(volatile __typeof__(x) *)&(x))
+
+static unsigned
+add_exec_bo(struct intel_batchbuffer *batch, struct brw_bo *bo)
+{
+   unsigned index = READ_ONCE(bo->index);
+
+   if (index < batch->exec_count && batch->exec_bos[index] == bo)
+      return index;
+
+   /* May have been shared between multiple active batches */
+   for (index = 0; index < batch->exec_count; index++) {
+      if (batch->exec_bos[index] == bo)
+         return index;
+   }
+
+   if (bo != batch->bo)
+      brw_bo_reference(bo);
+
+   if (batch->exec_count == batch->exec_array_size) {
+      batch->exec_array_size *= 2;
+      batch->exec_bos =
+         realloc(batch->exec_bos,
+                 batch->exec_array_size * sizeof(batch->exec_bos[0]));
+      batch->validation_list =
+         realloc(batch->validation_list,
+                 batch->exec_array_size * sizeof(batch->validation_list[0]));
+   }
+
+   batch->validation_list[batch->exec_count] =
+      (struct drm_i915_gem_exec_object2) {
+         .handle = bo->gem_handle,
+         .alignment = bo->align,
+         .offset = bo->offset64,
+         .flags = bo->kflags,
+      };
+
+   bo->index = batch->exec_count;
+   batch->exec_bos[batch->exec_count] = bo;
+   batch->aperture_space += bo->size;
+
+   return batch->exec_count++;
 }
 
 static void
@@ -103,6 +157,9 @@ intel_batchbuffer_reset(struct intel_batchbuffer *batch,
       batch->map = brw_bo_map(NULL, batch->bo, MAP_READ | MAP_WRITE);
    }
    batch->map_next = batch->map;
+
+   add_exec_bo(batch, batch->bo);
+   assert(batch->bo->index == 0);
 
    batch->reserved_space = BATCH_RESERVED;
    batch->state_batch_offset = batch->bo->size;
@@ -509,49 +566,6 @@ throttle(struct brw_context *brw)
    }
 }
 
-static void
-add_exec_bo(struct intel_batchbuffer *batch, struct brw_bo *bo)
-{
-   if (bo != batch->bo) {
-      for (int i = 0; i < batch->exec_count; i++) {
-         if (batch->exec_bos[i] == bo)
-            return;
-      }
-
-      brw_bo_reference(bo);
-   }
-
-   if (batch->exec_count == batch->exec_array_size) {
-      batch->exec_array_size *= 2;
-      batch->exec_bos =
-         realloc(batch->exec_bos,
-                 batch->exec_array_size * sizeof(batch->exec_bos[0]));
-      batch->validation_list =
-         realloc(batch->validation_list,
-                 batch->exec_array_size * sizeof(batch->validation_list[0]));
-   }
-
-   struct drm_i915_gem_exec_object2 *validation_entry =
-      &batch->validation_list[batch->exec_count];
-   validation_entry->handle = bo->gem_handle;
-   if (bo == batch->bo) {
-      validation_entry->relocation_count = batch->reloc_count;
-      validation_entry->relocs_ptr = (uintptr_t) batch->relocs;
-   } else {
-      validation_entry->relocation_count = 0;
-      validation_entry->relocs_ptr = 0;
-   }
-   validation_entry->alignment = bo->align;
-   validation_entry->offset = bo->offset64;
-   validation_entry->flags = bo->kflags;
-   validation_entry->rsvd1 = 0;
-   validation_entry->rsvd2 = 0;
-
-   batch->exec_bos[batch->exec_count] = bo;
-   batch->exec_count++;
-   batch->aperture_space += bo->size;
-}
-
 static int
 execbuffer(int fd,
            struct intel_batchbuffer *batch,
@@ -591,6 +605,7 @@ execbuffer(int fd,
       struct brw_bo *bo = batch->exec_bos[i];
 
       bo->idle = false;
+      bo->index = -1;
 
       /* Update brw_bo::offset64 */
       if (batch->validation_list[i].offset != bo->offset64) {
@@ -626,12 +641,24 @@ do_flush_locked(struct brw_context *brw, int in_fence_fd, int *out_fence_fd)
    }
 
    if (!brw->screen->no_hw) {
-      int flags;
+      /* The requirement for using I915_EXEC_NO_RELOC are:
+       *
+       *   The addresses written in the objects must match the corresponding
+       *   reloc.presumed_offset which in turn must match the corresponding
+       *   execobject.offset.
+       *
+       *   Any render targets written to in the batch must be flagged with
+       *   EXEC_OBJECT_WRITE.
+       *
+       *   To avoid stalling, execobject.offset should match the current
+       *   address of that object within the active context.
+       */
+      int flags = I915_EXEC_NO_RELOC;
 
       if (brw->gen >= 6 && batch->ring == BLT_RING) {
-         flags = I915_EXEC_BLT;
+         flags |= I915_EXEC_BLT;
       } else {
-         flags = I915_EXEC_RENDER;
+         flags |= I915_EXEC_RENDER;
       }
       if (batch->needs_sol_reset)
 	 flags |= I915_EXEC_GEN7_SOL_RESET;
@@ -639,8 +666,22 @@ do_flush_locked(struct brw_context *brw, int in_fence_fd, int *out_fence_fd)
       if (ret == 0) {
          uint32_t hw_ctx = batch->ring == RENDER_RING ? brw->hw_ctx : 0;
 
-         /* Add the batch itself to the end of the validation list */
-         add_exec_bo(batch, batch->bo);
+         struct drm_i915_gem_exec_object2 *entry = &batch->validation_list[0];
+         assert(entry->handle == batch->bo->gem_handle);
+         entry->relocation_count = batch->reloc_count;
+         entry->relocs_ptr = (uintptr_t) batch->relocs;
+
+         if (batch->use_batch_first) {
+            flags |= I915_EXEC_BATCH_FIRST | I915_EXEC_HANDLE_LUT;
+         } else {
+            /* Move the batch to the end of the validation list */
+            struct drm_i915_gem_exec_object2 tmp;
+            const unsigned index = batch->exec_count - 1;
+
+            tmp = *entry;
+            *entry = batch->validation_list[index];
+            batch->validation_list[index] = tmp;
+         }
 
          ret = execbuffer(dri_screen->fd, batch, hw_ctx,
                           4 * USED_BATCH(*batch),
@@ -736,6 +777,10 @@ brw_batch_has_aperture_space(struct brw_context *brw, unsigned extra_space)
 bool
 brw_batch_references(struct intel_batchbuffer *batch, struct brw_bo *bo)
 {
+   unsigned index = READ_ONCE(bo->index);
+   if (index < batch->exec_count && batch->exec_bos[index] == bo)
+      return true;
+
    for (int i = 0; i < batch->exec_count; i++) {
       if (batch->exec_bos[i] == bo)
          return true;
@@ -748,9 +793,9 @@ brw_batch_references(struct intel_batchbuffer *batch, struct brw_bo *bo)
 uint64_t
 brw_emit_reloc(struct intel_batchbuffer *batch, uint32_t batch_offset,
                struct brw_bo *target, uint32_t target_offset,
-               uint32_t read_domains, uint32_t write_domain)
+               unsigned int reloc_flags)
 {
-   uint64_t offset64;
+   assert(target != NULL);
 
    if (batch->reloc_count == batch->reloc_array_size) {
       batch->reloc_array_size *= 2;
@@ -761,30 +806,26 @@ brw_emit_reloc(struct intel_batchbuffer *batch, uint32_t batch_offset,
 
    /* Check args */
    assert(batch_offset <= BATCH_SZ - sizeof(uint32_t));
-   assert(_mesa_bitcount(write_domain) <= 1);
 
-   if (target != batch->bo)
-      add_exec_bo(batch, target);
+   unsigned int index = add_exec_bo(batch, target);
+   struct drm_i915_gem_exec_object2 *entry = &batch->validation_list[index];
 
-   struct drm_i915_gem_relocation_entry *reloc =
-      &batch->relocs[batch->reloc_count];
+   if (reloc_flags)
+      entry->flags |= reloc_flags & batch->valid_reloc_flags;
 
-   batch->reloc_count++;
-
-   /* ensure gcc doesn't reload */
-   offset64 = *((volatile uint64_t *)&target->offset64);
-   reloc->offset = batch_offset;
-   reloc->delta = target_offset;
-   reloc->target_handle = target->gem_handle;
-   reloc->read_domains = read_domains;
-   reloc->write_domain = write_domain;
-   reloc->presumed_offset = offset64;
+   batch->relocs[batch->reloc_count++] =
+      (struct drm_i915_gem_relocation_entry) {
+         .offset = batch_offset,
+         .delta = target_offset,
+         .target_handle = batch->use_batch_first ? index : target->gem_handle,
+         .presumed_offset = entry->offset,
+      };
 
    /* Using the old buffer offset, write in what the right data would be, in
     * case the buffer doesn't move and we can short-circuit the relocation
     * processing in the kernel
     */
-   return offset64 + target_offset;
+   return entry->offset + target_offset;
 }
 
 void
@@ -801,7 +842,6 @@ static void
 load_sized_register_mem(struct brw_context *brw,
                         uint32_t reg,
                         struct brw_bo *bo,
-                        uint32_t read_domains, uint32_t write_domain,
                         uint32_t offset,
                         int size)
 {
@@ -815,7 +855,7 @@ load_sized_register_mem(struct brw_context *brw,
       for (i = 0; i < size; i++) {
          OUT_BATCH(GEN7_MI_LOAD_REGISTER_MEM | (4 - 2));
          OUT_BATCH(reg + i * 4);
-         OUT_RELOC64(bo, read_domains, write_domain, offset + i * 4);
+         OUT_RELOC64(bo, 0, offset + i * 4);
       }
       ADVANCE_BATCH();
    } else {
@@ -823,7 +863,7 @@ load_sized_register_mem(struct brw_context *brw,
       for (i = 0; i < size; i++) {
          OUT_BATCH(GEN7_MI_LOAD_REGISTER_MEM | (3 - 2));
          OUT_BATCH(reg + i * 4);
-         OUT_RELOC(bo, read_domains, write_domain, offset + i * 4);
+         OUT_RELOC(bo, 0, offset + i * 4);
       }
       ADVANCE_BATCH();
    }
@@ -833,20 +873,18 @@ void
 brw_load_register_mem(struct brw_context *brw,
                       uint32_t reg,
                       struct brw_bo *bo,
-                      uint32_t read_domains, uint32_t write_domain,
                       uint32_t offset)
 {
-   load_sized_register_mem(brw, reg, bo, read_domains, write_domain, offset, 1);
+   load_sized_register_mem(brw, reg, bo, offset, 1);
 }
 
 void
 brw_load_register_mem64(struct brw_context *brw,
                         uint32_t reg,
                         struct brw_bo *bo,
-                        uint32_t read_domains, uint32_t write_domain,
                         uint32_t offset)
 {
-   load_sized_register_mem(brw, reg, bo, read_domains, write_domain, offset, 2);
+   load_sized_register_mem(brw, reg, bo, offset, 2);
 }
 
 /*
@@ -862,15 +900,13 @@ brw_store_register_mem32(struct brw_context *brw,
       BEGIN_BATCH(4);
       OUT_BATCH(MI_STORE_REGISTER_MEM | (4 - 2));
       OUT_BATCH(reg);
-      OUT_RELOC64(bo, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-                  offset);
+      OUT_RELOC64(bo, RELOC_WRITE, offset);
       ADVANCE_BATCH();
    } else {
       BEGIN_BATCH(3);
       OUT_BATCH(MI_STORE_REGISTER_MEM | (3 - 2));
       OUT_BATCH(reg);
-      OUT_RELOC(bo, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-                offset);
+      OUT_RELOC(bo, RELOC_WRITE | RELOC_NEEDS_GGTT, offset);
       ADVANCE_BATCH();
    }
 }
@@ -891,23 +927,19 @@ brw_store_register_mem64(struct brw_context *brw,
       BEGIN_BATCH(8);
       OUT_BATCH(MI_STORE_REGISTER_MEM | (4 - 2));
       OUT_BATCH(reg);
-      OUT_RELOC64(bo, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-                  offset);
+      OUT_RELOC64(bo, RELOC_WRITE, offset);
       OUT_BATCH(MI_STORE_REGISTER_MEM | (4 - 2));
       OUT_BATCH(reg + sizeof(uint32_t));
-      OUT_RELOC64(bo, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-                  offset + sizeof(uint32_t));
+      OUT_RELOC64(bo, RELOC_WRITE, offset + sizeof(uint32_t));
       ADVANCE_BATCH();
    } else {
       BEGIN_BATCH(6);
       OUT_BATCH(MI_STORE_REGISTER_MEM | (3 - 2));
       OUT_BATCH(reg);
-      OUT_RELOC(bo, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-                offset);
+      OUT_RELOC(bo, RELOC_WRITE | RELOC_NEEDS_GGTT, offset);
       OUT_BATCH(MI_STORE_REGISTER_MEM | (3 - 2));
       OUT_BATCH(reg + sizeof(uint32_t));
-      OUT_RELOC(bo, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-                offset + sizeof(uint32_t));
+      OUT_RELOC(bo, RELOC_WRITE | RELOC_NEEDS_GGTT, offset + sizeof(uint32_t));
       ADVANCE_BATCH();
    }
 }
@@ -989,12 +1021,10 @@ brw_store_data_imm32(struct brw_context *brw, struct brw_bo *bo,
    BEGIN_BATCH(4);
    OUT_BATCH(MI_STORE_DATA_IMM | (4 - 2));
    if (brw->gen >= 8)
-      OUT_RELOC64(bo, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-                  offset);
+      OUT_RELOC64(bo, RELOC_WRITE, offset);
    else {
       OUT_BATCH(0); /* MBZ */
-      OUT_RELOC(bo, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-                offset);
+      OUT_RELOC(bo, RELOC_WRITE, offset);
    }
    OUT_BATCH(imm);
    ADVANCE_BATCH();
@@ -1012,12 +1042,10 @@ brw_store_data_imm64(struct brw_context *brw, struct brw_bo *bo,
    BEGIN_BATCH(5);
    OUT_BATCH(MI_STORE_DATA_IMM | (5 - 2));
    if (brw->gen >= 8)
-      OUT_RELOC64(bo, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-                  offset);
+      OUT_RELOC64(bo, 0, offset);
    else {
       OUT_BATCH(0); /* MBZ */
-      OUT_RELOC(bo, I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-                offset);
+      OUT_RELOC(bo, RELOC_WRITE, offset);
    }
    OUT_BATCH(imm & 0xffffffffu);
    OUT_BATCH(imm >> 32);

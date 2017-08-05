@@ -951,7 +951,9 @@ XXX doesn't look like most of the opcodes really belong here.
   image or PIPE_BUFFER resource. The source sampler may not be a CUBE or
   SHADOW.  src 0 is a
   four-component signed integer vector used to identify the single texel
-  accessed. 3 components + level.  Just like texture instructions, an optional
+  accessed. 3 components + level.  If the texture is multisampled, then
+  the fourth component indicates the sample, not the mipmap level.
+  Just like texture instructions, an optional
   offset vector is provided, which is subject to various driver restrictions
   (regarding range, source of offsets). This instruction ignores the sampler
   state.
@@ -3331,6 +3333,9 @@ contains the current sample id (i.e. gl_SampleID) as an unsigned int.
 Only the X component is used.  If per-sample shading is not enabled,
 the result is (0, undef, undef, undef).
 
+Note that if the fragment shader uses this system value, the fragment
+shader is automatically executed at per sample frequency.
+
 TGSI_SEMANTIC_SAMPLEPOS
 """""""""""""""""""""""
 
@@ -3339,6 +3344,9 @@ value contains the current sample's position as float4(x, y, undef, undef)
 in the render target (i.e.  gl_SamplePosition) when per-fragment shading
 is in effect.  Position values are in the range [0, 1] where 0.5 is
 the center of the fragment.
+
+Note that if the fragment shader uses this system value, the fragment
+shader is automatically executed at per sample frequency.
 
 TGSI_SEMANTIC_SAMPLEMASK
 """"""""""""""""""""""""

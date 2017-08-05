@@ -188,7 +188,7 @@ static const struct __DRI2flushExtensionRec intelFlushExtension = {
     .flush_with_flags   = intel_dri2_flush_with_flags,
 };
 
-static struct intel_image_format intel_image_formats[] = {
+static const struct intel_image_format intel_image_formats[] = {
    { __DRI_IMAGE_FOURCC_ARGB8888, __DRI_IMAGE_COMPONENTS_RGBA, 1,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB8888, 4 } } },
 
@@ -347,19 +347,15 @@ intel_image_warn_if_unaligned(__DRIimage *image, const char *func)
    }
 }
 
-static struct intel_image_format *
+static const struct intel_image_format *
 intel_image_format_lookup(int fourcc)
 {
-   struct intel_image_format *f = NULL;
-
    for (unsigned i = 0; i < ARRAY_SIZE(intel_image_formats); i++) {
-      if (intel_image_formats[i].fourcc == fourcc) {
-	 f = &intel_image_formats[i];
-	 break;
-      }
+      if (intel_image_formats[i].fourcc == fourcc)
+         return &intel_image_formats[i];
    }
 
-   return f;
+   return NULL;
 }
 
 static boolean intel_lookup_fourcc(int dri_format, int *fourcc)
@@ -819,7 +815,7 @@ intel_create_image_from_names(__DRIscreen *dri_screen,
                               int *strides, int *offsets,
                               void *loaderPrivate)
 {
-    struct intel_image_format *f = NULL;
+    const struct intel_image_format *f = NULL;
     __DRIimage *image;
     int i, index;
 
@@ -856,7 +852,7 @@ intel_create_image_from_fds_common(__DRIscreen *dri_screen,
                                    void *loaderPrivate)
 {
    struct intel_screen *screen = dri_screen->driverPrivate;
-   struct intel_image_format *f;
+   const struct intel_image_format *f;
    __DRIimage *image;
    int i, index;
    bool ok;
@@ -993,7 +989,7 @@ intel_create_image_from_dma_bufs2(__DRIscreen *dri_screen,
                                   void *loaderPrivate)
 {
    __DRIimage *image;
-   struct intel_image_format *f = intel_image_format_lookup(fourcc);
+   const struct intel_image_format *f = intel_image_format_lookup(fourcc);
 
    if (!f) {
       *error = __DRI_IMAGE_ERROR_BAD_MATCH;
@@ -1076,7 +1072,7 @@ intel_query_dma_buf_modifiers(__DRIscreen *_screen, int fourcc, int max,
                               int *count)
 {
    struct intel_screen *screen = _screen->driverPrivate;
-   struct intel_image_format *f;
+   const struct intel_image_format *f;
    int num_mods = 0, i;
 
    f = intel_image_format_lookup(fourcc);
@@ -1118,7 +1114,7 @@ static __DRIimage *
 intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
 {
     int width, height, offset, stride, dri_format, index;
-    struct intel_image_format *f;
+    const struct intel_image_format *f;
     __DRIimage *image;
 
     if (parent == NULL || parent->planar_format == NULL)
@@ -2268,11 +2264,12 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
    }
 
    /* Kernel 4.13 retuired for exec object capture */
-#ifndef I915_PARAM_HAS_EXEC_CAPTURE
-#define I915_PARAM_HAS_EXEC_CAPTURE 45
-#endif
    if (intel_get_boolean(screen, I915_PARAM_HAS_EXEC_CAPTURE)) {
       screen->kernel_features |= KERNEL_ALLOWS_EXEC_CAPTURE;
+   }
+
+   if (intel_get_boolean(screen, I915_PARAM_HAS_EXEC_BATCH_FIRST)) {
+      screen->kernel_features |= KERNEL_ALLOWS_EXEC_BATCH_FIRST;
    }
 
    if (!intel_detect_pipelined_so(screen)) {

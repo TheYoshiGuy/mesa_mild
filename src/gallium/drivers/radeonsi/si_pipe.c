@@ -605,6 +605,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_UMA:
 	case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
 	case PIPE_CAP_POST_DEPTH_COVERAGE:
+	case PIPE_CAP_MEMOBJ:
 		return 0;
 
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
@@ -986,15 +987,21 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 
 	si_init_screen_state_functions(sscreen);
 
-	if (!r600_common_screen_init(&sscreen->b, ws, config->flags) ||
+	/* Set these flags in debug_flags early, so that the shader cache takes
+	 * them into account.
+	 */
+	if (driQueryOptionb(config->options,
+			    "glsl_correct_derivatives_after_discard"))
+		sscreen->b.debug_flags |= DBG_FS_CORRECT_DERIVS_AFTER_KILL;
+	if (driQueryOptionb(config->options, "radeonsi_enable_sisched"))
+		sscreen->b.debug_flags |= DBG_SI_SCHED;
+
+	if (!r600_common_screen_init(&sscreen->b, ws) ||
 	    !si_init_gs_info(sscreen) ||
 	    !si_init_shader_cache(sscreen)) {
 		FREE(sscreen);
 		return NULL;
 	}
-
-	if (driQueryOptionb(config->options, "radeonsi_enable_sisched"))
-		sscreen->b.debug_flags |= DBG_SI_SCHED;
 
 	/* Only enable as many threads as we have target machines, but at most
 	 * the number of CPUs - 1 if there is more than one.

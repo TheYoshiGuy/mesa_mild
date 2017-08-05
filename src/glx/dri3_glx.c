@@ -86,22 +86,6 @@ loader_drawable_to_dri3_drawable(struct loader_dri3_drawable *draw) {
    return (struct dri3_drawable *)(((void*) draw) - offset);
 }
 
-static int
-glx_dri3_get_swap_interval(struct loader_dri3_drawable *draw)
-{
-   struct dri3_drawable *priv = loader_drawable_to_dri3_drawable(draw);
-
-   return priv->swap_interval;
-}
-
-static void
-glx_dri3_set_swap_interval(struct loader_dri3_drawable *draw, int interval)
-{
-   struct dri3_drawable *priv = loader_drawable_to_dri3_drawable(draw);
-
-   priv->swap_interval = interval;
-}
-
 static void
 glx_dri3_set_drawable_size(struct loader_dri3_drawable *draw,
                            int width, int height)
@@ -173,8 +157,6 @@ glx_dri3_show_fps(struct loader_dri3_drawable *draw, uint64_t current_ust)
 }
 
 static const struct loader_dri3_vtable glx_dri3_vtable = {
-   .get_swap_interval = glx_dri3_get_swap_interval,
-   .set_swap_interval = glx_dri3_set_swap_interval,
    .set_drawable_size = glx_dri3_set_drawable_size,
    .in_current_context = glx_dri3_in_current_context,
    .get_dri_context = glx_dri3_get_dri_context,
@@ -495,6 +477,33 @@ dri3_flush_front_buffer(__DRIdrawable *driDrawable, void *loaderPrivate)
    loader_dri3_wait_gl(draw);
 }
 
+/**
+ * Make sure all pending swapbuffers have been submitted to hardware
+ *
+ * \param driDrawable[in]  Pointer to the dri drawable whose swaps we are
+ * flushing.
+ * \param loaderPrivate[in]  Pointer to the corresponding struct
+ * loader_dri_drawable.
+ */
+static void
+dri3_flush_swap_buffers(__DRIdrawable *driDrawable, void *loaderPrivate)
+{
+   struct loader_dri3_drawable *draw = loaderPrivate;
+   struct dri3_drawable *pdraw = loader_drawable_to_dri3_drawable(draw);
+   struct dri3_screen *psc;
+
+   if (!pdraw)
+      return;
+
+   if (!pdraw->base.psc)
+      return;
+
+   psc = (struct dri3_screen *) pdraw->base.psc;
+
+   (void) __glXInitialize(psc->base.dpy);
+   loader_dri3_swapbuffer_barrier(draw);
+}
+
 static void
 dri_set_background_context(void *loaderPrivate)
 {
@@ -514,10 +523,11 @@ dri_is_thread_safe(void *loaderPrivate)
 /* The image loader extension record for DRI3
  */
 static const __DRIimageLoaderExtension imageLoaderExtension = {
-   .base = { __DRI_IMAGE_LOADER, 1 },
+   .base = { __DRI_IMAGE_LOADER, 3 },
 
    .getBuffers          = loader_dri3_get_buffers,
    .flushFrontBuffer    = dri3_flush_front_buffer,
+   .flushSwapBuffers    = dri3_flush_swap_buffers,
 };
 
 const __DRIuseInvalidateExtension dri3UseInvalidate = {
@@ -609,6 +619,7 @@ dri3_set_swap_interval(__GLXDRIdrawable *pdraw, int interval)
       break;
    }
 
+   priv->swap_interval = interval;
    loader_dri3_set_swap_interval(&priv->loader_drawable, interval);
 
    return 0;

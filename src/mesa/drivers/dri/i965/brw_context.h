@@ -451,12 +451,14 @@ struct intel_batchbuffer {
 
    uint32_t state_batch_offset;
    enum brw_gpu_ring ring;
+   bool use_batch_first;
    bool needs_sol_reset;
    bool state_base_address_emitted;
 
    struct drm_i915_gem_relocation_entry *relocs;
    int reloc_count;
    int reloc_array_size;
+   unsigned int valid_reloc_flags;
 
    /** The validation list */
    struct drm_i915_gem_exec_object2 *validation_list;
@@ -1320,12 +1322,10 @@ bool brw_check_conditional_render(struct brw_context *brw);
 void brw_load_register_mem(struct brw_context *brw,
                            uint32_t reg,
                            struct brw_bo *bo,
-                           uint32_t read_domains, uint32_t write_domain,
                            uint32_t offset);
 void brw_load_register_mem64(struct brw_context *brw,
                              uint32_t reg,
                              struct brw_bo *bo,
-                             uint32_t read_domains, uint32_t write_domain,
                              uint32_t offset);
 void brw_store_register_mem32(struct brw_context *brw,
                               struct brw_bo *bo, uint32_t reg, uint32_t offset);

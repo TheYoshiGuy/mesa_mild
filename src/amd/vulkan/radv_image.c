@@ -108,7 +108,6 @@ radv_init_surface(struct radv_device *device,
 	if (is_stencil)
 		surface->flags |= RADEON_SURF_SBUFFER;
 
-	surface->flags |= RADEON_SURF_HAS_TILE_MODE_INDEX;
 	surface->flags |= RADEON_SURF_OPTIMIZE_FOR_SPACE;
 
 	if ((pCreateInfo->usage & (VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
@@ -218,7 +217,8 @@ si_set_mutable_tex_desc_fields(struct radv_device *device,
 
 	state[0] = va >> 8;
 	if (chip_class < GFX9)
-		state[0] |= image->surface.u.legacy.tile_swizzle;
+		if (base_level_info->mode == RADEON_SURF_MODE_2D)
+			state[0] |= image->surface.tile_swizzle;
 	state[1] &= C_008F14_BASE_ADDRESS_HI;
 	state[1] |= S_008F14_BASE_ADDRESS_HI(va >> 40);
 	state[3] |= S_008F1C_TILING_INDEX(si_tile_mode_index(image, base_level,
@@ -235,7 +235,7 @@ si_set_mutable_tex_desc_fields(struct radv_device *device,
 			state[6] |= S_008F28_COMPRESSION_EN(1);
 			state[7] = meta_va >> 8;
 			if (chip_class < GFX9)
-				state[7] |= image->surface.u.legacy.tile_swizzle;
+				state[7] |= image->surface.tile_swizzle;
 		}
 	}
 
@@ -484,7 +484,7 @@ si_make_texture_descriptor(struct radv_device *device,
 
 		fmask_state[0] = va >> 8;
 		if (device->physical_device->rad_info.chip_class < GFX9)
-			fmask_state[0] |= image->surface.u.legacy.tile_swizzle;
+			fmask_state[0] |= image->surface.tile_swizzle;
 		fmask_state[1] = S_008F14_BASE_ADDRESS_HI(va >> 40) |
 			S_008F14_DATA_FORMAT_GFX6(fmask_format) |
 			S_008F14_NUM_FORMAT_GFX6(num_format);
@@ -810,7 +810,7 @@ radv_image_create(VkDevice _device,
 	image->shareable = vk_find_struct_const(pCreateInfo->pNext,
 	                                        EXTERNAL_MEMORY_IMAGE_CREATE_INFO_KHR) != NULL;
 	if (!vk_format_is_depth(pCreateInfo->format) && !create_info->scanout && !image->shareable) {
-		image->info.surf_index = p_atomic_inc_return(&device->image_mrt_offset_counter) - 1;
+		image->info.surf_index = &device->image_mrt_offset_counter;
 	}
 
 	radv_init_surface(device, &image->surface, create_info);
