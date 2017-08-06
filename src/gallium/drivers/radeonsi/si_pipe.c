@@ -516,6 +516,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_QUERY_TIME_ELAPSED:
 	case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
 	case PIPE_CAP_QUERY_SO_OVERFLOW:
+	case PIPE_CAP_MEMOBJ:
 		return 1;
 
 	case PIPE_CAP_INT64:
@@ -605,7 +606,6 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_UMA:
 	case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
 	case PIPE_CAP_POST_DEPTH_COVERAGE:
-	case PIPE_CAP_MEMOBJ:
 		return 0;
 
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
@@ -967,6 +967,18 @@ static void si_test_vmfault(struct si_screen *sscreen)
 	exit(0);
 }
 
+static void radeonsi_get_driver_uuid(struct pipe_screen *pscreen, char *uuid)
+{
+	ac_compute_driver_uuid(uuid, PIPE_UUID_SIZE);
+}
+
+static void radeonsi_get_device_uuid(struct pipe_screen *pscreen, char *uuid)
+{
+	struct r600_common_screen *rscreen = (struct r600_common_screen *)pscreen;
+
+	ac_compute_device_uuid(&rscreen->info, uuid, PIPE_UUID_SIZE);
+}
+
 struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 					   const struct pipe_screen_config *config)
 {
@@ -983,6 +995,8 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	sscreen->b.b.get_param = si_get_param;
 	sscreen->b.b.get_shader_param = si_get_shader_param;
 	sscreen->b.b.get_compiler_options = si_get_compiler_options;
+	sscreen->b.b.get_device_uuid = radeonsi_get_device_uuid;
+	sscreen->b.b.get_driver_uuid = radeonsi_get_driver_uuid;
 	sscreen->b.b.resource_create = r600_resource_create_common;
 
 	si_init_screen_state_functions(sscreen);
