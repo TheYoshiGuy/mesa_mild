@@ -20,11 +20,28 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef DRI_EXTENSIONS_H
-#define DRI_EXTENSIONS_H
+#ifndef DRI_HELPERS_H
+#define DRI_HELPERS_H
+
+#include "dri_context.h"
+#include "dri_screen.h"
 
 extern const __DRI2fenceExtension dri2FenceExtension;
 
+__DRIimage *
+dri2_lookup_egl_image(struct dri_screen *screen, void *handle);
+
+__DRIimage *
+dri2_create_image_from_renderbuffer(__DRIcontext *context,
+				    int renderbuffer, void *loaderPrivate);
+
+void
+dri2_destroy_image(__DRIimage *img);
+
+__DRIimage *
+dri2_create_from_texture(__DRIcontext *context, int target, unsigned texture,
+                         int depth, int level, unsigned *error,
+                         void *loaderPrivate);
 #endif
 
 /* vim: set sw=3 ts=8 sts=3 expandtab: */

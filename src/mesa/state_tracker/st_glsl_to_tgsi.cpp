@@ -1575,7 +1575,7 @@ glsl_to_tgsi_visitor::visit(ir_expression *ir)
    if (ir->operation == ir_quadop_vector)
       assert(!"ir_quadop_vector should have been lowered");
 
-   for (unsigned int operand = 0; operand < ir->get_num_operands(); operand++) {
+   for (unsigned int operand = 0; operand < ir->num_operands; operand++) {
       this->result.file = PROGRAM_UNDEFINED;
       ir->operands[operand]->accept(this);
       if (this->result.file == PROGRAM_UNDEFINED) {
@@ -2835,7 +2835,7 @@ glsl_to_tgsi_visitor::visit(ir_dereference_array *ir)
    int element_size = type_size(ir->type);
    bool is_2D = false;
 
-   index = ir->array_index->constant_expression_value();
+   index = ir->array_index->constant_expression_value(ralloc_parent(ir));
 
    ir->array->accept(this);
    src = this->result;
@@ -2927,8 +2927,9 @@ glsl_to_tgsi_visitor::visit(ir_dereference_record *ir)
 
    ir->record->accept(this);
 
+   assert(ir->field_idx >= 0);
    for (i = 0; i < struct_type->length; i++) {
-      if (strcmp(struct_type->fields.structure[i].name, ir->field) == 0)
+      if (i == (unsigned) ir->field_idx)
          break;
       offset += type_size(struct_type->fields.structure[i].type);
    }
@@ -2990,7 +2991,7 @@ glsl_to_tgsi_visitor::process_move_condition(ir_rvalue *ir)
    ir_expression *const expr = ir->as_expression();
 
    if (native_integers) {
-      if ((expr != NULL) && (expr->get_num_operands() == 2)) {
+      if ((expr != NULL) && (expr->num_operands == 2)) {
          enum glsl_base_type type = expr->operands[0]->type->base_type;
          if (type == GLSL_TYPE_INT || type == GLSL_TYPE_UINT ||
              type == GLSL_TYPE_BOOL) {
@@ -3019,7 +3020,7 @@ glsl_to_tgsi_visitor::process_move_condition(ir_rvalue *ir)
       return switch_order;
    }
 
-   if ((expr != NULL) && (expr->get_num_operands() == 2)) {
+   if ((expr != NULL) && (expr->num_operands == 2)) {
       bool zero_on_left = false;
 
       if (expr->operands[0]->is_zero()) {
@@ -3784,23 +3785,20 @@ get_image_qualifiers(ir_dereference *ir, const glsl_type **type,
    switch (ir->ir_type) {
    case ir_type_dereference_record: {
       ir_dereference_record *deref_record = ir->as_dereference_record();
-      const glsl_type *struct_type = deref_record->record->type;
 
-      for (unsigned i = 0; i < struct_type->length; i++) {
-         if (!strcmp(struct_type->fields.structure[i].name,
-                     deref_record->field)) {
-            *type = struct_type->fields.structure[i].type->without_array();
-            *memory_coherent =
-               struct_type->fields.structure[i].memory_coherent;
-            *memory_volatile =
-               struct_type->fields.structure[i].memory_volatile;
-            *memory_restrict =
-               struct_type->fields.structure[i].memory_restrict;
-            *image_format =
-               struct_type->fields.structure[i].image_format;
-            break;
-         }
-      }
+      *type = deref_record->type;
+
+      const glsl_type *struct_type =
+         deref_record->record->type->without_array();
+      int fild_idx = deref_record->field_idx;
+      *memory_coherent =
+         struct_type->fields.structure[fild_idx].memory_coherent;
+      *memory_volatile =
+         struct_type->fields.structure[fild_idx].memory_volatile;
+      *memory_restrict =
+         struct_type->fields.structure[fild_idx].memory_restrict;
+      *image_format =
+         struct_type->fields.structure[fild_idx].image_format;
       break;
    }
 
@@ -4128,7 +4126,7 @@ glsl_to_tgsi_visitor::calc_deref_offsets(ir_dereference *tail,
    case ir_type_dereference_record: {
       ir_dereference_record *deref_record = tail->as_dereference_record();
       const glsl_type *struct_type = deref_record->record->type;
-      int field_index = deref_record->record->type->field_index(deref_record->field);
+      int field_index = deref_record->field_idx;
 
       calc_deref_offsets(deref_record->record->as_dereference(), array_elements, index, indirect, location);
 
@@ -4139,7 +4137,10 @@ glsl_to_tgsi_visitor::calc_deref_offsets(ir_dereference *tail,
 
    case ir_type_dereference_array: {
       ir_dereference_array *deref_arr = tail->as_dereference_array();
-      ir_constant *array_index = deref_arr->array_index->constant_expression_value();
+
+      void *mem_ctx = ralloc_parent(deref_arr);
+      ir_constant *array_index =
+         deref_arr->array_index->constant_expression_value(mem_ctx);
 
       if (!array_index) {
          st_src_reg temp_reg;

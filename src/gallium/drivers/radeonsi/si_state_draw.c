@@ -105,7 +105,7 @@ static void si_emit_derived_tess_state(struct si_context *sctx,
 	unsigned tess_uses_primid = sctx->ia_multi_vgt_param_key.u.tess_uses_prim_id;
 	bool has_primid_instancing_bug = sctx->b.chip_class == SI &&
 					 sctx->b.screen->info.max_se == 1;
-	unsigned tes_sh_base = sctx->shader_userdata.sh_base[PIPE_SHADER_TESS_EVAL];
+	unsigned tes_sh_base = sctx->shader_pointers.sh_base[PIPE_SHADER_TESS_EVAL];
 	unsigned num_tcs_input_cp = info->vertices_per_patch;
 	unsigned num_tcs_output_cp, num_tcs_inputs, num_tcs_outputs;
 	unsigned num_tcs_patch_outputs;
@@ -567,7 +567,7 @@ static void si_emit_vs_state(struct si_context *sctx,
 		struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 
 		radeon_set_sh_reg(cs,
-			sctx->shader_userdata.sh_base[PIPE_SHADER_VERTEX] +
+			sctx->shader_pointers.sh_base[PIPE_SHADER_VERTEX] +
 			SI_SGPR_VS_STATE_BITS * 4,
 			sctx->current_vs_state);
 
@@ -640,7 +640,7 @@ static void si_emit_draw_packets(struct si_context *sctx,
 {
 	struct pipe_draw_indirect_info *indirect = info->indirect;
 	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
-	unsigned sh_base_reg = sctx->shader_userdata.sh_base[PIPE_SHADER_VERTEX];
+	unsigned sh_base_reg = sctx->shader_pointers.sh_base[PIPE_SHADER_VERTEX];
 	bool render_cond_bit = sctx->b.render_cond && !sctx->b.render_cond_force_off;
 	uint32_t index_max_size = 0;
 	uint64_t index_va = 0;
@@ -1162,14 +1162,49 @@ void si_ce_post_draw_synchronization(struct si_context *sctx)
 	}
 }
 
+static void si_emit_all_states(struct si_context *sctx, const struct pipe_draw_info *info,
+			       unsigned skip_atom_mask)
+{
+	/* Emit state atoms. */
+	unsigned mask = sctx->dirty_atoms & ~skip_atom_mask;
+	while (mask) {
+		struct r600_atom *atom = sctx->atoms.array[u_bit_scan(&mask)];
+
+		atom->emit(&sctx->b, atom);
+	}
+	sctx->dirty_atoms &= skip_atom_mask;
+
+	/* Emit states. */
+	mask = sctx->dirty_states;
+	while (mask) {
+		unsigned i = u_bit_scan(&mask);
+		struct si_pm4_state *state = sctx->queued.array[i];
+
+		if (!state || sctx->emitted.array[i] == state)
+			continue;
+
+		si_pm4_emit(sctx, state);
+		sctx->emitted.array[i] = state;
+	}
+	sctx->dirty_states = 0;
+
+	/* Emit draw states. */
+	unsigned num_patches = 0;
+
+	si_emit_rasterizer_prim_state(sctx);
+	if (sctx->tes_shader.cso)
+		si_emit_derived_tess_state(sctx, info, &num_patches);
+	si_emit_vs_state(sctx, info);
+	si_emit_draw_registers(sctx, info, num_patches);
+}
+
 void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
 	struct pipe_resource *indexbuf = info->index.resource;
-	unsigned mask, dirty_tex_counter;
+	unsigned dirty_tex_counter;
 	enum pipe_prim_type rast_prim;
-	unsigned num_patches = 0;
 	unsigned index_size = info->index_size;
 	unsigned index_offset = info->indirect ? info->start * index_size : 0;
 
@@ -1249,9 +1284,6 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	}
 
 	if (sctx->do_update_shaders && !si_update_shaders(sctx))
-		return;
-
-	if (!si_upload_graphics_shader_descriptors(sctx))
 		return;
 
 	if (index_size) {
@@ -1336,47 +1368,71 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	if (!si_upload_vertex_buffer_descriptors(sctx))
 		return;
 
-	/* GFX9 scissor bug workaround. There is also a more efficient but
-	 * more involved alternative workaround. */
+	/* GFX9 scissor bug workaround. This must be done before VPORT scissor
+	 * registers are changed. There is also a more efficient but more
+	 * involved alternative workaround.
+	 */
 	if (sctx->b.chip_class == GFX9 &&
-	    si_is_atom_dirty(sctx, &sctx->b.scissors.atom))
+	    si_is_atom_dirty(sctx, &sctx->b.scissors.atom)) {
 		sctx->b.flags |= SI_CONTEXT_PS_PARTIAL_FLUSH;
+		si_emit_cache_flush(sctx);
+	}
 
-	/* Flush caches before the first state atom, which does L2 prefetches. */
-	if (sctx->b.flags)
+	/* Use optimal packet order based on whether we need to sync the pipeline. */
+	if (unlikely(sctx->b.flags & (SI_CONTEXT_FLUSH_AND_INV_CB |
+				      SI_CONTEXT_FLUSH_AND_INV_DB |
+				      SI_CONTEXT_PS_PARTIAL_FLUSH |
+				      SI_CONTEXT_CS_PARTIAL_FLUSH))) {
+		/* If we have to wait for idle, set all states first, so that all
+		 * SET packets are processed in parallel with previous draw calls.
+		 * Then upload descriptors, set shader pointers, and draw, and
+		 * prefetch at the end. This ensures that the time the CUs
+		 * are idle is very short. (there are only SET_SH packets between
+		 * the wait and the draw)
+		 */
+		struct r600_atom *shader_pointers = &sctx->shader_pointers.atom;
+
+		/* Emit all states except shader pointers. */
+		si_emit_all_states(sctx, info, 1 << shader_pointers->id);
 		si_emit_cache_flush(sctx);
 
-	/* Emit state atoms. */
-	mask = sctx->dirty_atoms;
-	while (mask) {
-		struct r600_atom *atom = sctx->atoms.array[u_bit_scan(&mask)];
+		/* <-- CUs are idle here. */
+		if (!si_upload_graphics_shader_descriptors(sctx))
+			return;
 
-		atom->emit(&sctx->b, atom);
+		/* Set shader pointers after descriptors are uploaded. */
+		if (si_is_atom_dirty(sctx, shader_pointers)) {
+			shader_pointers->emit(&sctx->b, NULL);
+			sctx->dirty_atoms = 0;
+		}
+
+		si_ce_pre_draw_synchronization(sctx);
+		si_emit_draw_packets(sctx, info, indexbuf, index_size, index_offset);
+		/* <-- CUs are busy here. */
+
+		/* Start prefetches after the draw has been started. Both will run
+		 * in parallel, but starting the draw first is more important.
+		 */
+		if (sctx->b.chip_class >= CIK && sctx->prefetch_L2_mask)
+			cik_emit_prefetch_L2(sctx);
+	} else {
+		/* If we don't wait for idle, start prefetches first, then set
+		 * states, and draw at the end.
+		 */
+		if (sctx->b.flags)
+			si_emit_cache_flush(sctx);
+
+		if (sctx->b.chip_class >= CIK && sctx->prefetch_L2_mask)
+			cik_emit_prefetch_L2(sctx);
+
+		if (!si_upload_graphics_shader_descriptors(sctx))
+			return;
+
+		si_emit_all_states(sctx, info, 0);
+		si_ce_pre_draw_synchronization(sctx);
+		si_emit_draw_packets(sctx, info, indexbuf, index_size, index_offset);
 	}
-	sctx->dirty_atoms = 0;
 
-	/* Emit states. */
-	mask = sctx->dirty_states;
-	while (mask) {
-		unsigned i = u_bit_scan(&mask);
-		struct si_pm4_state *state = sctx->queued.array[i];
-
-		if (!state || sctx->emitted.array[i] == state)
-			continue;
-
-		si_pm4_emit(sctx, state);
-		sctx->emitted.array[i] = state;
-	}
-	sctx->dirty_states = 0;
-
-	si_emit_rasterizer_prim_state(sctx);
-	if (sctx->tes_shader.cso)
-		si_emit_derived_tess_state(sctx, info, &num_patches);
-	si_emit_vs_state(sctx, info);
-	si_emit_draw_registers(sctx, info, num_patches);
-
-	si_ce_pre_draw_synchronization(sctx);
-	si_emit_draw_packets(sctx, info, indexbuf, index_size, index_offset);
 	si_ce_post_draw_synchronization(sctx);
 
 	if (sctx->trace_buf)
@@ -1391,13 +1447,17 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		sctx->b.flags |= SI_CONTEXT_VGT_STREAMOUT_SYNC;
 	}
 
-	sctx->b.num_draw_calls++;
-	if (sctx->framebuffer.state.nr_cbufs > 1)
-		sctx->b.num_mrt_draw_calls++;
-	if (info->primitive_restart)
-		sctx->b.num_prim_restart_calls++;
-	if (G_0286E8_WAVESIZE(sctx->spi_tmpring_size))
-		sctx->b.num_spill_draw_calls++;
+	if (unlikely(sctx->decompression_enabled)) {
+		sctx->b.num_decompress_calls++;
+	} else {
+		sctx->b.num_draw_calls++;
+		if (sctx->framebuffer.state.nr_cbufs > 1)
+			sctx->b.num_mrt_draw_calls++;
+		if (info->primitive_restart)
+			sctx->b.num_prim_restart_calls++;
+		if (G_0286E8_WAVESIZE(sctx->spi_tmpring_size))
+			sctx->b.num_spill_draw_calls++;
+	}
 	if (index_size && indexbuf != info->index.resource)
 		pipe_resource_reference(&indexbuf, NULL);
 }

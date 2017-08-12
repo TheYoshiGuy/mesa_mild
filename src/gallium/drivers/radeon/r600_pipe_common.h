@@ -371,7 +371,7 @@ union r600_mmio_counters {
 		struct r600_mmio_counter meq;
 		struct r600_mmio_counter me;
 		struct r600_mmio_counter surf_sync;
-		struct r600_mmio_counter dma;
+		struct r600_mmio_counter cp_dma;
 		struct r600_mmio_counter scratch_ram;
 		struct r600_mmio_counter ce;
 	} named;
@@ -595,6 +595,7 @@ struct r600_common_context {
 	unsigned			num_cs_dw_queries_suspend;
 	/* Misc stats. */
 	unsigned			num_draw_calls;
+	unsigned			num_decompress_calls;
 	unsigned			num_mrt_draw_calls;
 	unsigned			num_prim_restart_calls;
 	unsigned			num_spill_draw_calls;

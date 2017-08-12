@@ -435,6 +435,7 @@ static const struct dri2_extension_match optional_core_extensions[] = {
    { __DRI2_FENCE, 1, offsetof(struct dri2_egl_display, fence) },
    { __DRI2_RENDERER_QUERY, 1, offsetof(struct dri2_egl_display, rendererQuery) },
    { __DRI2_INTEROP, 1, offsetof(struct dri2_egl_display, interop) },
+   { __DRI_IMAGE, 1, offsetof(struct dri2_egl_display, image) },
    { NULL, 0, 0 }
 };
 
@@ -725,6 +726,41 @@ dri2_setup_screen(_EGLDisplay *disp)
          disp->Extensions.EXT_image_dma_buf_import_modifiers = EGL_TRUE;
       }
 #endif
+   }
+}
+
+void
+dri2_setup_swap_interval(_EGLDisplay *disp, int max_swap_interval)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   GLint vblank_mode = DRI_CONF_VBLANK_DEF_INTERVAL_1;
+
+   /* Allow driconf to override applications.*/
+   if (dri2_dpy->config)
+      dri2_dpy->config->configQueryi(dri2_dpy->dri_screen,
+                                     "vblank_mode", &vblank_mode);
+   switch (vblank_mode) {
+   case DRI_CONF_VBLANK_NEVER:
+      dri2_dpy->min_swap_interval = 0;
+      dri2_dpy->max_swap_interval = 0;
+      dri2_dpy->default_swap_interval = 0;
+      break;
+   case DRI_CONF_VBLANK_ALWAYS_SYNC:
+      dri2_dpy->min_swap_interval = 1;
+      dri2_dpy->max_swap_interval = max_swap_interval;
+      dri2_dpy->default_swap_interval = 1;
+      break;
+   case DRI_CONF_VBLANK_DEF_INTERVAL_0:
+      dri2_dpy->min_swap_interval = 0;
+      dri2_dpy->max_swap_interval = max_swap_interval;
+      dri2_dpy->default_swap_interval = 0;
+      break;
+   default:
+   case DRI_CONF_VBLANK_DEF_INTERVAL_1:
+      dri2_dpy->min_swap_interval = 0;
+      dri2_dpy->max_swap_interval = max_swap_interval;
+      dri2_dpy->default_swap_interval = 1;
+      break;
    }
 }
 
@@ -2119,6 +2155,24 @@ dri2_check_dma_buf_format(const _EGLImageAttribs *attrs)
       return 0;
    }
 
+   for (unsigned i = plane_n; i < DMA_BUF_MAX_PLANES; i++) {
+      /**
+       * The modifiers extension spec says:
+       *
+       * "Modifiers may modify any attribute of a buffer import, including
+       *  but not limited to adding extra planes to a format which
+       *  otherwise does not have those planes. As an example, a modifier
+       *  may add a plane for an external compression buffer to a
+       *  single-plane format. The exact meaning and effect of any
+       *  modifier is canonically defined by drm_fourcc.h, not as part of
+       *  this extension."
+       */
+      if (attrs->DMABufPlaneModifiersLo[i].IsPresent &&
+          attrs->DMABufPlaneModifiersHi[i].IsPresent) {
+         plane_n = i + 1;
+      }
+   }
+
    /**
      * The spec says:
      *
@@ -2145,25 +2199,7 @@ dri2_check_dma_buf_format(const _EGLImageAttribs *attrs)
    for (unsigned i = plane_n; i < DMA_BUF_MAX_PLANES; ++i) {
       if (attrs->DMABufPlaneFds[i].IsPresent ||
           attrs->DMABufPlaneOffsets[i].IsPresent ||
-          attrs->DMABufPlanePitches[i].IsPresent ||
-          attrs->DMABufPlaneModifiersLo[i].IsPresent ||
-          attrs->DMABufPlaneModifiersHi[i].IsPresent) {
-
-         /**
-          * The modifiers extension spec says:
-          *
-          * "Modifiers may modify any attribute of a buffer import, including
-          *  but not limited to adding extra planes to a format which
-          *  otherwise does not have those planes. As an example, a modifier
-          *  may add a plane for an external compression buffer to a
-          *  single-plane format. The exact meaning and effect of any
-          *  modifier is canonically defined by drm_fourcc.h, not as part of
-          *  this extension."
-          */
-         if (attrs->DMABufPlaneModifiersLo[i].IsPresent &&
-             attrs->DMABufPlaneModifiersHi[i].IsPresent)
-            continue;
-
+          attrs->DMABufPlanePitches[i].IsPresent) {
          _eglError(EGL_BAD_ATTRIBUTE, "too many plane attributes");
          return 0;
       }

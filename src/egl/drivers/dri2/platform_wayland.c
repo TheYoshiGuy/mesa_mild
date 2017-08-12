@@ -162,11 +162,6 @@ dri2_wl_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
          dri2_surf->format = WL_SHM_FORMAT_ARGB8888;
    }
 
-   if (!window) {
-      _eglError(EGL_BAD_NATIVE_WINDOW, "dri2_create_surface");
-      goto cleanup_surf;
-   }
-
    dri2_surf->wl_win = window;
    dri2_surf->wl_queue = wl_display_create_queue(dri2_dpy->wl_dpy);
    if (!dri2_surf->wl_queue) {
@@ -925,7 +920,7 @@ dri2_wl_query_buffer_age(_EGLDriver *drv,
 static EGLBoolean
 dri2_wl_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
 {
-   return dri2_wl_swap_buffers_with_damage (drv, disp, draw, NULL, 0);
+   return dri2_wl_swap_buffers_with_damage(drv, disp, draw, NULL, 0);
 }
 
 static struct wl_buffer *
@@ -1140,41 +1135,14 @@ static const struct wl_registry_listener registry_listener_drm = {
 };
 
 static void
-dri2_wl_setup_swap_interval(struct dri2_egl_display *dri2_dpy)
+dri2_wl_setup_swap_interval(_EGLDisplay *disp)
 {
-   GLint vblank_mode = DRI_CONF_VBLANK_DEF_INTERVAL_1;
-
    /* We can't use values greater than 1 on Wayland because we are using the
     * frame callback to synchronise the frame and the only way we be sure to
     * get a frame callback is to attach a new buffer. Therefore we can't just
     * sit drawing nothing to wait until the next ‘n’ frame callbacks */
 
-   if (dri2_dpy->config)
-      dri2_dpy->config->configQueryi(dri2_dpy->dri_screen,
-                                     "vblank_mode", &vblank_mode);
-   switch (vblank_mode) {
-   case DRI_CONF_VBLANK_NEVER:
-      dri2_dpy->min_swap_interval = 0;
-      dri2_dpy->max_swap_interval = 0;
-      dri2_dpy->default_swap_interval = 0;
-      break;
-   case DRI_CONF_VBLANK_ALWAYS_SYNC:
-      dri2_dpy->min_swap_interval = 1;
-      dri2_dpy->max_swap_interval = 1;
-      dri2_dpy->default_swap_interval = 1;
-      break;
-   case DRI_CONF_VBLANK_DEF_INTERVAL_0:
-      dri2_dpy->min_swap_interval = 0;
-      dri2_dpy->max_swap_interval = 1;
-      dri2_dpy->default_swap_interval = 0;
-      break;
-   default:
-   case DRI_CONF_VBLANK_DEF_INTERVAL_1:
-      dri2_dpy->min_swap_interval = 0;
-      dri2_dpy->max_swap_interval = 1;
-      dri2_dpy->default_swap_interval = 1;
-      break;
-   }
+   dri2_setup_swap_interval(disp, 1);
 }
 
 static const struct dri2_egl_display_vtbl dri2_wl_display_vtbl = {
@@ -1354,7 +1322,7 @@ dri2_initialize_wayland_drm(_EGLDriver *drv, _EGLDisplay *disp)
 
    dri2_setup_screen(disp);
 
-   dri2_wl_setup_swap_interval(dri2_dpy);
+   dri2_wl_setup_swap_interval(disp);
 
    /* To use Prime, we must have _DRI_IMAGE v7 at least.
     * createImageFromFds support indicates that Prime export/import
@@ -1883,7 +1851,7 @@ static const struct dri2_egl_display_vtbl dri2_wl_swrast_display_vtbl = {
    .create_pixmap_surface = dri2_wl_create_pixmap_surface,
    .create_pbuffer_surface = dri2_fallback_create_pbuffer_surface,
    .destroy_surface = dri2_wl_destroy_surface,
-   .create_image = dri2_fallback_create_image_khr,
+   .create_image = dri2_create_image_khr,
    .swap_buffers = dri2_wl_swrast_swap_buffers,
    .swap_buffers_with_damage = dri2_fallback_swap_buffers_with_damage,
    .swap_buffers_region = dri2_fallback_swap_buffers_region,
@@ -1906,6 +1874,7 @@ static const __DRIswrastLoaderExtension swrast_loader_extension = {
 
 static const __DRIextension *swrast_loader_extensions[] = {
    &swrast_loader_extension.base,
+   &image_lookup_extension.base,
    NULL,
 };
 
@@ -1967,7 +1936,7 @@ dri2_initialize_wayland_swrast(_EGLDriver *drv, _EGLDisplay *disp)
 
    dri2_setup_screen(disp);
 
-   dri2_wl_setup_swap_interval(dri2_dpy);
+   dri2_wl_setup_swap_interval(disp);
 
    if (!dri2_wl_add_configs_for_visuals(drv, disp)) {
       _eglError(EGL_NOT_INITIALIZED, "DRI2: failed to add configs");

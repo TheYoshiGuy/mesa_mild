@@ -91,14 +91,14 @@ has_free_buffers(struct gbm_surface *_surf)
 }
 
 static _EGLSurface *
-dri2_drm_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
-                        _EGLConfig *conf, void *native_window,
-                        const EGLint *attrib_list)
+dri2_drm_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
+                               _EGLConfig *conf, void *native_surface,
+                               const EGLint *attrib_list)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct dri2_egl_config *dri2_conf = dri2_egl_config(conf);
    struct dri2_egl_surface *dri2_surf;
-   struct gbm_surface *window = native_window;
+   struct gbm_surface *surface = native_surface;
    struct gbm_dri_surface *surf;
    const __DRIconfig *config;
 
@@ -110,25 +110,14 @@ dri2_drm_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
       return NULL;
    }
 
-   if (!_eglInitSurface(&dri2_surf->base, disp, type, conf, attrib_list))
+   if (!_eglInitSurface(&dri2_surf->base, disp, EGL_WINDOW_BIT, conf, attrib_list))
       goto cleanup_surf;
 
-   switch (type) {
-   case EGL_WINDOW_BIT:
-      if (!window) {
-         _eglError(EGL_BAD_NATIVE_WINDOW, "dri2_create_surface");
-         goto cleanup_surf;
-      }
-
-      surf = gbm_dri_surface(window);
-      dri2_surf->gbm_surf = surf;
-      dri2_surf->base.Width =  surf->base.width;
-      dri2_surf->base.Height = surf->base.height;
-      surf->dri_private = dri2_surf;
-      break;
-   default:
-      goto cleanup_surf;
-   }
+   surf = gbm_dri_surface(surface);
+   dri2_surf->gbm_surf = surf;
+   dri2_surf->base.Width =  surf->base.width;
+   dri2_surf->base.Height = surf->base.height;
+   surf->dri_private = dri2_surf;
 
    config = dri2_get_dri_config(dri2_conf, EGL_WINDOW_BIT,
                                 dri2_surf->base.GLColorspace);
@@ -157,15 +146,6 @@ dri2_drm_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
    free(dri2_surf);
 
    return NULL;
-}
-
-static _EGLSurface *
-dri2_drm_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
-                               _EGLConfig *conf, void *native_window,
-                               const EGLint *attrib_list)
-{
-   return dri2_drm_create_surface(drv, disp, EGL_WINDOW_BIT, conf,
-                                  native_window, attrib_list);
 }
 
 static _EGLSurface *

@@ -710,7 +710,8 @@ etna_get_specs(struct etna_screen *screen)
        * same.
        */
       screen->specs.ps_offset = 0x8000 + 0x1000;
-      screen->specs.max_instructions = 256;
+      screen->specs.max_instructions = 256; /* maximum number instructions for non-icache use */
+      screen->specs.has_icache = true;
    } else {
       if (instruction_count > 256) { /* unified instruction memory? */
          screen->specs.vs_offset = 0xC000;
@@ -721,6 +722,7 @@ etna_get_specs(struct etna_screen *screen)
          screen->specs.ps_offset = 0x6000;
          screen->specs.max_instructions = instruction_count / 2;
       }
+      screen->specs.has_icache = false;
    }
 
    if (VIV_FEATURE(screen, chipMinorFeatures1, HALTI0)) {
@@ -747,6 +749,21 @@ etna_get_specs(struct etna_screen *screen)
    } else {
       screen->specs.max_vs_uniforms = 256;
       screen->specs.max_ps_uniforms = 256;
+   }
+   /* unified uniform memory on GC3000 - HALTI1 feature bit is just a guess
+   */
+   if (VIV_FEATURE(screen, chipMinorFeatures2, HALTI1)) {
+      screen->specs.has_unified_uniforms = true;
+      screen->specs.vs_uniforms_offset = VIVS_SH_UNIFORMS(0);
+      /* hardcode PS uniforms to start after end of VS uniforms -
+       * for more flexibility this offset could be variable based on the
+       * shader.
+       */
+      screen->specs.ps_uniforms_offset = VIVS_SH_UNIFORMS(screen->specs.max_vs_uniforms*4);
+   } else {
+      screen->specs.has_unified_uniforms = false;
+      screen->specs.vs_uniforms_offset = VIVS_VS_UNIFORMS(0);
+      screen->specs.ps_uniforms_offset = VIVS_PS_UNIFORMS(0);
    }
 
    screen->specs.max_texture_size =
