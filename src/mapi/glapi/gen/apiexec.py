@@ -154,7 +154,7 @@ functions = {
     "GetFramebufferParameteri": exec_info(compatibility=30, core=31, es2=31),
 
     # OpenGL 4.5 / GL_ARB_direct_state_access.   Mesa can expose the extension
-    # with core profile. MKG(UPDATE TO ALLOW COMPATIBILITY)
+    # with core profile.
     "CreateTransformFeedbacks": exec_info(compatibility=30,core=31),
     "TransformFeedbackBufferBase": exec_info(compatibility=30,core=31),
     "TransformFeedbackBufferRange": exec_info(compatibility=30,core=31),
