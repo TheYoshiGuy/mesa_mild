@@ -652,6 +652,8 @@ struct anv_physical_device {
     struct isl_device                           isl_dev;
     int                                         cmd_parser_version;
     bool                                        has_exec_async;
+    bool                                        has_exec_fence;
+    bool                                        has_syncobj;
 
     uint32_t                                    eu_total;
     uint32_t                                    subslice_total;
@@ -745,6 +747,7 @@ struct anv_device {
     struct anv_state_pool                       surface_state_pool;
 
     struct anv_bo                               workaround_bo;
+    struct anv_bo                               trivial_batch_bo;
 
     struct anv_pipeline_cache                   blorp_shader_cache;
     struct blorp_context                        blorp;
@@ -809,6 +812,11 @@ uint32_t anv_gem_fd_to_handle(struct anv_device *device, int fd);
 int anv_gem_set_caching(struct anv_device *device, uint32_t gem_handle, uint32_t caching);
 int anv_gem_set_domain(struct anv_device *device, uint32_t gem_handle,
                        uint32_t read_domains, uint32_t write_domain);
+int anv_gem_sync_file_merge(struct anv_device *device, int fd1, int fd2);
+uint32_t anv_gem_syncobj_create(struct anv_device *device);
+void anv_gem_syncobj_destroy(struct anv_device *device, uint32_t handle);
+int anv_gem_syncobj_handle_to_fd(struct anv_device *device, uint32_t handle);
+uint32_t anv_gem_syncobj_fd_to_handle(struct anv_device *device, int fd);
 
 VkResult anv_bo_init_new(struct anv_bo *bo, struct anv_device *device, uint64_t size);
 
@@ -1734,17 +1742,33 @@ enum anv_semaphore_type {
    ANV_SEMAPHORE_TYPE_NONE = 0,
    ANV_SEMAPHORE_TYPE_DUMMY,
    ANV_SEMAPHORE_TYPE_BO,
+   ANV_SEMAPHORE_TYPE_SYNC_FILE,
+   ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ,
 };
 
 struct anv_semaphore_impl {
    enum anv_semaphore_type type;
 
-   /* A BO representing this semaphore when type == ANV_SEMAPHORE_TYPE_BO.
-    * This BO will be added to the object list on any execbuf2 calls for
-    * which this semaphore is used as a wait or signal fence.  When used as
-    * a signal fence, the EXEC_OBJECT_WRITE flag will be set.
-    */
-   struct anv_bo *bo;
+   union {
+      /* A BO representing this semaphore when type == ANV_SEMAPHORE_TYPE_BO.
+       * This BO will be added to the object list on any execbuf2 calls for
+       * which this semaphore is used as a wait or signal fence.  When used as
+       * a signal fence, the EXEC_OBJECT_WRITE flag will be set.
+       */
+      struct anv_bo *bo;
+
+      /* The sync file descriptor when type == AKV_SEMAPHORE_TYPE_SYNC_FILE.
+       * If the semaphore is in the unsignaled state due to either just being
+       * created or because it has been used for a wait, fd will be -1.
+       */
+      int fd;
+
+      /* Sync object handle when type == AKV_SEMAPHORE_TYPE_DRM_SYNCOBJ.
+       * Unlike GEM BOs, DRM sync objects aren't deduplicated by the kernel on
+       * import so we don't need to bother with a userspace cache.
+       */
+      uint32_t syncobj;
+   };
 };
 
 struct anv_semaphore {
@@ -1764,6 +1788,9 @@ struct anv_semaphore {
     */
    struct anv_semaphore_impl temporary;
 };
+
+void anv_semaphore_reset_temporary(struct anv_device *device,
+                                   struct anv_semaphore *semaphore);
 
 struct anv_shader_module {
    unsigned char                                sha1[20];

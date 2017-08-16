@@ -159,6 +159,23 @@ VkResult anv_QueueSubmit(
    pthread_mutex_lock(&device->mutex);
 
    for (uint32_t i = 0; i < submitCount; i++) {
+      if (pSubmits[i].commandBufferCount == 0) {
+         /* If we don't have any command buffers, we need to submit a dummy
+          * batch to give GEM something to wait on.  We could, potentially,
+          * come up with something more efficient but this shouldn't be a
+          * common case.
+          */
+         result = anv_cmd_buffer_execbuf(device, NULL,
+                                         pSubmits[i].pWaitSemaphores,
+                                         pSubmits[i].waitSemaphoreCount,
+                                         pSubmits[i].pSignalSemaphores,
+                                         pSubmits[i].signalSemaphoreCount);
+         if (result != VK_SUCCESS)
+            goto out;
+
+         continue;
+      }
+
       for (uint32_t j = 0; j < pSubmits[i].commandBufferCount; j++) {
          ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer,
                          pSubmits[i].pCommandBuffers[j]);
@@ -528,11 +545,51 @@ VkResult anv_CreateSemaphore(
    if (semaphore == NULL)
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
-   /* The DRM execbuffer ioctl always execute in-oder so long as you stay
-    * on the same ring.  Since we don't expose the blit engine as a DMA
-    * queue, a dummy no-op semaphore is a perfectly valid implementation.
-    */
-   semaphore->permanent.type = ANV_SEMAPHORE_TYPE_DUMMY;
+   const VkExportSemaphoreCreateInfoKHR *export =
+      vk_find_struct_const(pCreateInfo->pNext, EXPORT_SEMAPHORE_CREATE_INFO_KHR);
+    VkExternalSemaphoreHandleTypeFlagsKHR handleTypes =
+      export ? export->handleTypes : 0;
+
+   if (handleTypes == 0) {
+      /* The DRM execbuffer ioctl always execute in-oder so long as you stay
+       * on the same ring.  Since we don't expose the blit engine as a DMA
+       * queue, a dummy no-op semaphore is a perfectly valid implementation.
+       */
+      semaphore->permanent.type = ANV_SEMAPHORE_TYPE_DUMMY;
+   } else if (handleTypes & VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHR) {
+      assert(handleTypes == VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHR);
+      if (device->instance->physicalDevice.has_syncobj) {
+         semaphore->permanent.type = ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ;
+         semaphore->permanent.syncobj = anv_gem_syncobj_create(device);
+         if (!semaphore->permanent.syncobj) {
+            vk_free2(&device->alloc, pAllocator, semaphore);
+            return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
+         }
+      } else {
+         semaphore->permanent.type = ANV_SEMAPHORE_TYPE_BO;
+         VkResult result = anv_bo_cache_alloc(device, &device->bo_cache,
+                                              4096, &semaphore->permanent.bo);
+         if (result != VK_SUCCESS) {
+            vk_free2(&device->alloc, pAllocator, semaphore);
+            return result;
+         }
+
+         /* If we're going to use this as a fence, we need to *not* have the
+          * EXEC_OBJECT_ASYNC bit set.
+          */
+         assert(!(semaphore->permanent.bo->flags & EXEC_OBJECT_ASYNC));
+      }
+   } else if (handleTypes & VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT_KHR) {
+      assert(handleTypes == VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT_KHR);
+
+      semaphore->permanent.type = ANV_SEMAPHORE_TYPE_SYNC_FILE;
+      semaphore->permanent.fd = -1;
+   } else {
+      assert(!"Unknown handle type");
+      vk_free2(&device->alloc, pAllocator, semaphore);
+      return vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR);
+   }
+
    semaphore->temporary.type = ANV_SEMAPHORE_TYPE_NONE;
 
    *pSemaphore = anv_semaphore_to_handle(semaphore);
@@ -553,9 +610,28 @@ anv_semaphore_impl_cleanup(struct anv_device *device,
    case ANV_SEMAPHORE_TYPE_BO:
       anv_bo_cache_release(device, &device->bo_cache, impl->bo);
       return;
+
+   case ANV_SEMAPHORE_TYPE_SYNC_FILE:
+      close(impl->fd);
+      return;
+
+   case ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ:
+      anv_gem_syncobj_destroy(device, impl->syncobj);
+      return;
    }
 
    unreachable("Invalid semaphore type");
+}
+
+void
+anv_semaphore_reset_temporary(struct anv_device *device,
+                              struct anv_semaphore *semaphore)
+{
+   if (semaphore->temporary.type == ANV_SEMAPHORE_TYPE_NONE)
+      return;
+
+   anv_semaphore_impl_cleanup(device, &semaphore->temporary);
+   semaphore->temporary.type = ANV_SEMAPHORE_TYPE_NONE;
 }
 
 void anv_DestroySemaphore(
@@ -573,4 +649,189 @@ void anv_DestroySemaphore(
    anv_semaphore_impl_cleanup(device, &semaphore->permanent);
 
    vk_free2(&device->alloc, pAllocator, semaphore);
+}
+
+void anv_GetPhysicalDeviceExternalSemaphorePropertiesKHR(
+    VkPhysicalDevice                            physicalDevice,
+    const VkPhysicalDeviceExternalSemaphoreInfoKHR* pExternalSemaphoreInfo,
+    VkExternalSemaphorePropertiesKHR*           pExternalSemaphoreProperties)
+{
+   ANV_FROM_HANDLE(anv_physical_device, device, physicalDevice);
+
+   switch (pExternalSemaphoreInfo->handleType) {
+   case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHR:
+      pExternalSemaphoreProperties->exportFromImportedHandleTypes =
+         VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHR;
+      pExternalSemaphoreProperties->compatibleHandleTypes =
+         VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHR;
+      pExternalSemaphoreProperties->externalSemaphoreFeatures =
+         VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT_KHR |
+         VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT_KHR;
+      return;
+
+   case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT_KHR:
+      if (device->has_exec_fence) {
+         pExternalSemaphoreProperties->exportFromImportedHandleTypes = 0;
+         pExternalSemaphoreProperties->compatibleHandleTypes =
+            VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT_KHR;
+         pExternalSemaphoreProperties->externalSemaphoreFeatures =
+            VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT_KHR |
+            VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT_KHR;
+         return;
+      }
+      break;
+
+   default:
+      break;
+   }
+
+   pExternalSemaphoreProperties->exportFromImportedHandleTypes = 0;
+   pExternalSemaphoreProperties->compatibleHandleTypes = 0;
+   pExternalSemaphoreProperties->externalSemaphoreFeatures = 0;
+}
+
+VkResult anv_ImportSemaphoreFdKHR(
+    VkDevice                                    _device,
+    const VkImportSemaphoreFdInfoKHR*           pImportSemaphoreFdInfo)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   ANV_FROM_HANDLE(anv_semaphore, semaphore, pImportSemaphoreFdInfo->semaphore);
+   int fd = pImportSemaphoreFdInfo->fd;
+
+   struct anv_semaphore_impl new_impl = {
+      .type = ANV_SEMAPHORE_TYPE_NONE,
+   };
+
+   switch (pImportSemaphoreFdInfo->handleType) {
+   case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHR:
+      if (device->instance->physicalDevice.has_syncobj) {
+         new_impl.type = ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ;
+
+         new_impl.syncobj = anv_gem_syncobj_fd_to_handle(device, fd);
+         if (!new_impl.syncobj)
+            return vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR);
+
+         /* From the Vulkan spec:
+          *
+          *    "Importing semaphore state from a file descriptor transfers
+          *    ownership of the file descriptor from the application to the
+          *    Vulkan implementation. The application must not perform any
+          *    operations on the file descriptor after a successful import."
+          *
+          * If the import fails, we leave the file descriptor open.
+          */
+         close(pImportSemaphoreFdInfo->fd);
+      } else {
+         new_impl.type = ANV_SEMAPHORE_TYPE_BO;
+
+         VkResult result = anv_bo_cache_import(device, &device->bo_cache,
+                                               fd, 4096, &new_impl.bo);
+         if (result != VK_SUCCESS)
+            return result;
+
+         /* If we're going to use this as a fence, we need to *not* have the
+          * EXEC_OBJECT_ASYNC bit set.
+          */
+         assert(!(new_impl.bo->flags & EXEC_OBJECT_ASYNC));
+      }
+      break;
+
+   case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT_KHR:
+      new_impl = (struct anv_semaphore_impl) {
+         .type = ANV_SEMAPHORE_TYPE_SYNC_FILE,
+         .fd = fd,
+      };
+      break;
+
+   default:
+      return vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR);
+   }
+
+   if (pImportSemaphoreFdInfo->flags & VK_SEMAPHORE_IMPORT_TEMPORARY_BIT_KHR) {
+      anv_semaphore_impl_cleanup(device, &semaphore->temporary);
+      semaphore->temporary = new_impl;
+   } else {
+      /* SYNC_FILE must be a temporary import */
+      assert(new_impl.type != ANV_SEMAPHORE_TYPE_SYNC_FILE);
+
+      anv_semaphore_impl_cleanup(device, &semaphore->permanent);
+      semaphore->permanent = new_impl;
+   }
+
+   return VK_SUCCESS;
+}
+
+VkResult anv_GetSemaphoreFdKHR(
+    VkDevice                                    _device,
+    const VkSemaphoreGetFdInfoKHR*              pGetFdInfo,
+    int*                                        pFd)
+{
+   ANV_FROM_HANDLE(anv_device, device, _device);
+   ANV_FROM_HANDLE(anv_semaphore, semaphore, pGetFdInfo->semaphore);
+   VkResult result;
+   int fd;
+
+   assert(pGetFdInfo->sType == VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR);
+
+   struct anv_semaphore_impl *impl =
+      semaphore->temporary.type != ANV_SEMAPHORE_TYPE_NONE ?
+      &semaphore->temporary : &semaphore->permanent;
+
+   switch (impl->type) {
+   case ANV_SEMAPHORE_TYPE_BO:
+      result = anv_bo_cache_export(device, &device->bo_cache, impl->bo, pFd);
+      if (result != VK_SUCCESS)
+         return result;
+      break;
+
+   case ANV_SEMAPHORE_TYPE_SYNC_FILE:
+      /* There are two reasons why this could happen:
+       *
+       *  1) The user is trying to export without submitting something that
+       *     signals the semaphore.  If this is the case, it's their bug so
+       *     what we return here doesn't matter.
+       *
+       *  2) The kernel didn't give us a file descriptor.  The most likely
+       *     reason for this is running out of file descriptors.
+       */
+      if (impl->fd < 0)
+         return vk_error(VK_ERROR_TOO_MANY_OBJECTS);
+
+      *pFd = impl->fd;
+
+      /* From the Vulkan 1.0.53 spec:
+       *
+       *    "...exporting a semaphore payload to a handle with copy
+       *    transference has the same side effects on the source
+       *    semaphore’s payload as executing a semaphore wait operation."
+       *
+       * In other words, it may still be a SYNC_FD semaphore, but it's now
+       * considered to have been waited on and no longer has a sync file
+       * attached.
+       */
+      impl->fd = -1;
+      return VK_SUCCESS;
+
+   case ANV_SEMAPHORE_TYPE_DRM_SYNCOBJ:
+      fd = anv_gem_syncobj_handle_to_fd(device, impl->syncobj);
+      if (fd < 0)
+         return vk_error(VK_ERROR_TOO_MANY_OBJECTS);
+      *pFd = fd;
+      break;
+
+   default:
+      return vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR);
+   }
+
+   /* From the Vulkan 1.0.53 spec:
+    *
+    *    "Export operations have the same transference as the specified handle
+    *    type’s import operations. [...] If the semaphore was using a
+    *    temporarily imported payload, the semaphore’s prior permanent payload
+    *    will be restored.
+    */
+   if (impl == &semaphore->temporary)
+      anv_semaphore_impl_cleanup(device, impl);
+
+   return VK_SUCCESS;
 }

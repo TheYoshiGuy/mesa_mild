@@ -337,6 +337,8 @@ anv_physical_device_init(struct anv_physical_device *device,
       goto fail;
 
    device->has_exec_async = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_ASYNC);
+   device->has_exec_fence = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_FENCE);
+   device->has_syncobj = anv_gem_get_param(fd, I915_PARAM_HAS_EXEC_FENCE_ARRAY);
 
    bool swizzled = anv_gem_get_bit6_swizzle(fd, I915_TILING_X);
 
@@ -1014,6 +1016,32 @@ anv_device_init_border_colors(struct anv_device *device)
                                                     border_colors);
 }
 
+static void
+anv_device_init_trivial_batch(struct anv_device *device)
+{
+   anv_bo_init_new(&device->trivial_batch_bo, device, 4096);
+
+   if (device->instance->physicalDevice.has_exec_async)
+      device->trivial_batch_bo.flags |= EXEC_OBJECT_ASYNC;
+
+   void *map = anv_gem_mmap(device, device->trivial_batch_bo.gem_handle,
+                            0, 4096, 0);
+
+   struct anv_batch batch = {
+      .start = map,
+      .next = map,
+      .end = map + 4096,
+   };
+
+   anv_batch_emit(&batch, GEN7_MI_BATCH_BUFFER_END, bbe);
+   anv_batch_emit(&batch, GEN7_MI_NOOP, noop);
+
+   if (!device->info.has_llc)
+      gen_clflush_range(map, batch.next - map);
+
+   anv_gem_munmap(map, device->trivial_batch_bo.size);
+}
+
 VkResult anv_CreateDevice(
     VkPhysicalDevice                            physicalDevice,
     const VkDeviceCreateInfo*                   pCreateInfo,
@@ -1131,6 +1159,8 @@ VkResult anv_CreateDevice(
    if (result != VK_SUCCESS)
       goto fail_surface_state_pool;
 
+   anv_device_init_trivial_batch(device);
+
    anv_scratch_pool_init(device, &device->scratch_pool);
 
    anv_queue_init(device, &device->queue);
@@ -1219,6 +1249,8 @@ void anv_DestroyDevice(
 
    anv_gem_munmap(device->workaround_bo.map, device->workaround_bo.size);
    anv_gem_close(device, device->workaround_bo.gem_handle);
+
+   anv_gem_close(device, device->trivial_batch_bo.gem_handle);
 
    anv_state_pool_finish(&device->surface_state_pool);
    anv_state_pool_finish(&device->instruction_state_pool);

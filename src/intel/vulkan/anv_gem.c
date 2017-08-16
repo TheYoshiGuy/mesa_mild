@@ -22,6 +22,7 @@
  */
 
 #include <sys/ioctl.h>
+#include <sys/types.h>
 #include <sys/mman.h>
 #include <string.h>
 #include <errno.h>
@@ -185,7 +186,10 @@ int
 anv_gem_execbuffer(struct anv_device *device,
                    struct drm_i915_gem_execbuffer2 *execbuf)
 {
-   return anv_ioctl(device->fd, DRM_IOCTL_I915_GEM_EXECBUFFER2, execbuf);
+   if (execbuf->flags & I915_EXEC_FENCE_OUT)
+      return anv_ioctl(device->fd, DRM_IOCTL_I915_GEM_EXECBUFFER2_WR, execbuf);
+   else
+      return anv_ioctl(device->fd, DRM_IOCTL_I915_GEM_EXECBUFFER2, execbuf);
 }
 
 int
@@ -393,6 +397,93 @@ anv_gem_fd_to_handle(struct anv_device *device, int fd)
 
    int ret = anv_ioctl(device->fd, DRM_IOCTL_PRIME_FD_TO_HANDLE, &args);
    if (ret == -1)
+      return 0;
+
+   return args.handle;
+}
+
+#ifndef SYNC_IOC_MAGIC
+/* duplicated from linux/sync_file.h to avoid build-time dependency
+ * on new (v4.7) kernel headers.  Once distro's are mostly using
+ * something newer than v4.7 drop this and #include <linux/sync_file.h>
+ * instead.
+ */
+struct sync_merge_data {
+   char  name[32];
+   __s32 fd2;
+   __s32 fence;
+   __u32 flags;
+   __u32 pad;
+};
+
+#define SYNC_IOC_MAGIC '>'
+#define SYNC_IOC_MERGE _IOWR(SYNC_IOC_MAGIC, 3, struct sync_merge_data)
+#endif
+
+int
+anv_gem_sync_file_merge(struct anv_device *device, int fd1, int fd2)
+{
+   const char name[] = "anv merge fence";
+   struct sync_merge_data args = {
+      .fd2 = fd2,
+      .fence = -1,
+   };
+   memcpy(args.name, name, sizeof(name));
+
+   int ret = anv_ioctl(fd1, SYNC_IOC_MERGE, &args);
+   if (ret == -1)
+      return -1;
+
+   return args.fence;
+}
+
+uint32_t
+anv_gem_syncobj_create(struct anv_device *device)
+{
+   struct drm_syncobj_create args = {
+      .flags = 0,
+   };
+
+   int ret = anv_ioctl(device->fd, DRM_IOCTL_SYNCOBJ_CREATE, &args);
+   if (ret)
+      return 0;
+
+   return args.handle;
+}
+
+void
+anv_gem_syncobj_destroy(struct anv_device *device, uint32_t handle)
+{
+   struct drm_syncobj_destroy args = {
+      .handle = handle,
+   };
+
+   anv_ioctl(device->fd, DRM_IOCTL_SYNCOBJ_DESTROY, &args);
+}
+
+int
+anv_gem_syncobj_handle_to_fd(struct anv_device *device, uint32_t handle)
+{
+   struct drm_syncobj_handle args = {
+      .handle = handle,
+   };
+
+   int ret = anv_ioctl(device->fd, DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD, &args);
+   if (ret)
+      return -1;
+
+   return args.fd;
+}
+
+uint32_t
+anv_gem_syncobj_fd_to_handle(struct anv_device *device, int fd)
+{
+   struct drm_syncobj_handle args = {
+      .fd = fd,
+   };
+
+   int ret = anv_ioctl(device->fd, DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE, &args);
+   if (ret)
       return 0;
 
    return args.handle;
