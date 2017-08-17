@@ -116,16 +116,6 @@ glx_dri3_get_dri_context(struct loader_dri3_drawable *draw)
    return (gc != &dummyContext) ? dri3Ctx->driContext : NULL;
 }
 
-static __DRIscreen *
-glx_dri3_get_dri_screen(struct loader_dri3_drawable *draw)
-{
-   struct glx_context *gc = __glXGetCurrentContext();
-   struct dri3_context *pcp = (struct dri3_context *) gc;
-   struct dri3_screen *psc = (struct dri3_screen *) pcp->base.psc;
-
-   return (gc != &dummyContext && psc) ? psc->driScreen : NULL;
-}
-
 static void
 glx_dri3_flush_drawable(struct loader_dri3_drawable *draw, unsigned flags)
 {
@@ -160,7 +150,6 @@ static const struct loader_dri3_vtable glx_dri3_vtable = {
    .set_drawable_size = glx_dri3_set_drawable_size,
    .in_current_context = glx_dri3_in_current_context,
    .get_dri_context = glx_dri3_get_dri_context,
-   .get_dri_screen = glx_dri3_get_dri_screen,
    .flush_drawable = glx_dri3_flush_drawable,
    .show_fps = glx_dri3_show_fps,
 };
@@ -583,6 +572,7 @@ dri3_destroy_screen(struct glx_screen *base)
    struct dri3_screen *psc = (struct dri3_screen *) base;
 
    /* Free the direct rendering per screen data */
+   loader_dri3_close_screen(psc->driScreen);
    (*psc->core->destroyScreen) (psc->driScreen);
    driDestroyConfigs(psc->driver_configs);
    close(psc->fd);

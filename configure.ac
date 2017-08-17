@@ -1814,7 +1814,9 @@ if test "x$with_dri_drivers" = xno; then
 fi
 
 # Check for expat
-PKG_CHECK_MODULES([EXPAT], [expat])
+PKG_CHECK_MODULES([EXPAT], [expat],,
+    [PKG_CHECK_MODULES([EXPAT], [expat21])]
+)
 
 dnl If $with_dri_drivers is yes, drivers will be added through
 dnl platform checks. Set DEFINES and LIB_DEPS
@@ -2646,7 +2648,7 @@ if test "x$enable_llvm" = xyes; then
     LLVM_LIBS="`$LLVM_CONFIG --libs ${LLVM_COMPONENTS}`"
 
     if test "x$enable_llvm_shared_libs" = xyes; then
-        if test $LLVM_VERSION_MAJOR -lt 4; then
+        if test $LLVM_VERSION_MAJOR -lt 4 -o "`$LLVM_CONFIG --shared-mode ${LLVM_COMPONENTS}`" = static; then
             dnl llvm-config may not give the right answer when llvm is a built as a
             dnl single shared library, so we must work the library name out for
             dnl ourselves.

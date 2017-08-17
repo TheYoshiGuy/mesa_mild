@@ -75,17 +75,6 @@ egl_dri3_get_dri_context(struct loader_dri3_drawable *draw)
    return dri2_ctx->dri_context;
 }
 
-static __DRIscreen *
-egl_dri3_get_dri_screen(struct loader_dri3_drawable *draw)
-{
-   _EGLContext *ctx = _eglGetCurrentContext();
-   struct dri2_egl_context *dri2_ctx;
-   if (!ctx)
-      return NULL;
-   dri2_ctx = dri2_egl_context(ctx);
-   return dri2_egl_display(dri2_ctx->base.Resource.Display)->dri_screen;
-}
-
 static void
 egl_dri3_flush_drawable(struct loader_dri3_drawable *draw, unsigned flags)
 {
@@ -99,7 +88,6 @@ static const struct loader_dri3_vtable egl_dri3_vtable = {
    .set_drawable_size = egl_dri3_set_drawable_size,
    .in_current_context = egl_dri3_in_current_context,
    .get_dri_context = egl_dri3_get_dri_context,
-   .get_dri_screen = egl_dri3_get_dri_screen,
    .flush_drawable = egl_dri3_flush_drawable,
    .show_fps = NULL,
 };
@@ -413,6 +401,14 @@ dri3_get_dri_drawable(_EGLSurface *surf)
    return dri3_surf->loader_drawable.dri_drawable;
 }
 
+static void
+dri3_close_screen_notify(_EGLDisplay *dpy)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(dpy);
+
+   loader_dri3_close_screen(dri2_dpy->dri_screen);
+}
+
 struct dri2_egl_display_vtbl dri3_x11_display_vtbl = {
    .authenticate = dri3_authenticate,
    .create_window_surface = dri3_create_window_surface,
@@ -432,6 +428,7 @@ struct dri2_egl_display_vtbl dri3_x11_display_vtbl = {
    .create_wayland_buffer_from_image = dri2_fallback_create_wayland_buffer_from_image,
    .get_sync_values = dri3_get_sync_values,
    .get_dri_drawable = dri3_get_dri_drawable,
+   .close_screen_notify = dri3_close_screen_notify,
 };
 
 EGLBoolean
