@@ -995,8 +995,7 @@ void si_emit_cache_flush(struct si_context *sctx)
 
 		r600_gfx_write_event_eop(rctx, cb_db_event, tc_flags, 1,
 					 sctx->wait_mem_scratch, va,
-					 sctx->wait_mem_number - 1,
-					 sctx->wait_mem_number);
+					 sctx->wait_mem_number, 0);
 		r600_gfx_wait_fence(rctx, va, sctx->wait_mem_number, 0xffffffff);
 	}
 

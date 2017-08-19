@@ -1061,12 +1061,10 @@ intel_miptree_create_for_dri_image(struct brw_context *brw,
       }
    }
 
-   /* If this is a window-system image, then we can no longer assume it's
-    * cache-coherent because it may suddenly get scanned out which destroys
-    * coherency.
+   /* Don't assume coherency for imported EGLimages.  We don't know what
+    * external clients are going to do with it.  They may scan it out.
     */
-   if (is_winsys_image)
-      image->bo->cache_coherent = false;
+   image->bo->cache_coherent = false;
 
    return mt;
 }
@@ -2573,7 +2571,20 @@ intel_miptree_texture_aux_usage(struct brw_context *brw,
 
    case ISL_AUX_USAGE_CCS_D:
    case ISL_AUX_USAGE_CCS_E:
-      if (mt->mcs_buf && can_texture_with_ccs(brw, mt, view_format))
+      if (!mt->mcs_buf) {
+         assert(mt->aux_usage == ISL_AUX_USAGE_CCS_D);
+         return ISL_AUX_USAGE_NONE;
+      }
+
+      /* If we don't have any unresolved color, report an aux usage of
+       * ISL_AUX_USAGE_NONE.  This way, texturing won't even look at the
+       * aux surface and we can save some bandwidth.
+       */
+      if (!intel_miptree_has_color_unresolved(mt, 0, INTEL_REMAINING_LEVELS,
+                                              0, INTEL_REMAINING_LAYERS))
+         return ISL_AUX_USAGE_NONE;
+
+      if (can_texture_with_ccs(brw, mt, view_format))
          return ISL_AUX_USAGE_CCS_E;
       break;
 
