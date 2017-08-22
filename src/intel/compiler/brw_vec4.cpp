@@ -42,8 +42,8 @@ void
 src_reg::init()
 {
    memset(this, 0, sizeof(*this));
-
    this->file = BAD_FILE;
+   this->type = BRW_REGISTER_TYPE_UD;
 }
 
 src_reg::src_reg(enum brw_reg_file file, int nr, const glsl_type *type)
@@ -85,6 +85,7 @@ dst_reg::init()
 {
    memset(this, 0, sizeof(*this));
    this->file = BAD_FILE;
+   this->type = BRW_REGISTER_TYPE_UD;
    this->writemask = WRITEMASK_XYZW;
 }
 
@@ -1618,7 +1619,7 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
       if (inst->dst.writemask & 8)
          fprintf(file, "w");
    }
-   fprintf(file, ":%s", brw_reg_type_letters(inst->dst.type));
+   fprintf(file, ":%s", brw_reg_type_to_letters(inst->dst.type));
 
    if (inst->src[0].file != BAD_FILE)
       fprintf(file, ", ");
@@ -1713,7 +1714,7 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
          fprintf(file, "|");
 
       if (inst->src[i].file != IMM) {
-         fprintf(file, ":%s", brw_reg_type_letters(inst->src[i].type));
+         fprintf(file, ":%s", brw_reg_type_to_letters(inst->src[i].type));
       }
 
       if (i < 2 && inst->src[i + 1].file != BAD_FILE)
@@ -1950,7 +1951,7 @@ vec4_visitor::convert_to_hw_regs()
 {
    foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       for (int i = 0; i < 3; i++) {
-         struct src_reg &src = inst->src[i];
+         class src_reg &src = inst->src[i];
          struct brw_reg reg;
          switch (src.file) {
          case VGRF: {

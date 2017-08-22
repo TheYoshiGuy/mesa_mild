@@ -47,6 +47,8 @@
 #include "util/u_transfer.h"
 #include "util/u_threaded_context.h"
 
+struct u_log_context;
+
 #define ATI_VENDOR_ID 0x1002
 
 #define R600_RESOURCE_FLAG_TRANSFER		(PIPE_RESOURCE_FLAG_DRV_PRIV << 0)
@@ -652,6 +654,7 @@ struct r600_common_context {
 
 	struct pipe_debug_callback	debug;
 	struct pipe_device_reset_callback device_reset_callback;
+	struct u_log_context		*log;
 
 	void				*query_result_shader;
 
@@ -830,7 +833,7 @@ bool r600_init_flushed_depth_texture(struct pipe_context *ctx,
 				     struct pipe_resource *texture,
 				     struct r600_texture **staging);
 void r600_print_texture_info(struct r600_common_screen *rscreen,
-			     struct r600_texture *rtex, FILE *f);
+			     struct r600_texture *rtex, struct u_log_context *log);
 struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
 					const struct pipe_resource *templ);
 bool vi_dcc_formats_compatible(enum pipe_format format1,

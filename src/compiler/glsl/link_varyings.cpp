@@ -1843,7 +1843,7 @@ public:
 
       this->toplevel_var = var;
       this->varying_floats = 0;
-      program_resource_visitor::process(var);
+      program_resource_visitor::process(var, false);
    }
 
 private:
@@ -2349,7 +2349,7 @@ assign_varying_locations(struct gl_context *ctx,
    return true;
 }
 
-bool
+static bool
 check_against_output_limit(struct gl_context *ctx,
                            struct gl_shader_program *prog,
                            gl_linked_shader *producer,
@@ -2393,7 +2393,7 @@ check_against_output_limit(struct gl_context *ctx,
    return true;
 }
 
-bool
+static bool
 check_against_input_limit(struct gl_context *ctx,
                           struct gl_shader_program *prog,
                           gl_linked_shader *consumer,

@@ -28,6 +28,7 @@
 
 #include "radeon/radeon_uvd.h"
 #include "util/hash_table.h"
+#include "util/u_log.h"
 #include "util/u_memory.h"
 #include "util/u_suballoc.h"
 #include "util/u_tests.h"
@@ -95,12 +96,7 @@ static void si_destroy_context(struct pipe_context *context)
 
 	LLVMDisposeTargetMachine(sctx->tm);
 
-	r600_resource_reference(&sctx->trace_buf, NULL);
-	r600_resource_reference(&sctx->last_trace_buf, NULL);
-	radeon_clear_saved_cs(&sctx->last_gfx);
-
-	pb_slabs_deinit(&sctx->bindless_descriptor_slabs);
-	util_dynarray_fini(&sctx->bindless_descriptors);
+	si_saved_cs_reference(&sctx->current_saved_cs, NULL);
 
 	_mesa_hash_table_destroy(sctx->tex_handles, NULL);
 	_mesa_hash_table_destroy(sctx->img_handles, NULL);
@@ -135,6 +131,9 @@ static void si_emit_string_marker(struct pipe_context *ctx,
 	struct si_context *sctx = (struct si_context *)ctx;
 
 	dd_parse_apitrace_marker(string, len, &sctx->apitrace_call_number);
+
+	if (sctx->b.log)
+		u_log_printf(sctx->b.log, "\nString marker: %*s\n", len, string);
 }
 
 static LLVMTargetMachineRef
@@ -157,6 +156,16 @@ si_create_llvm_target_machine(struct si_screen *sscreen)
 				       LLVMCodeModelDefault);
 }
 
+static void si_set_log_context(struct pipe_context *ctx,
+			       struct u_log_context *log)
+{
+	struct si_context *sctx = (struct si_context *)ctx;
+	sctx->b.log = log;
+
+	if (log)
+		u_log_add_auto_logger(log, si_auto_log_cs, sctx);
+}
+
 static struct pipe_context *si_create_context(struct pipe_screen *screen,
                                               unsigned flags)
 {
@@ -175,6 +184,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	sctx->b.b.priv = NULL;
 	sctx->b.b.destroy = si_destroy_context;
 	sctx->b.b.emit_string_marker = si_emit_string_marker;
+	sctx->b.b.set_log_context = si_set_log_context;
 	sctx->b.set_atom_dirty = (void *)si_set_atom_dirty;
 	sctx->screen = sscreen; /* Easy accessing of screen/winsys. */
 	sctx->is_debug = (flags & PIPE_CONTEXT_DEBUG) != 0;
@@ -357,15 +367,6 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 				   max_threads_per_block / 64);
 
 	sctx->tm = si_create_llvm_target_machine(sscreen);
-
-	/* Create a slab allocator for all bindless descriptors. */
-	if (!pb_slabs_init(&sctx->bindless_descriptor_slabs, 6, 6, 1, sctx,
-			   si_bindless_descriptor_can_reclaim_slab,
-			   si_bindless_descriptor_slab_alloc,
-			   si_bindless_descriptor_slab_free))
-		goto fail;
-
-	util_dynarray_init(&sctx->bindless_descriptors, NULL);
 
 	/* Bindless handles. */
 	sctx->tex_handles = _mesa_hash_table_create(NULL, _mesa_hash_pointer,

@@ -403,6 +403,7 @@ void
 fs_reg::init()
 {
    memset(this, 0, sizeof(*this));
+   type = BRW_REGISTER_TYPE_UD;
    stride = 1;
 }
 
@@ -5345,7 +5346,7 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
 
    if (inst->dst.stride != 1)
       fprintf(file, "<%u>", inst->dst.stride);
-   fprintf(file, ":%s, ", brw_reg_type_letters(inst->dst.type));
+   fprintf(file, ":%s, ", brw_reg_type_to_letters(inst->dst.type));
 
    for (int i = 0; i < inst->sources; i++) {
       if (inst->src[i].negate)
@@ -5442,7 +5443,7 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
          if (stride != 1)
             fprintf(file, "<%u>", stride);
 
-         fprintf(file, ":%s", brw_reg_type_letters(inst->src[i].type));
+         fprintf(file, ":%s", brw_reg_type_to_letters(inst->src[i].type));
       }
 
       if (i < inst->sources - 1 && inst->src[i + 1].file != BAD_FILE)

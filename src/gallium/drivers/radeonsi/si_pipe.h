@@ -29,6 +29,7 @@
 #include "si_shader.h"
 
 #include "util/u_dynarray.h"
+#include "util/u_idalloc.h"
 
 #ifdef PIPE_ARCH_BIG_ENDIAN
 #define SI_BIG_ENDIAN 1
@@ -246,26 +247,32 @@ union si_vgt_param_key {
 	uint32_t index;
 };
 
-struct si_bindless_descriptor
-{
-	struct pb_slab_entry		entry;
-	struct r600_resource		*buffer;
-	unsigned			offset;
-	uint32_t			desc_list[16];
-	bool				dirty;
-};
-
 struct si_texture_handle
 {
-	struct si_bindless_descriptor	*desc;
+	unsigned			desc_slot;
+	bool				desc_dirty;
 	struct pipe_sampler_view	*view;
 	struct si_sampler_state		sstate;
 };
 
 struct si_image_handle
 {
-	struct si_bindless_descriptor	*desc;
+	unsigned			desc_slot;
+	bool				desc_dirty;
 	struct pipe_image_view		view;
+};
+
+struct si_saved_cs {
+	struct pipe_reference	reference;
+	struct si_context	*ctx;
+	struct radeon_saved_cs	gfx;
+	struct radeon_saved_cs	ce;
+	struct r600_resource	*trace_buf;
+	unsigned		trace_id;
+
+	unsigned		gfx_last_dw;
+	unsigned		ce_last_dw;
+	bool			flushed;
 };
 
 struct si_context {
@@ -419,11 +426,7 @@ struct si_context {
 
 	/* Debug state. */
 	bool			is_debug;
-	struct radeon_saved_cs	last_gfx;
-	struct radeon_saved_cs	last_ce;
-	struct r600_resource	*last_trace_buf;
-	struct r600_resource	*trace_buf;
-	unsigned		trace_id;
+	struct si_saved_cs	*current_saved_cs;
 	uint64_t		dmesg_timestamp;
 	unsigned		apitrace_call_number;
 
@@ -435,12 +438,13 @@ struct si_context {
 	union si_vgt_param_key  ia_multi_vgt_param_key;
 	unsigned		ia_multi_vgt_param[SI_NUM_VGT_PARAM_STATES];
 
-	/* Slab allocator for bindless descriptors. */
-	struct pb_slabs		bindless_descriptor_slabs;
-
 	/* Bindless descriptors. */
-	struct util_dynarray	bindless_descriptors;
+	struct si_descriptors	bindless_descriptors;
+	struct util_idalloc	bindless_used_slots;
+	unsigned		num_bindless_descriptors;
 	bool			bindless_descriptors_dirty;
+	bool			graphics_bindless_pointer_dirty;
+	bool			compute_bindless_pointer_dirty;
 
 	/* Allocated bindless handles */
 	struct hash_table	*tex_handles;
@@ -497,6 +501,10 @@ void cik_emit_prefetch_L2(struct si_context *sctx);
 void si_init_cp_dma_functions(struct si_context *sctx);
 
 /* si_debug.c */
+void si_auto_log_cs(void *data, struct u_log_context *log);
+void si_log_hw_flush(struct si_context *sctx);
+void si_log_draw_state(struct si_context *sctx, struct u_log_context *log);
+void si_log_compute_state(struct si_context *sctx, struct u_log_context *log);
 void si_init_debug_functions(struct si_context *sctx);
 void si_check_vm_faults(struct r600_common_context *ctx,
 			struct radeon_saved_cs *saved, enum ring_type ring);
@@ -506,6 +514,7 @@ bool si_replace_shader(unsigned num, struct ac_shader_binary *binary);
 void si_init_dma_functions(struct si_context *sctx);
 
 /* si_hw_context.c */
+void si_destroy_saved_cs(struct si_saved_cs *scs);
 void si_context_gfx_flush(void *context, unsigned flags,
 			  struct pipe_fence_handle **fence);
 void si_begin_new_cs(struct si_context *ctx);
@@ -601,6 +610,15 @@ si_optimal_tcc_alignment(struct si_context *sctx, unsigned upload_size)
 	alignment = util_next_power_of_two(upload_size);
 	tcc_cache_line_size = sctx->screen->b.info.tcc_cache_line_size;
 	return MIN2(alignment, tcc_cache_line_size);
+}
+
+static inline void
+si_saved_cs_reference(struct si_saved_cs **dst, struct si_saved_cs *src)
+{
+	if (pipe_reference(&(*dst)->reference, &src->reference))
+		si_destroy_saved_cs(*dst);
+
+	*dst = src;
 }
 
 #endif

@@ -159,6 +159,8 @@ enum {
 	 */
 	SI_SGPR_RW_BUFFERS,  /* rings (& stream-out, VS only) */
 	SI_SGPR_RW_BUFFERS_HI,
+	SI_SGPR_BINDLESS_SAMPLERS_AND_IMAGES,
+	SI_SGPR_BINDLESS_SAMPLERS_AND_IMAGES_HI,
 	SI_SGPR_CONST_AND_SHADER_BUFFERS,
 	SI_SGPR_CONST_AND_SHADER_BUFFERS_HI,
 	SI_SGPR_SAMPLERS_AND_IMAGES,
@@ -219,7 +221,7 @@ enum {
 
 /* LLVM function parameter indices */
 enum {
-	SI_NUM_RESOURCE_PARAMS = 3,
+	SI_NUM_RESOURCE_PARAMS = 4,
 
 	/* PS only parameters */
 	SI_PARAM_ALPHA_REF = SI_NUM_RESOURCE_PARAMS,
@@ -661,6 +663,20 @@ static inline bool
 si_shader_uses_bindless_images(struct si_shader_selector *selector)
 {
 	return selector ? selector->info.uses_bindless_images : false;
+}
+
+void si_destroy_shader_selector(struct si_context *sctx,
+			        struct si_shader_selector *sel);
+
+static inline void
+si_shader_selector_reference(struct si_context *sctx,
+			     struct si_shader_selector **dst,
+			     struct si_shader_selector *src)
+{
+	if (pipe_reference(&(*dst)->reference, &src->reference))
+		si_destroy_shader_selector(sctx, *dst);
+
+	*dst = src;
 }
 
 #endif

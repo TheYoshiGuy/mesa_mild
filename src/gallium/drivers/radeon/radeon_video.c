@@ -280,6 +280,14 @@ int rvid_get_video_param(struct pipe_screen *screen,
 					profile == PIPE_VIDEO_PROFILE_HEVC_MAIN_10);
 			else if (rscreen->family >= CHIP_CARRIZO)
 				return profile == PIPE_VIDEO_PROFILE_HEVC_MAIN;
+		case PIPE_VIDEO_FORMAT_JPEG:
+			if (rscreen->family < CHIP_CARRIZO || rscreen->family >= CHIP_VEGA10)
+				return false;
+			if (!(rscreen->info.drm_major == 3 && rscreen->info.drm_minor >= 19)) {
+				RVID_ERR("No MJPEG support for the kernel version\n");
+				return false;
+			}
+			return true;
 		default:
 			return false;
 		}
@@ -303,8 +311,12 @@ int rvid_get_video_param(struct pipe_screen *screen,
 			return codec != PIPE_VIDEO_FORMAT_MPEG12 &&
 			       rscreen->family > CHIP_RV770;
 		} else {
-			if (u_reduce_video_profile(profile) == PIPE_VIDEO_FORMAT_HEVC)
+			enum pipe_video_format format = u_reduce_video_profile(profile);
+
+			if (format == PIPE_VIDEO_FORMAT_HEVC)
 				return false; //The firmware doesn't support interlaced HEVC.
+			else if (format == PIPE_VIDEO_FORMAT_JPEG)
+				return false;
 			return true;
 		}
 	case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
