@@ -1588,6 +1588,29 @@ DECL_SPECIAL(ABS)
     return D3D_OK;
 }
 
+DECL_SPECIAL(XPD)
+{
+    struct ureg_program *ureg = tx->ureg;
+    struct ureg_dst dst = tx_dst_param(tx, &tx->insn.dst[0]);
+    struct ureg_src src0 = tx_src_param(tx, &tx->insn.src[0]);
+    struct ureg_src src1 = tx_src_param(tx, &tx->insn.src[1]);
+
+    ureg_MUL(ureg, ureg_writemask(dst, TGSI_WRITEMASK_XYZ),
+             ureg_swizzle(src0, TGSI_SWIZZLE_Y, TGSI_SWIZZLE_Z,
+                          TGSI_SWIZZLE_X, 0),
+             ureg_swizzle(src1, TGSI_SWIZZLE_Z, TGSI_SWIZZLE_X,
+                          TGSI_SWIZZLE_Y, 0));
+    ureg_MAD(ureg, ureg_writemask(dst, TGSI_WRITEMASK_XYZ),
+             ureg_swizzle(src0, TGSI_SWIZZLE_Z, TGSI_SWIZZLE_X,
+                          TGSI_SWIZZLE_Y, 0),
+             ureg_negate(ureg_swizzle(src1, TGSI_SWIZZLE_Y,
+                                      TGSI_SWIZZLE_Z, TGSI_SWIZZLE_X, 0)),
+             ureg_src(dst));
+    ureg_MOV(ureg, ureg_writemask(dst, TGSI_WRITEMASK_W),
+             ureg_imm1f(ureg, 1));
+    return D3D_OK;
+}
+
 DECL_SPECIAL(M4x4)
 {
     return NineTranslateInstruction_Mkxn(tx, 4, 4);
@@ -2915,7 +2938,7 @@ struct sm1_op_info inst_table[] =
     _OPI(DCL, NOP, V(0,0), V(3,0), V(0,0), V(3,0), 0, 0, SPECIAL(DCL)),
 
     _OPI(POW, POW, V(0,0), V(3,0), V(0,0), V(3,0), 1, 2, SPECIAL(POW)),
-    _OPI(CRS, XPD, V(0,0), V(3,0), V(0,0), V(3,0), 1, 2, NULL), /* XXX: .w */
+    _OPI(CRS, NOP, V(0,0), V(3,0), V(0,0), V(3,0), 1, 2, SPECIAL(XPD)), /* XXX: .w */
     _OPI(SGN, SSG, V(2,0), V(3,0), V(0,0), V(0,0), 1, 3, SPECIAL(SGN)), /* ignore src1,2 */
     _OPI(ABS, NOP, V(0,0), V(3,0), V(0,0), V(3,0), 1, 1, SPECIAL(ABS)),
     _OPI(NRM, NOP, V(0,0), V(3,0), V(0,0), V(3,0), 1, 1, SPECIAL(NRM)), /* NRM doesn't fit */
@@ -2931,7 +2954,7 @@ struct sm1_op_info inst_table[] =
     _OPI(ELSE,   ELSE,   V(2,0), V(3,0), V(2,1), V(3,0), 0, 0, SPECIAL(ELSE)),
     _OPI(ENDIF,  ENDIF,  V(2,0), V(3,0), V(2,1), V(3,0), 0, 0, SPECIAL(ENDIF)),
     _OPI(BREAK,  BRK,    V(2,1), V(3,0), V(2,1), V(3,0), 0, 0, NULL),
-    _OPI(BREAKC, BREAKC, V(2,1), V(3,0), V(2,1), V(3,0), 0, 2, SPECIAL(BREAKC)),
+    _OPI(BREAKC, NOP,    V(2,1), V(3,0), V(2,1), V(3,0), 0, 2, SPECIAL(BREAKC)),
     /* we don't write to the address register, but a normal register (copied
      * when needed to the address register), thus we don't use ARR */
     _OPI(MOVA, MOV, V(2,0), V(3,0), V(0,0), V(0,0), 1, 1, NULL),

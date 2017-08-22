@@ -457,8 +457,6 @@ translate_opcode( unsigned op )
       return TGSI_OPCODE_DP3;
    case OPCODE_DP4:
       return TGSI_OPCODE_DP4;
-   case OPCODE_DPH:
-      return TGSI_OPCODE_DPH;
    case OPCODE_DST:
       return TGSI_OPCODE_DST;
    case OPCODE_EX2:
@@ -507,8 +505,6 @@ translate_opcode( unsigned op )
       return TGSI_OPCODE_TXB;
    case OPCODE_TXP:
       return TGSI_OPCODE_TXP;
-   case OPCODE_XPD:
-      return TGSI_OPCODE_XPD;
    case OPCODE_END:
       return TGSI_OPCODE_END;
    default:
@@ -570,11 +566,17 @@ compile_instruction(
       break;
 
    case OPCODE_XPD:
-      dst[0] = ureg_writemask(dst[0], TGSI_WRITEMASK_XYZ );
-      ureg_insn( ureg, 
-                 translate_opcode( inst->Opcode ), 
-                 dst, num_dst, 
-                 src, num_src, 0 );
+      ureg_MUL(ureg, ureg_writemask(dst[0], TGSI_WRITEMASK_XYZ),
+               ureg_swizzle(src[0], TGSI_SWIZZLE_Y, TGSI_SWIZZLE_Z,
+                            TGSI_SWIZZLE_X, 0),
+               ureg_swizzle(src[1], TGSI_SWIZZLE_Z, TGSI_SWIZZLE_X,
+                            TGSI_SWIZZLE_Y, 0));
+      ureg_MAD(ureg, ureg_writemask(dst[0], TGSI_WRITEMASK_XYZ),
+               ureg_swizzle(src[0], TGSI_SWIZZLE_Z, TGSI_SWIZZLE_X,
+                            TGSI_SWIZZLE_Y, 0),
+               ureg_negate(ureg_swizzle(src[1], TGSI_SWIZZLE_Y,
+                                        TGSI_SWIZZLE_Z, TGSI_SWIZZLE_X, 0)),
+               ureg_src(dst[0]));
       break;
 
    case OPCODE_RSQ:
@@ -588,6 +590,17 @@ compile_instruction(
    case OPCODE_SUB:
       ureg_ADD(ureg, dst[0], src[0], ureg_negate(src[1]));
       break;
+
+   case OPCODE_DPH: {
+      struct ureg_dst temp = ureg_DECL_temporary(ureg);
+
+      /* DPH = DP4(src0, src1) where src0.w = 1. */
+      ureg_MOV(ureg, ureg_writemask(temp, TGSI_WRITEMASK_XYZ), src[0]);
+      ureg_MOV(ureg, ureg_writemask(temp, TGSI_WRITEMASK_W),
+               ureg_imm1f(ureg, 1));
+      ureg_DP4(ureg, dst[0], ureg_src(temp), src[1]);
+      break;
+   }
 
    default:
       ureg_insn( ureg, 

@@ -58,7 +58,10 @@
 /* Write dirty L2 lines back to memory (shader and CP DMA stores), but don't
  * invalidate L2. SI-CIK can't do it, so they will do complete invalidation. */
 #define SI_CONTEXT_WRITEBACK_GLOBAL_L2	(R600_CONTEXT_PRIVATE_FLAG << 4)
-/* gaps */
+/* Writeback & invalidate the L2 metadata cache. It can only be coupled with
+ * a CB or DB flush. */
+#define SI_CONTEXT_INV_L2_METADATA	(R600_CONTEXT_PRIVATE_FLAG << 5)
+/* gap */
 /* Framebuffer caches. */
 #define SI_CONTEXT_FLUSH_AND_INV_DB	(R600_CONTEXT_PRIVATE_FLAG << 7)
 #define SI_CONTEXT_FLUSH_AND_INV_CB	(R600_CONTEXT_PRIVATE_FLAG << 8)
@@ -198,6 +201,8 @@ struct si_framebuffer {
 	ubyte				dirty_cbufs;
 	bool				dirty_zsbuf;
 	bool				any_dst_linear;
+	bool				CB_has_shader_readable_metadata;
+	bool				DB_has_shader_readable_metadata;
 };
 
 struct si_clip_state {
@@ -266,12 +271,10 @@ struct si_saved_cs {
 	struct pipe_reference	reference;
 	struct si_context	*ctx;
 	struct radeon_saved_cs	gfx;
-	struct radeon_saved_cs	ce;
 	struct r600_resource	*trace_buf;
 	unsigned		trace_id;
 
 	unsigned		gfx_last_dw;
-	unsigned		ce_last_dw;
 	bool			flushed;
 };
 
@@ -288,15 +291,7 @@ struct si_context {
 	struct si_shader_ctx_state	fixed_func_tcs_shader;
 	struct r600_resource		*wait_mem_scratch;
 	unsigned			wait_mem_number;
-
-	struct radeon_winsys_cs		*ce_ib;
-	struct radeon_winsys_cs		*ce_preamble_ib;
-	struct r600_resource		*ce_ram_saved_buffer;
-	struct u_suballocator		*ce_suballocator;
-	unsigned			ce_ram_saved_offset;
-	uint16_t			total_ce_ram_allocated;
 	uint16_t			prefetch_L2_mask;
-	bool				ce_need_synchronization:1;
 
 	bool				gfx_flush_in_progress:1;
 	bool				compute_is_busy:1;
@@ -619,6 +614,50 @@ si_saved_cs_reference(struct si_saved_cs **dst, struct si_saved_cs *src)
 		si_destroy_saved_cs(*dst);
 
 	*dst = src;
+}
+
+static inline void
+si_make_CB_shader_coherent(struct si_context *sctx, unsigned num_samples,
+			   bool shaders_read_metadata)
+{
+	sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_CB |
+			 SI_CONTEXT_INV_VMEM_L1;
+
+	if (sctx->b.chip_class >= GFX9) {
+		/* Single-sample color is coherent with shaders on GFX9, but
+		 * L2 metadata must be flushed if shaders read metadata.
+		 * (DCC, CMASK).
+		 */
+		if (num_samples >= 2)
+			sctx->b.flags |= SI_CONTEXT_INV_GLOBAL_L2;
+		else if (shaders_read_metadata)
+			sctx->b.flags |= SI_CONTEXT_INV_L2_METADATA;
+	} else {
+		/* SI-CI-VI */
+		sctx->b.flags |= SI_CONTEXT_INV_GLOBAL_L2;
+	}
+}
+
+static inline void
+si_make_DB_shader_coherent(struct si_context *sctx, unsigned num_samples,
+			   bool include_stencil, bool shaders_read_metadata)
+{
+	sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_DB |
+			 SI_CONTEXT_INV_VMEM_L1;
+
+	if (sctx->b.chip_class >= GFX9) {
+		/* Single-sample depth (not stencil) is coherent with shaders
+		 * on GFX9, but L2 metadata must be flushed if shaders read
+		 * metadata.
+		 */
+		if (num_samples >= 2 || include_stencil)
+			sctx->b.flags |= SI_CONTEXT_INV_GLOBAL_L2;
+		else if (shaders_read_metadata)
+			sctx->b.flags |= SI_CONTEXT_INV_L2_METADATA;
+	} else {
+		/* SI-CI-VI */
+		sctx->b.flags |= SI_CONTEXT_INV_GLOBAL_L2;
+	}
 }
 
 #endif

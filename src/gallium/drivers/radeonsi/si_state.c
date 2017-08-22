@@ -719,12 +719,6 @@ static void si_emit_clip_regs(struct si_context *sctx, struct r600_atom *atom)
 		rs->pa_cl_clip_cntl |
 		ucp_mask |
 		S_028810_CLIP_DISABLE(window_space));
-
-	if (sctx->b.chip_class <= VI) {
-		/* reuse needs to be set off if we write oViewport */
-		radeon_set_context_reg(cs, R_028AB4_VGT_REUSE_OFF,
-				       S_028AB4_REUSE_OFF(info->writes_viewport_index));
-	}
 }
 
 /*
@@ -2327,8 +2321,7 @@ static void si_init_depth_surface(struct si_context *sctx,
 		surf->db_depth_size = S_02801C_X_MAX(rtex->resource.b.b.width0 - 1) |
 				      S_02801C_Y_MAX(rtex->resource.b.b.height0 - 1);
 
-		/* Only use HTILE for the first level. */
-		if (rtex->htile_offset && !level) {
+		if (r600_htile_enabled(rtex, level)) {
 			z_info |= S_028038_TILE_SURFACE_ENABLE(1) |
 				  S_028038_ALLOW_EXPCLEAR(1);
 
@@ -2406,8 +2399,7 @@ static void si_init_depth_surface(struct si_context *sctx,
 		surf->db_depth_slice = S_02805C_SLICE_TILE_MAX((levelinfo->nblk_x *
 								levelinfo->nblk_y) / 64 - 1);
 
-		/* Only use HTILE for the first level. */
-		if (rtex->htile_offset && !level) {
+		if (r600_htile_enabled(rtex, level)) {
 			z_info |= S_028040_TILE_SURFACE_ENABLE(1) |
 				  S_028040_ALLOW_EXPCLEAR(1);
 
@@ -2572,11 +2564,10 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	 * Only flush and wait for CB if there is actually a bound color buffer.
 	 */
 	if (sctx->framebuffer.nr_samples <= 1 &&
-	    sctx->framebuffer.state.nr_cbufs) {
-		sctx->b.flags |= SI_CONTEXT_INV_VMEM_L1 |
-				 SI_CONTEXT_INV_GLOBAL_L2 |
-				 SI_CONTEXT_FLUSH_AND_INV_CB;
-	}
+	    sctx->framebuffer.state.nr_cbufs)
+		si_make_CB_shader_coherent(sctx, sctx->framebuffer.nr_samples,
+					   sctx->framebuffer.CB_has_shader_readable_metadata);
+
 	sctx->b.flags |= SI_CONTEXT_CS_PARTIAL_FLUSH;
 
 	/* u_blitter doesn't invoke depth decompression when it does multiple
@@ -2585,11 +2576,9 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	 * individual generate_mipmap blits.
 	 * Note that lower mipmap levels aren't compressed.
 	 */
-	if (sctx->generate_mipmap_for_depth) {
-		sctx->b.flags |= SI_CONTEXT_INV_VMEM_L1 |
-				 SI_CONTEXT_INV_GLOBAL_L2 |
-				 SI_CONTEXT_FLUSH_AND_INV_DB;
-	}
+	if (sctx->generate_mipmap_for_depth)
+		si_make_DB_shader_coherent(sctx, 1, false,
+					   sctx->framebuffer.DB_has_shader_readable_metadata);
 
 	/* Take the maximum of the old and new count. If the new count is lower,
 	 * dirtying is needed to disable the unbound colorbuffers.
@@ -2613,6 +2602,8 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	sctx->framebuffer.nr_samples = util_framebuffer_get_num_samples(state);
 	sctx->framebuffer.log_samples = util_logbase2(sctx->framebuffer.nr_samples);
 	sctx->framebuffer.any_dst_linear = false;
+	sctx->framebuffer.CB_has_shader_readable_metadata = false;
+	sctx->framebuffer.DB_has_shader_readable_metadata = false;
 
 	for (i = 0; i < state->nr_cbufs; i++) {
 		if (!state->cbufs[i])
@@ -2647,6 +2638,9 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 		if (rtex->surface.is_linear)
 			sctx->framebuffer.any_dst_linear = true;
 
+		if (vi_dcc_enabled(rtex, surf->base.u.tex.level))
+			sctx->framebuffer.CB_has_shader_readable_metadata = true;
+
 		r600_context_add_resource_size(ctx, surf->base.texture);
 
 		p_atomic_inc(&rtex->framebuffers_bound);
@@ -2665,6 +2659,10 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 		if (!surf->depth_initialized) {
 			si_init_depth_surface(sctx, surf);
 		}
+
+		if (vi_tc_compat_htile_enabled(rtex, surf->base.u.tex.level))
+			sctx->framebuffer.DB_has_shader_readable_metadata = true;
+
 		r600_context_add_resource_size(ctx, surf->base.texture);
 	}
 
@@ -4026,11 +4024,9 @@ static void si_texture_barrier(struct pipe_context *ctx, unsigned flags)
 
 	/* Multisample surfaces are flushed in si_decompress_textures. */
 	if (sctx->framebuffer.nr_samples <= 1 &&
-	    sctx->framebuffer.state.nr_cbufs) {
-		sctx->b.flags |= SI_CONTEXT_INV_VMEM_L1 |
-				 SI_CONTEXT_INV_GLOBAL_L2 |
-				 SI_CONTEXT_FLUSH_AND_INV_CB;
-	}
+	    sctx->framebuffer.state.nr_cbufs)
+		si_make_CB_shader_coherent(sctx, sctx->framebuffer.nr_samples,
+					   sctx->framebuffer.CB_has_shader_readable_metadata);
 }
 
 /* This only ensures coherency for shader image/buffer stores. */
@@ -4073,8 +4069,10 @@ static void si_memory_barrier(struct pipe_context *ctx, unsigned flags)
 	if (flags & PIPE_BARRIER_FRAMEBUFFER &&
 	    sctx->framebuffer.nr_samples <= 1 &&
 	    sctx->framebuffer.state.nr_cbufs) {
-		sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_CB |
-				 SI_CONTEXT_WRITEBACK_GLOBAL_L2;
+		sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_CB;
+
+		if (sctx->b.chip_class <= VI)
+			sctx->b.flags |= SI_CONTEXT_WRITEBACK_GLOBAL_L2;
 	}
 
 	/* Indirect buffers use TC L2 on GFX9, but not older hw. */

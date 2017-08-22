@@ -285,19 +285,6 @@ Perform a * b + c with no intermediate rounding step.
   dst.w = src0.w \times src1.w + src2.w
 
 
-.. opcode:: DP2A - 2-component Dot Product And Add
-
-.. math::
-
-  dst.x = src0.x \times src1.x + src0.y \times src1.y + src2.x
-
-  dst.y = src0.x \times src1.x + src0.y \times src1.y + src2.x
-
-  dst.z = src0.x \times src1.x + src0.y \times src1.y + src2.x
-
-  dst.w = src0.x \times src1.x + src0.y \times src1.y + src2.x
-
-
 .. opcode:: FRC - Fraction
 
 .. math::
@@ -362,27 +349,6 @@ This instruction replicates its result.
 .. math::
 
   dst = src0.x^{src1.x}
-
-.. opcode:: XPD - Cross Product
-
-.. math::
-
-  dst.x = src0.y \times src1.z - src1.y \times src0.z
-
-  dst.y = src0.z \times src1.x - src1.z \times src0.x
-
-  dst.z = src0.x \times src1.y - src1.x \times src0.y
-
-  dst.w = 1
-
-
-.. opcode:: DPH - Homogeneous Dot Product
-
-This instruction replicates its result.
-
-.. math::
-
-  dst = src0.x \times src1.x + src0.y \times src1.y + src0.z \times src1.z + src1.w
 
 
 .. opcode:: COS - Cosine
@@ -835,50 +801,6 @@ This instruction replicates its result.
   dst = texture\_sample(unit, coord, lod)
 
 
-.. opcode:: PUSHA - Push Address Register On Stack
-
-  push(src.x)
-  push(src.y)
-  push(src.z)
-  push(src.w)
-
-.. note::
-
-   Considered for cleanup.
-
-.. note::
-
-   Considered for removal.
-
-.. opcode:: POPA - Pop Address Register From Stack
-
-  dst.w = pop()
-  dst.z = pop()
-  dst.y = pop()
-  dst.x = pop()
-
-.. note::
-
-   Considered for cleanup.
-
-.. note::
-
-   Considered for removal.
-
-
-.. opcode:: CALLNZ - Subroutine Call If Not Zero
-
-   TBD
-
-.. note::
-
-   Considered for cleanup.
-
-.. note::
-
-   Considered for removal.
-
-
 Compute ISA
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -932,19 +854,6 @@ XXX doesn't look like most of the opcodes really belong here.
   destination register, which is assumed to be an address (ADDR) register.
 
 
-.. opcode:: SAD - Sum Of Absolute Differences
-
-.. math::
-
-  dst.x = |src0.x - src1.x| + src2.x
-
-  dst.y = |src0.y - src1.y| + src2.y
-
-  dst.z = |src0.z - src1.z| + src2.z
-
-  dst.w = |src0.w - src1.w| + src2.w
-
-
 .. opcode:: TXF - Texel Fetch
 
   As per NV_gpu_shader4, extract a single texel from a specified texture
@@ -959,12 +868,6 @@ XXX doesn't look like most of the opcodes really belong here.
   state.
 
   TXF(uint_vec coord, int_vec offset).
-
-
-.. opcode:: TXF_LZ - Texel Fetch
-
-  This is the same as TXF with level = 0. Like TXF, it obeys
-  pipe_sampler_view::u.tex.first_level.
 
 
 .. opcode:: TXQ - Texture Size Query
@@ -1693,7 +1596,7 @@ GLSL ISA
 
 These opcodes are part of :term:`GLSL`'s opcode set. Support for these
 opcodes is determined by a special capability bit, ``GLSL``.
-Some require glsl version 1.30 (UIF/BREAKC/SWITCH/CASE/DEFAULT/ENDSWITCH).
+Some require glsl version 1.30 (UIF/SWITCH/CASE/DEFAULT/ENDSWITCH).
 
 .. opcode:: CAL - Subroutine Call
 
@@ -1747,20 +1650,6 @@ Some require glsl version 1.30 (UIF/BREAKC/SWITCH/CASE/DEFAULT/ENDSWITCH).
   Unconditionally moves the point of execution to the instruction after the
   next endloop or endswitch. The instruction must appear within a loop/endloop
   or switch/endswitch.
-
-
-.. opcode:: BREAKC - Break Conditional
-
-  Conditionally moves the point of execution to the instruction after the
-  next endloop or endswitch. The instruction must appear within a loop/endloop
-  or switch/endswitch.
-  Condition evaluates to true if src0.x != 0 where src0.x is interpreted
-  as an integer register.
-
-.. note::
-
-   Considered for removal as it's quite inconsistent wrt other opcodes
-   (could emulate with UIF/BRK/ENDIF). 
 
 
 .. opcode:: IF - Float If
@@ -2684,36 +2573,6 @@ Inter-thread synchronization opcodes
 These opcodes are intended for communication between threads running
 within the same compute grid.  For now they're only valid in compute
 programs.
-
-.. opcode:: MFENCE - Memory fence
-
-  Syntax: ``MFENCE resource``
-
-  Example: ``MFENCE RES[0]``
-
-  This opcode forces strong ordering between any memory access
-  operations that affect the specified resource.  This means that
-  previous loads and stores (and only those) will be performed and
-  visible to other threads before the program execution continues.
-
-
-.. opcode:: LFENCE - Load memory fence
-
-  Syntax: ``LFENCE resource``
-
-  Example: ``LFENCE RES[0]``
-
-  Similar to MFENCE, but it only affects the ordering of memory loads.
-
-
-.. opcode:: SFENCE - Store memory fence
-
-  Syntax: ``SFENCE resource``
-
-  Example: ``SFENCE RES[0]``
-
-  Similar to MFENCE, but it only affects the ordering of memory stores.
-
 
 .. opcode:: BARRIER - Thread group barrier
 
@@ -3778,7 +3637,7 @@ of the operands are equal to 0. That means that 0 * Inf = 0. This
 should be set the same way for an entire pipeline. Note that this
 applies not only to the literal MUL TGSI opcode, but all FP32
 multiplications implied by other operations, such as MAD, FMA, DP2,
-DP3, DP4, DPH, DST, LOG, LRP, XPD, and possibly others. If there is a
+DP3, DP4, DST, LOG, LRP, and possibly others. If there is a
 mismatch between shaders, then it is unspecified whether this behavior
 will be enabled.
 

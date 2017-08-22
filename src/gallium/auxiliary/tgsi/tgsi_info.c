@@ -58,7 +58,7 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 1, 3, 0, 0, 0, 0, 0, COMP, "LRP", TGSI_OPCODE_LRP },
    { 1, 3, 0, 0, 0, 0, 0, COMP, "FMA", TGSI_OPCODE_FMA },
    { 1, 1, 0, 0, 0, 0, 0, REPL, "SQRT", TGSI_OPCODE_SQRT },
-   { 1, 3, 0, 0, 0, 0, 0, REPL, "DP2A", TGSI_OPCODE_DP2A },
+   { 1, 3, 0, 0, 0, 0, 0, REPL, "", 21 }, /* removed */
    { 1, 1, 0, 0, 0, 0, 0, COMP, "F2U64", TGSI_OPCODE_F2U64 },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "F2I64", TGSI_OPCODE_F2I64 },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "FRC", TGSI_OPCODE_FRC },
@@ -68,11 +68,11 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 1, 1, 0, 0, 0, 0, 0, REPL, "EX2", TGSI_OPCODE_EX2 },
    { 1, 1, 0, 0, 0, 0, 0, REPL, "LG2", TGSI_OPCODE_LG2 },
    { 1, 2, 0, 0, 0, 0, 0, REPL, "POW", TGSI_OPCODE_POW },
-   { 1, 2, 0, 0, 0, 0, 0, COMP, "XPD", TGSI_OPCODE_XPD },
+   { 1, 2, 0, 0, 0, 0, 0, COMP, "", 31 }, /* removed */
    { 1, 1, 0, 0, 0, 0, 0, COMP, "U2I64", TGSI_OPCODE_U2I64 },
    { 1, 0, 0, 0, 0, 0, 0, OTHR, "CLOCK", TGSI_OPCODE_CLOCK },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "I2I64", TGSI_OPCODE_I2I64 },
-   { 1, 2, 0, 0, 0, 0, 0, REPL, "DPH", TGSI_OPCODE_DPH },
+   { 1, 2, 0, 0, 0, 0, 0, REPL, "", 35 }, /* removed */
    { 1, 1, 0, 0, 0, 0, 0, REPL, "COS", TGSI_OPCODE_COS },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "DDX", TGSI_OPCODE_DDX },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "DDY", TGSI_OPCODE_DDY },
@@ -118,8 +118,8 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 0, 0, 0, 0, 0, 1, 0, NONE, "ENDIF", TGSI_OPCODE_ENDIF },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "DDX_FINE", TGSI_OPCODE_DDX_FINE },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "DDY_FINE", TGSI_OPCODE_DDY_FINE },
-   { 0, 1, 0, 0, 0, 0, 0, NONE, "PUSHA", TGSI_OPCODE_PUSHA },
-   { 1, 0, 0, 0, 0, 0, 0, NONE, "POPA", TGSI_OPCODE_POPA },
+   { 0, 1, 0, 0, 0, 0, 0, NONE, "", 81 }, /* removed */
+   { 1, 0, 0, 0, 0, 0, 0, NONE, "", 82 }, /* removed */
    { 1, 1, 0, 0, 0, 0, 0, COMP, "CEIL", TGSI_OPCODE_CEIL },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "I2F", TGSI_OPCODE_I2F },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "NOT", TGSI_OPCODE_NOT },
@@ -130,7 +130,7 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 1, 2, 0, 0, 0, 0, 0, COMP, "OR", TGSI_OPCODE_OR },
    { 1, 2, 0, 0, 0, 0, 0, COMP, "MOD", TGSI_OPCODE_MOD },
    { 1, 2, 0, 0, 0, 0, 0, COMP, "XOR", TGSI_OPCODE_XOR },
-   { 1, 3, 0, 0, 0, 0, 0, COMP, "SAD", TGSI_OPCODE_SAD },
+   { 1, 3, 0, 0, 0, 0, 0, COMP, "", 93 }, /* removed */
    { 1, 2, 1, 0, 0, 0, 0, OTHR, "TXF", TGSI_OPCODE_TXF },
    { 1, 2, 1, 0, 0, 0, 0, OTHR, "TXQ", TGSI_OPCODE_TXQ },
    { 0, 0, 0, 0, 0, 0, 0, NONE, "CONT", TGSI_OPCODE_CONT },
@@ -140,7 +140,7 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 0, 0, 0, 0, 0, 0, 1, NONE, "BGNSUB", TGSI_OPCODE_BGNSUB },
    { 0, 0, 0, 0, 1, 1, 0, NONE, "ENDLOOP", TGSI_OPCODE_ENDLOOP },
    { 0, 0, 0, 0, 0, 1, 0, NONE, "ENDSUB", TGSI_OPCODE_ENDSUB },
-   { 1, 1, 1, 0, 0, 0, 0, OTHR, "TXQ_LZ", TGSI_OPCODE_TXQ_LZ },
+   { 1, 1, 1, 0, 0, 0, 0, OTHR, "", 103 }, /* removed */
    { 1, 1, 1, 0, 0, 0, 0, OTHR, "TXQS", TGSI_OPCODE_TXQS },
    { 1, 1, 0, 0, 0, 0, 0, OTHR, "RESQ", TGSI_OPCODE_RESQ },
    { 1, 1, 0, 0, 0, 0, 0, COMP, "READ_FIRST", TGSI_OPCODE_READ_FIRST },
@@ -150,9 +150,9 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 1, 2, 0, 0, 0, 0, 0, COMP, "FSLT", TGSI_OPCODE_FSLT },
    { 1, 2, 0, 0, 0, 0, 0, COMP, "FSNE", TGSI_OPCODE_FSNE },
    { 0, 1, 0, 0, 0, 0, 0, OTHR, "MEMBAR", TGSI_OPCODE_MEMBAR },
-   { 0, 1, 0, 0, 0, 0, 0, NONE, "CALLNZ", TGSI_OPCODE_CALLNZ },
-   { 0, 1, 0, 0, 0, 0, 0, NONE, "", 114 },     /* removed */
-   { 0, 1, 0, 0, 0, 0, 0, NONE, "BREAKC", TGSI_OPCODE_BREAKC },
+   { 0, 1, 0, 0, 0, 0, 0, NONE, "", 113 }, /* removed */
+   { 0, 1, 0, 0, 0, 0, 0, NONE, "", 114 }, /* removed */
+   { 0, 1, 0, 0, 0, 0, 0, NONE, "", 115 }, /* removed */
    { 0, 1, 0, 0, 0, 0, 0, NONE, "KILL_IF", TGSI_OPCODE_KILL_IF },
    { 0, 0, 0, 0, 0, 0, 0, NONE, "END", TGSI_OPCODE_END },
    { 1, 3, 0, 0, 0, 0, 0, COMP, "DFMA", TGSI_OPCODE_DFMA },
@@ -201,9 +201,9 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 1, 1, 0, 0, 0, 0, 0, COMP, "ISSG", TGSI_OPCODE_ISSG },
    { 1, 2, 0, 0, 0, 0, 0, OTHR, "LOAD", TGSI_OPCODE_LOAD },
    { 1, 2, 0, 1, 0, 0, 0, OTHR, "STORE", TGSI_OPCODE_STORE },
-   { 1, 0, 0, 0, 0, 0, 0, OTHR, "MFENCE", TGSI_OPCODE_MFENCE },
-   { 1, 0, 0, 0, 0, 0, 0, OTHR, "LFENCE", TGSI_OPCODE_LFENCE },
-   { 1, 0, 0, 0, 0, 0, 0, OTHR, "SFENCE", TGSI_OPCODE_SFENCE },
+   { 1, 0, 0, 0, 0, 0, 0, OTHR, "", 163 }, /* removed */
+   { 1, 0, 0, 0, 0, 0, 0, OTHR, "", 164 }, /* removed */
+   { 1, 0, 0, 0, 0, 0, 0, OTHR, "", 165 }, /* removed */
    { 0, 0, 0, 0, 0, 0, 0, OTHR, "BARRIER", TGSI_OPCODE_BARRIER },
 
    { 1, 3, 0, 1, 0, 0, 0, OTHR, "ATOMUADD", TGSI_OPCODE_ATOMUADD },
@@ -356,9 +356,7 @@ tgsi_opcode_infer_type( uint opcode )
    case TGSI_OPCODE_AND:
    case TGSI_OPCODE_OR:
    case TGSI_OPCODE_XOR:
-   case TGSI_OPCODE_SAD: /* XXX some src args may be signed for SAD ? */
    case TGSI_OPCODE_TXQ:
-   case TGSI_OPCODE_TXQ_LZ:
    case TGSI_OPCODE_TXQS:
    case TGSI_OPCODE_F2U:
    case TGSI_OPCODE_UDIV:
@@ -479,7 +477,6 @@ tgsi_opcode_infer_src_type( uint opcode )
    case TGSI_OPCODE_UIF:
    case TGSI_OPCODE_TXF:
    case TGSI_OPCODE_TXF_LZ:
-   case TGSI_OPCODE_BREAKC:
    case TGSI_OPCODE_U2F:
    case TGSI_OPCODE_U2D:
    case TGSI_OPCODE_UADD:
@@ -499,7 +496,6 @@ tgsi_opcode_infer_src_type( uint opcode )
       return TGSI_TYPE_SIGNED;
    case TGSI_OPCODE_ARL:
    case TGSI_OPCODE_ARR:
-   case TGSI_OPCODE_TXQ_LZ:
    case TGSI_OPCODE_F2D:
    case TGSI_OPCODE_F2I:
    case TGSI_OPCODE_F2U:

@@ -55,10 +55,6 @@ static void si_destroy_context(struct pipe_context *context)
 
 	si_release_all_descriptors(sctx);
 
-	if (sctx->ce_suballocator)
-		u_suballocator_destroy(sctx->ce_suballocator);
-
-	r600_resource_reference(&sctx->ce_ram_saved_buffer, NULL);
 	pipe_resource_reference(&sctx->esgs_ring, NULL);
 	pipe_resource_reference(&sctx->gsvs_ring, NULL);
 	pipe_resource_reference(&sctx->tf_ring, NULL);
@@ -210,45 +206,6 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 	sctx->b.gfx.cs = ws->cs_create(sctx->b.ctx, RING_GFX,
 				       si_context_gfx_flush, sctx);
-
-	bool enable_ce = sscreen->b.chip_class != SI && /* SI hangs */
-			 /* These can't use CE due to a power gating bug in the kernel. */
-			 sscreen->b.family != CHIP_CARRIZO &&
-			 sscreen->b.family != CHIP_STONEY;
-
-	/* CE is currently disabled by default, because it makes s_load latency
-	 * worse, because CE IB doesn't run in lockstep with DE.
-	 * Remove this line after that performance issue has been resolved.
-	 */
-	enable_ce = false;
-
-	/* Apply CE overrides. */
-	if (sscreen->b.debug_flags & DBG_NO_CE)
-		enable_ce = false;
-	else if (sscreen->b.debug_flags & DBG_CE)
-		enable_ce = true;
-
-	if (ws->cs_add_const_ib && enable_ce) {
-		sctx->ce_ib = ws->cs_add_const_ib(sctx->b.gfx.cs);
-		if (!sctx->ce_ib)
-			goto fail;
-
-		if (ws->cs_add_const_preamble_ib) {
-			sctx->ce_preamble_ib =
-			           ws->cs_add_const_preamble_ib(sctx->b.gfx.cs);
-
-			if (!sctx->ce_preamble_ib)
-				goto fail;
-		}
-
-		sctx->ce_suballocator =
-			u_suballocator_create(&sctx->b.b, 1024 * 1024, 0,
-					      PIPE_USAGE_DEFAULT,
-					      R600_RESOURCE_FLAG_UNMAPPABLE, false);
-		if (!sctx->ce_suballocator)
-			goto fail;
-	}
-
 	sctx->b.gfx.flush = si_context_gfx_flush;
 
 	/* Border colors. */
@@ -788,6 +745,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
 	case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
+	case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
 		return 1;
 
 	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
@@ -807,7 +765,6 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	/* Unsupported boolean features. */
 	case PIPE_SHADER_CAP_SUBROUTINES:
 	case PIPE_SHADER_CAP_SUPPORTED_IRS:
-	case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
 		return 0;
 	}

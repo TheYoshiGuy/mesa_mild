@@ -66,13 +66,15 @@ struct u_log_context;
 /* special primitive types */
 #define R600_PRIM_RECTANGLE_LIST	PIPE_PRIM_MAX
 
+#define R600_NOT_QUERY		0xffffffff
+
 /* Debug flags. */
 /* logging and features */
 #define DBG_TEX			(1 << 0)
 #define DBG_NIR			(1 << 1)
 #define DBG_COMPUTE		(1 << 2)
 #define DBG_VM			(1 << 3)
-#define DBG_CE			(1 << 4)
+/* gap */
 /* shader logging */
 #define DBG_FS			(1 << 5)
 #define DBG_VS			(1 << 6)
@@ -108,7 +110,7 @@ struct u_log_context;
 #define DBG_NO_RB_PLUS		(1ull << 45)
 #define DBG_SI_SCHED		(1ull << 46)
 #define DBG_MONOLITHIC_SHADERS	(1ull << 47)
-#define DBG_NO_CE		(1ull << 48)
+/* gap */
 #define DBG_UNSAFE_MATH		(1ull << 49)
 #define DBG_NO_DCC_FB		(1ull << 50)
 #define DBG_TEST_VMFAULT_CP	(1ull << 51)
@@ -375,7 +377,6 @@ union r600_mmio_counters {
 		struct r600_mmio_counter surf_sync;
 		struct r600_mmio_counter cp_dma;
 		struct r600_mmio_counter scratch_ram;
-		struct r600_mmio_counter ce;
 	} named;
 	unsigned array[0];
 };
@@ -1003,6 +1004,19 @@ static inline bool
 vi_dcc_enabled(struct r600_texture *tex, unsigned level)
 {
 	return tex->dcc_offset && level < tex->surface.num_dcc_levels;
+}
+
+static inline bool
+r600_htile_enabled(struct r600_texture *tex, unsigned level)
+{
+	return tex->htile_offset && level == 0;
+}
+
+static inline bool
+vi_tc_compat_htile_enabled(struct r600_texture *tex, unsigned level)
+{
+	assert(!tex->tc_compatible_htile || tex->htile_offset);
+	return tex->tc_compatible_htile && level == 0;
 }
 
 #define COMPUTE_DBG(rscreen, fmt, args...) \

@@ -554,9 +554,6 @@ lp_emit_instruction_aos(
       dst0 = lp_build_add(&bld->bld_base.base, tmp0, src2);
       break;
 
-   case TGSI_OPCODE_DP2A:
-      return FALSE;
-
    case TGSI_OPCODE_FRC:
       src0 = lp_build_emit_fetch(&bld->bld_base, inst, 0, LP_CHAN_ALL);
       tmp0 = lp_build_floor(&bld->bld_base.base, src0);
@@ -592,12 +589,6 @@ lp_emit_instruction_aos(
       src1 = swizzle_scalar_aos(bld, src1, TGSI_SWIZZLE_X);
       dst0 = lp_build_pow(&bld->bld_base.base, src0, src1);
       break;
-
-   case TGSI_OPCODE_XPD:
-      return FALSE;
-
-   case TGSI_OPCODE_DPH:
-      return FALSE;
 
    case TGSI_OPCODE_COS:
       src0 = lp_build_emit_fetch(&bld->bld_base, inst, 0, LP_CHAN_ALL);
@@ -776,18 +767,6 @@ lp_emit_instruction_aos(
    case TGSI_OPCODE_ENDSUB:
       return FALSE;
 
-   case TGSI_OPCODE_PUSHA:
-      /* deprecated? */
-      assert(0);
-      return FALSE;
-      break;
-
-   case TGSI_OPCODE_POPA:
-      /* deprecated? */
-      assert(0);
-      return FALSE;
-      break;
-
    case TGSI_OPCODE_CEIL:
       src0 = lp_build_emit_fetch(&bld->bld_base, inst, 0, LP_CHAN_ALL);
       dst0 = lp_build_ceil(&bld->bld_base.base, src0);
@@ -834,11 +813,6 @@ lp_emit_instruction_aos(
       break;
 
    case TGSI_OPCODE_XOR:
-      assert(0);
-      return FALSE;
-      break;
-
-   case TGSI_OPCODE_SAD:
       assert(0);
       return FALSE;
       break;

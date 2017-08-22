@@ -214,7 +214,6 @@ tgsi_util_get_inst_usage_mask(const struct tgsi_full_instruction *inst,
    case TGSI_OPCODE_AND:
    case TGSI_OPCODE_OR:
    case TGSI_OPCODE_XOR:
-   case TGSI_OPCODE_SAD:
    case TGSI_OPCODE_FSEQ:
    case TGSI_OPCODE_FSGE:
    case TGSI_OPCODE_FSLT:
@@ -263,10 +262,6 @@ tgsi_util_get_inst_usage_mask(const struct tgsi_full_instruction *inst,
       read_mask = write_mask & TGSI_WRITEMASK_XYZ ? TGSI_WRITEMASK_X : 0;
       break;
 
-   case TGSI_OPCODE_DP2A:
-      read_mask = src_idx == 2 ? TGSI_WRITEMASK_X : TGSI_WRITEMASK_XY;
-      break;
-
    case TGSI_OPCODE_DP2:
       read_mask = TGSI_WRITEMASK_XY;
       break;
@@ -277,10 +272,6 @@ tgsi_util_get_inst_usage_mask(const struct tgsi_full_instruction *inst,
 
    case TGSI_OPCODE_DP4:
       read_mask = TGSI_WRITEMASK_XYZW;
-      break;
-
-   case TGSI_OPCODE_DPH:
-      read_mask = src_idx == 0 ? TGSI_WRITEMASK_XYZ : TGSI_WRITEMASK_XYZW;
       break;
 
    case TGSI_OPCODE_TEX:

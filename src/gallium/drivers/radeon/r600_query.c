@@ -219,7 +219,6 @@ static bool r600_query_sw_begin(struct r600_common_context *rctx,
 	case R600_QUERY_GPU_SURF_SYNC_BUSY:
 	case R600_QUERY_GPU_CP_DMA_BUSY:
 	case R600_QUERY_GPU_SCRATCH_RAM_BUSY:
-	case R600_QUERY_GPU_CE_BUSY:
 		query->begin_result = r600_begin_counter(rctx->screen,
 							 query->b.type);
 		break;
@@ -376,7 +375,6 @@ static bool r600_query_sw_end(struct r600_common_context *rctx,
 	case R600_QUERY_GPU_SURF_SYNC_BUSY:
 	case R600_QUERY_GPU_CP_DMA_BUSY:
 	case R600_QUERY_GPU_SCRATCH_RAM_BUSY:
-	case R600_QUERY_GPU_CE_BUSY:
 		query->end_result = r600_end_counter(rctx->screen,
 						     query->b.type,
 						     query->begin_result);
@@ -780,7 +778,8 @@ static void r600_query_hw_do_emit_start(struct r600_common_context *ctx,
 			 * (bottom-of-pipe)
 			 */
 			r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS,
-						 0, 3, NULL, va, 0, query->b.type);
+						 0, EOP_DATA_SEL_TIMESTAMP,
+						 NULL, va, 0, query->b.type);
 		}
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
@@ -865,7 +864,8 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 		/* fall through */
 	case PIPE_QUERY_TIMESTAMP:
 		r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS,
-					 0, 3, NULL, va, 0, query->b.type);
+					 0, EOP_DATA_SEL_TIMESTAMP, NULL, va,
+					 0, query->b.type);
 		fence_va = va + 8;
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS: {
@@ -887,7 +887,8 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 			RADEON_PRIO_QUERY);
 
 	if (fence_va)
-		r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS, 0, 1,
+		r600_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS, 0,
+					 EOP_DATA_SEL_VALUE_32BIT,
 					 query->buffer.buf, fence_va, 0x80000000,
 					 query->b.type);
 }
@@ -2075,7 +2076,6 @@ static struct pipe_driver_query_info r600_driver_query_list[] = {
 	X("GPU-surf-sync-busy",		GPU_SURF_SYNC_BUSY,	UINT64, AVERAGE),
 	X("GPU-cp-dma-busy",		GPU_CP_DMA_BUSY,	UINT64, AVERAGE),
 	X("GPU-scratch-ram-busy",	GPU_SCRATCH_RAM_BUSY,	UINT64, AVERAGE),
-	X("GPU-ce-busy",		GPU_CE_BUSY,		UINT64, AVERAGE),
 };
 
 #undef X

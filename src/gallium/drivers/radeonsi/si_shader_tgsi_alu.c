@@ -374,6 +374,11 @@ static void emit_ssg(const struct lp_build_tgsi_action *action,
 		val = LLVMBuildSelect(builder, cmp, bld_base->int_bld.one, emit_data->args[0], "");
 		cmp = LLVMBuildICmp(builder, LLVMIntSGE, val, bld_base->int_bld.zero, "");
 		val = LLVMBuildSelect(builder, cmp, val, LLVMConstInt(bld_base->int_bld.elem_type, -1, true), "");
+	} else if (emit_data->inst->Instruction.Opcode == TGSI_OPCODE_DSSG) {
+		cmp = LLVMBuildFCmp(builder, LLVMRealOGT, emit_data->args[0], bld_base->dbl_bld.zero, "");
+		val = LLVMBuildSelect(builder, cmp, bld_base->dbl_bld.one, emit_data->args[0], "");
+		cmp = LLVMBuildFCmp(builder, LLVMRealOGE, val, bld_base->dbl_bld.zero, "");
+		val = LLVMBuildSelect(builder, cmp, val, LLVMConstReal(bld_base->dbl_bld.elem_type, -1), "");
 	} else { // float SSG
 		cmp = LLVMBuildFCmp(builder, LLVMRealOGT, emit_data->args[0], bld_base->base.zero, "");
 		val = LLVMBuildSelect(builder, cmp, bld_base->base.one, emit_data->args[0], "");
@@ -656,27 +661,14 @@ static void emit_pk2h(const struct lp_build_tgsi_action *action,
 		      struct lp_build_tgsi_context *bld_base,
 		      struct lp_build_emit_data *emit_data)
 {
-	LLVMBuilderRef builder = bld_base->base.gallivm->builder;
-	LLVMContextRef context = bld_base->base.gallivm->context;
-	struct lp_build_context *uint_bld = &bld_base->uint_bld;
-	LLVMTypeRef fp16, i16;
-	LLVMValueRef const16, comp[2];
-	unsigned i;
-
-	fp16 = LLVMHalfTypeInContext(context);
-	i16 = LLVMInt16TypeInContext(context);
-	const16 = lp_build_const_int32(uint_bld->gallivm, 16);
-
-	for (i = 0; i < 2; i++) {
-		comp[i] = LLVMBuildFPTrunc(builder, emit_data->args[i], fp16, "");
-		comp[i] = LLVMBuildBitCast(builder, comp[i], i16, "");
-		comp[i] = LLVMBuildZExt(builder, comp[i], uint_bld->elem_type, "");
-	}
-
-	comp[1] = LLVMBuildShl(builder, comp[1], const16, "");
-	comp[0] = LLVMBuildOr(builder, comp[0], comp[1], "");
-
-	emit_data->output[emit_data->chan] = comp[0];
+	/* From the GLSL 4.50 spec:
+	 *   "The rounding mode cannot be set and is undefined."
+	 *
+	 * v_cvt_pkrtz_f16 rounds to zero, but it's fastest.
+	 */
+	emit_data->output[emit_data->chan] =
+		ac_build_cvt_pkrtz_f16(&si_shader_context(bld_base)->ac,
+				       emit_data->args);
 }
 
 static void up2h_fetch_args(struct lp_build_tgsi_context *bld_base,
@@ -758,19 +750,28 @@ void si_shader_context_init_alu(struct lp_build_tgsi_context *bld_base)
 	bld_base->op_actions[TGSI_OPCODE_COS].intr_name = "llvm.cos.f32";
 	bld_base->op_actions[TGSI_OPCODE_DABS].emit = build_tgsi_intrinsic_nomem;
 	bld_base->op_actions[TGSI_OPCODE_DABS].intr_name = "llvm.fabs.f64";
+	bld_base->op_actions[TGSI_OPCODE_DCEIL].emit = build_tgsi_intrinsic_nomem;
+	bld_base->op_actions[TGSI_OPCODE_DCEIL].intr_name = "llvm.ceil.f64";
+	bld_base->op_actions[TGSI_OPCODE_DFLR].emit = build_tgsi_intrinsic_nomem;
+	bld_base->op_actions[TGSI_OPCODE_DFLR].intr_name = "llvm.floor.f64";
 	bld_base->op_actions[TGSI_OPCODE_DFMA].emit = build_tgsi_intrinsic_nomem;
 	bld_base->op_actions[TGSI_OPCODE_DFMA].intr_name = "llvm.fma.f64";
 	bld_base->op_actions[TGSI_OPCODE_DFRAC].emit = emit_frac;
 	bld_base->op_actions[TGSI_OPCODE_DIV].emit = emit_fdiv;
 	bld_base->op_actions[TGSI_OPCODE_DNEG].emit = emit_dneg;
+	bld_base->op_actions[TGSI_OPCODE_DROUND].emit = build_tgsi_intrinsic_nomem;
+	bld_base->op_actions[TGSI_OPCODE_DROUND].intr_name = "llvm.rint.f64";
 	bld_base->op_actions[TGSI_OPCODE_DSEQ].emit = emit_dcmp;
 	bld_base->op_actions[TGSI_OPCODE_DSGE].emit = emit_dcmp;
 	bld_base->op_actions[TGSI_OPCODE_DSLT].emit = emit_dcmp;
 	bld_base->op_actions[TGSI_OPCODE_DSNE].emit = emit_dcmp;
+	bld_base->op_actions[TGSI_OPCODE_DSSG].emit = emit_ssg;
 	bld_base->op_actions[TGSI_OPCODE_DRSQ].emit = build_tgsi_intrinsic_nomem;
 	bld_base->op_actions[TGSI_OPCODE_DRSQ].intr_name = "llvm.amdgcn.rsq.f64";
 	bld_base->op_actions[TGSI_OPCODE_DSQRT].emit = build_tgsi_intrinsic_nomem;
 	bld_base->op_actions[TGSI_OPCODE_DSQRT].intr_name = "llvm.sqrt.f64";
+	bld_base->op_actions[TGSI_OPCODE_DTRUNC].emit = build_tgsi_intrinsic_nomem;
+	bld_base->op_actions[TGSI_OPCODE_DTRUNC].intr_name = "llvm.trunc.f64";
 	bld_base->op_actions[TGSI_OPCODE_EX2].emit = build_tgsi_intrinsic_nomem;
 	bld_base->op_actions[TGSI_OPCODE_EX2].intr_name = "llvm.exp2.f32";
 	bld_base->op_actions[TGSI_OPCODE_FLR].emit = build_tgsi_intrinsic_nomem;
