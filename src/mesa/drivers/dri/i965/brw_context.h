@@ -215,6 +215,7 @@ enum brw_state_id {
    BRW_STATE_VIEWPORT_COUNT,
    BRW_STATE_CONSERVATIVE_RASTERIZATION,
    BRW_STATE_DRAW_CALL,
+   BRW_STATE_FAST_CLEAR_COLOR,
    BRW_NUM_STATE_BITS
 };
 
@@ -306,6 +307,7 @@ enum brw_state_id {
 #define BRW_NEW_BLORP                   (1ull << BRW_STATE_BLORP)
 #define BRW_NEW_CONSERVATIVE_RASTERIZATION (1ull << BRW_STATE_CONSERVATIVE_RASTERIZATION)
 #define BRW_NEW_DRAW_CALL               (1ull << BRW_STATE_DRAW_CALL)
+#define BRW_NEW_FAST_CLEAR_COLOR        (1ull << BRW_STATE_FAST_CLEAR_COLOR)
 
 struct brw_state_flags {
    /** State update flags signalled by mesa internals */
@@ -631,11 +633,6 @@ struct brw_context
 
    struct
    {
-      uint32_t (*update_renderbuffer_surface)(struct brw_context *brw,
-                                              struct gl_renderbuffer *rb,
-                                              uint32_t flags, unsigned unit,
-                                              uint32_t surf_index);
-
       /**
        * Send the appropriate state packets to configure depth, stencil, and
        * HiZ buffers (i965+ only)
