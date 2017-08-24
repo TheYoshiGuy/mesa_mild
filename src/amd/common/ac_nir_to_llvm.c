@@ -5003,26 +5003,48 @@ handle_fs_input_decl(struct nir_to_llvm_context *ctx,
 }
 
 static void
-handle_shader_input_decl(struct nir_to_llvm_context *ctx,
-			 struct nir_variable *variable)
-{
-	switch (ctx->stage) {
-	case MESA_SHADER_VERTEX:
+handle_vs_inputs(struct nir_to_llvm_context *ctx,
+                 struct nir_shader *nir) {
+	nir_foreach_variable(variable, &nir->inputs)
 		handle_vs_input_decl(ctx, variable);
-		break;
-	case MESA_SHADER_FRAGMENT:
-		handle_fs_input_decl(ctx, variable);
-		break;
-	default:
-		break;
-	}
-
 }
 
 static void
-handle_fs_inputs_pre(struct nir_to_llvm_context *ctx,
-		     struct nir_shader *nir)
+prepare_interp_optimize(struct nir_to_llvm_context *ctx,
+                        struct nir_shader *nir)
 {
+	if (!ctx->options->key.fs.multisample)
+		return;
+
+	bool uses_center = false;
+	bool uses_centroid = false;
+	nir_foreach_variable(variable, &nir->inputs) {
+		if (glsl_get_base_type(glsl_without_array(variable->type)) != GLSL_TYPE_FLOAT ||
+		    variable->data.sample)
+			continue;
+
+		if (variable->data.centroid)
+			uses_centroid = true;
+		else
+			uses_center = true;
+	}
+
+	if (uses_center && uses_centroid) {
+		LLVMValueRef sel = LLVMBuildICmp(ctx->builder, LLVMIntSLT, ctx->prim_mask, ctx->ac.i32_0, "");
+		ctx->persp_centroid = LLVMBuildSelect(ctx->builder, sel, ctx->persp_center, ctx->persp_centroid, "");
+		ctx->linear_centroid = LLVMBuildSelect(ctx->builder, sel, ctx->linear_center, ctx->linear_centroid, "");
+	}
+}
+
+static void
+handle_fs_inputs(struct nir_to_llvm_context *ctx,
+                 struct nir_shader *nir)
+{
+	prepare_interp_optimize(ctx, nir);
+
+	nir_foreach_variable(variable, &nir->inputs)
+		handle_fs_input_decl(ctx, variable);
+
 	unsigned index = 0;
 	for (unsigned i = 0; i < RADEON_LLVM_MAX_INPUTS; ++i) {
 		LLVMValueRef interp_param;
@@ -6311,11 +6333,10 @@ LLVMModuleRef ac_translate_nir_to_llvm(LLVMTargetMachineRef tm,
 	ctx.num_output_clips = nir->info.clip_distance_array_size;
 	ctx.num_output_culls = nir->info.cull_distance_array_size;
 
-	nir_foreach_variable(variable, &nir->inputs)
-		handle_shader_input_decl(&ctx, variable);
-
 	if (nir->stage == MESA_SHADER_FRAGMENT)
-		handle_fs_inputs_pre(&ctx, nir);
+		handle_fs_inputs(&ctx, nir);
+	else if(nir->stage == MESA_SHADER_VERTEX)
+		handle_vs_inputs(&ctx, nir);
 
 	ctx.abi.chip_class = options->chip_class;
 	ctx.abi.inputs = &ctx.inputs[0];
