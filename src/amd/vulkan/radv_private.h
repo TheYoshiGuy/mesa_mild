@@ -86,6 +86,7 @@ typedef uint32_t xcb_window_t;
 #define MAX_SAMPLES_LOG2 4
 #define NUM_META_FS_KEYS 13
 #define RADV_MAX_DRM_DEVICES 8
+#define MAX_VIEWS        8
 
 #define NUM_DEPTH_CLEAR_PIPELINES 3
 
@@ -752,6 +753,7 @@ void radv_dynamic_state_copy(struct radv_dynamic_state *dest,
  */
 struct radv_attachment_state {
 	VkImageAspectFlags                           pending_clear_aspects;
+	uint32_t                                     cleared_views;
 	VkClearValue                                 clear_value;
 	VkImageLayout                                current_layout;
 };
@@ -956,14 +958,14 @@ struct radv_shader_module {
 	char                                         data[0];
 };
 
-union ac_shader_variant_key;
+struct ac_shader_variant_key;
 
 void
 radv_hash_shader(unsigned char *hash, struct radv_shader_module *module,
 		 const char *entrypoint,
 		 const VkSpecializationInfo *spec_info,
 		 const struct radv_pipeline_layout *layout,
-		 const union ac_shader_variant_key *key,
+		 const struct ac_shader_variant_key *key,
 		 uint32_t is_geom_copy_shader);
 
 static inline gl_shader_stage
@@ -1464,6 +1466,8 @@ struct radv_subpass {
 	bool                                         has_resolve;
 
 	struct radv_subpass_barrier                  start_barrier;
+
+	uint32_t                                     view_mask;
 };
 
 struct radv_render_pass_attachment {
@@ -1473,6 +1477,7 @@ struct radv_render_pass_attachment {
 	VkAttachmentLoadOp                           stencil_load_op;
 	VkImageLayout                                initial_layout;
 	VkImageLayout                                final_layout;
+	uint32_t                                     view_mask;
 };
 
 struct radv_render_pass {
