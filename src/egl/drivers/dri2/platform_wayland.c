@@ -145,7 +145,7 @@ dri2_wl_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
    if (!_eglInitSurface(&dri2_surf->base, disp, EGL_WINDOW_BIT, conf, attrib_list))
       goto cleanup_surf;
 
-   if (dri2_dpy->wl_drm) {
+   if (dri2_dpy->wl_dmabuf || dri2_dpy->wl_drm) {
       if (conf->RedSize == 5)
          dri2_surf->format = WL_DRM_FORMAT_RGB565;
       else if (conf->AlphaSize == 0)
@@ -162,7 +162,6 @@ dri2_wl_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
          dri2_surf->format = WL_SHM_FORMAT_ARGB8888;
    }
 
-   dri2_surf->wl_win = window;
    dri2_surf->wl_queue = wl_display_create_queue(dri2_dpy->wl_dpy);
    if (!dri2_surf->wl_queue) {
       _eglError(EGL_BAD_ALLOC, "dri2_create_surface");
@@ -190,22 +189,19 @@ dri2_wl_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
    dri2_surf->wl_surface_wrapper = get_wl_surface_proxy(window);
    if (!dri2_surf->wl_surface_wrapper) {
       _eglError(EGL_BAD_ALLOC, "dri2_create_surface");
-      goto cleanup_drm;
+      goto cleanup_dpy_wrapper;
    }
    wl_proxy_set_queue((struct wl_proxy *)dri2_surf->wl_surface_wrapper,
                       dri2_surf->wl_queue);
 
+   dri2_surf->wl_win = window;
    dri2_surf->wl_win->private = dri2_surf;
    dri2_surf->wl_win->destroy_window_callback = destroy_window_callback;
-
-   dri2_surf->base.Width =  -1;
-   dri2_surf->base.Height = -1;
+   if (dri2_dpy->flush)
+      dri2_surf->wl_win->resize_callback = resize_callback;
 
    config = dri2_get_dri_config(dri2_conf, EGL_WINDOW_BIT,
                                 dri2_surf->base.GLColorspace);
-
-   if (dri2_dpy->flush)
-      dri2_surf->wl_win->resize_callback = resize_callback;
 
    if (dri2_dpy->image_driver)
       createNewDrawable = dri2_dpy->image_driver->createNewDrawable;
@@ -218,13 +214,17 @@ dri2_wl_create_window_surface(_EGLDriver *drv, _EGLDisplay *disp,
                                                   dri2_surf);
     if (dri2_surf->dri_drawable == NULL) {
       _eglError(EGL_BAD_ALLOC, "createNewDrawable");
-       goto cleanup_surf;
+       goto cleanup_surf_wrapper;
     }
 
    dri2_surf->base.SwapInterval = dri2_dpy->default_swap_interval;
 
    return &dri2_surf->base;
 
+ cleanup_surf_wrapper:
+   wl_proxy_wrapper_destroy(dri2_surf->wl_surface_wrapper);
+ cleanup_dpy_wrapper:
+   wl_proxy_wrapper_destroy(dri2_surf->wl_dpy_wrapper);
  cleanup_drm:
    if (dri2_surf->wl_drm_wrapper)
       wl_proxy_wrapper_destroy(dri2_surf->wl_drm_wrapper);
@@ -289,10 +289,10 @@ dri2_wl_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
       dri2_surf->wl_win->destroy_window_callback = NULL;
    }
 
-   if (dri2_surf->wl_drm_wrapper)
-      wl_proxy_wrapper_destroy(dri2_surf->wl_drm_wrapper);
    wl_proxy_wrapper_destroy(dri2_surf->wl_surface_wrapper);
    wl_proxy_wrapper_destroy(dri2_surf->wl_dpy_wrapper);
+   if (dri2_surf->wl_drm_wrapper)
+      wl_proxy_wrapper_destroy(dri2_surf->wl_drm_wrapper);
    wl_event_queue_destroy(dri2_surf->wl_queue);
 
    free(surf);
@@ -928,7 +928,7 @@ dri2_wl_create_wayland_buffer_from_image(_EGLDriver *drv,
    buffer = create_wl_buffer(dri2_dpy, NULL, image);
 
    /* The buffer object will have been created with our internal event queue
-    * because it is using the wl_drm object as a proxy factory. We want the
+    * because it is using wl_dmabuf/wl_drm as a proxy factory. We want the
     * buffer to be used by the application so we'll reset it to the display's
     * default event queue. This isn't actually racy, as the only event the
     * buffer can get is a buffer release, which doesn't happen with an explicit
@@ -1057,12 +1057,15 @@ dmabuf_handle_modifier(void *data, struct zwp_linux_dmabuf_v1 *dmabuf,
    switch (format) {
    case WL_DRM_FORMAT_ARGB8888:
       mod = u_vector_add(&dri2_dpy->wl_modifiers.argb8888);
+      dri2_dpy->formats |= HAS_ARGB8888;
       break;
    case WL_DRM_FORMAT_XRGB8888:
       mod = u_vector_add(&dri2_dpy->wl_modifiers.xrgb8888);
+      dri2_dpy->formats |= HAS_XRGB8888;
       break;
    case WL_DRM_FORMAT_RGB565:
       mod = u_vector_add(&dri2_dpy->wl_modifiers.rgb565);
+      dri2_dpy->formats |= HAS_RGB565;
       break;
    default:
       break;
