@@ -1451,8 +1451,11 @@ anv_cmd_buffer_execbuf(struct anv_device *device,
                        const VkSemaphore *in_semaphores,
                        uint32_t num_in_semaphores,
                        const VkSemaphore *out_semaphores,
-                       uint32_t num_out_semaphores)
+                       uint32_t num_out_semaphores,
+                       VkFence _fence)
 {
+   ANV_FROM_HANDLE(anv_fence, fence, _fence);
+
    struct anv_execbuf execbuf;
    anv_execbuf_init(&execbuf);
 
@@ -1545,6 +1548,43 @@ anv_cmd_buffer_execbuf(struct anv_device *device,
       }
    }
 
+   if (fence) {
+      /* Under most circumstances, out fences won't be temporary.  However,
+       * the spec does allow it for opaque_fd.  From the Vulkan 1.0.53 spec:
+       *
+       *    "If the import is temporary, the implementation must restore the
+       *    semaphore to its prior permanent state after submitting the next
+       *    semaphore wait operation."
+       *
+       * The spec says nothing whatsoever about signal operations on
+       * temporarily imported semaphores so it appears they are allowed.
+       * There are also CTS tests that require this to work.
+       */
+      struct anv_fence_impl *impl =
+         fence->temporary.type != ANV_FENCE_TYPE_NONE ?
+         &fence->temporary : &fence->permanent;
+
+      switch (impl->type) {
+      case ANV_FENCE_TYPE_BO:
+         result = anv_execbuf_add_bo(&execbuf, &impl->bo.bo, NULL,
+                                     EXEC_OBJECT_WRITE, &device->alloc);
+         if (result != VK_SUCCESS)
+            return result;
+         break;
+
+      case ANV_FENCE_TYPE_SYNCOBJ:
+         result = anv_execbuf_add_syncobj(&execbuf, impl->syncobj,
+                                          I915_EXEC_FENCE_SIGNAL,
+                                          &device->alloc);
+         if (result != VK_SUCCESS)
+            return result;
+         break;
+
+      default:
+         unreachable("Invalid fence type");
+      }
+   }
+
    if (cmd_buffer)
       result = setup_execbuf_for_cmd_buffer(&execbuf, cmd_buffer);
    else
@@ -1586,6 +1626,23 @@ anv_cmd_buffer_execbuf(struct anv_device *device,
        * the process.
        */
       anv_semaphore_reset_temporary(device, semaphore);
+   }
+
+   if (fence && fence->permanent.type == ANV_FENCE_TYPE_BO) {
+      /* BO fences can't be shared, so they can't be temporary. */
+      assert(fence->temporary.type == ANV_FENCE_TYPE_NONE);
+
+      /* Once the execbuf has returned, we need to set the fence state to
+       * SUBMITTED.  We can't do this before calling execbuf because
+       * anv_GetFenceStatus does take the global device lock before checking
+       * fence->state.
+       *
+       * We set the fence state to SUBMITTED regardless of whether or not the
+       * execbuf succeeds because we need to ensure that vkWaitForFences() and
+       * vkGetFenceStatus() return a valid result (VK_ERROR_DEVICE_LOST or
+       * VK_SUCCESS) in a finite amount of time even if execbuf fails.
+       */
+      fence->permanent.bo.state = ANV_BO_FENCE_STATE_SUBMITTED;
    }
 
    if (result == VK_SUCCESS && need_out_fence) {

@@ -646,6 +646,7 @@ struct anv_physical_device {
     bool                                        has_exec_async;
     bool                                        has_exec_fence;
     bool                                        has_syncobj;
+    bool                                        has_syncobj_wait;
 
     uint32_t                                    eu_total;
     uint32_t                                    subslice_total;
@@ -805,10 +806,19 @@ int anv_gem_set_caching(struct anv_device *device, uint32_t gem_handle, uint32_t
 int anv_gem_set_domain(struct anv_device *device, uint32_t gem_handle,
                        uint32_t read_domains, uint32_t write_domain);
 int anv_gem_sync_file_merge(struct anv_device *device, int fd1, int fd2);
-uint32_t anv_gem_syncobj_create(struct anv_device *device);
+uint32_t anv_gem_syncobj_create(struct anv_device *device, uint32_t flags);
 void anv_gem_syncobj_destroy(struct anv_device *device, uint32_t handle);
 int anv_gem_syncobj_handle_to_fd(struct anv_device *device, uint32_t handle);
 uint32_t anv_gem_syncobj_fd_to_handle(struct anv_device *device, int fd);
+int anv_gem_syncobj_export_sync_file(struct anv_device *device,
+                                     uint32_t handle);
+int anv_gem_syncobj_import_sync_file(struct anv_device *device,
+                                     uint32_t handle, int fd);
+void anv_gem_syncobj_reset(struct anv_device *device, uint32_t handle);
+bool anv_gem_supports_syncobj_wait(int fd);
+int anv_gem_syncobj_wait(struct anv_device *device,
+                         uint32_t *handles, uint32_t num_handles,
+                         int64_t abs_timeout_ns, bool wait_all);
 
 VkResult anv_bo_init_new(struct anv_bo *bo, struct anv_device *device, uint64_t size);
 
@@ -1642,7 +1652,8 @@ VkResult anv_cmd_buffer_execbuf(struct anv_device *device,
                                 const VkSemaphore *in_semaphores,
                                 uint32_t num_in_semaphores,
                                 const VkSemaphore *out_semaphores,
-                                uint32_t num_out_semaphores);
+                                uint32_t num_out_semaphores,
+                                VkFence fence);
 
 VkResult anv_cmd_buffer_reset(struct anv_cmd_buffer *cmd_buffer);
 
@@ -1706,23 +1717,62 @@ anv_cmd_buffer_alloc_blorp_binding_table(struct anv_cmd_buffer *cmd_buffer,
 
 void anv_cmd_buffer_dump(struct anv_cmd_buffer *cmd_buffer);
 
-enum anv_fence_state {
+enum anv_fence_type {
+   ANV_FENCE_TYPE_NONE = 0,
+   ANV_FENCE_TYPE_BO,
+   ANV_FENCE_TYPE_SYNCOBJ,
+};
+
+enum anv_bo_fence_state {
    /** Indicates that this is a new (or newly reset fence) */
-   ANV_FENCE_STATE_RESET,
+   ANV_BO_FENCE_STATE_RESET,
 
    /** Indicates that this fence has been submitted to the GPU but is still
     * (as far as we know) in use by the GPU.
     */
-   ANV_FENCE_STATE_SUBMITTED,
+   ANV_BO_FENCE_STATE_SUBMITTED,
 
-   ANV_FENCE_STATE_SIGNALED,
+   ANV_BO_FENCE_STATE_SIGNALED,
+};
+
+struct anv_fence_impl {
+   enum anv_fence_type type;
+
+   union {
+      /** Fence implementation for BO fences
+       *
+       * These fences use a BO and a set of CPU-tracked state flags.  The BO
+       * is added to the object list of the last execbuf call in a QueueSubmit
+       * and is marked EXEC_WRITE.  The state flags track when the BO has been
+       * submitted to the kernel.  We need to do this because Vulkan lets you
+       * wait on a fence that has not yet been submitted and I915_GEM_BUSY
+       * will say it's idle in this case.
+       */
+      struct {
+         struct anv_bo bo;
+         enum anv_bo_fence_state state;
+      } bo;
+
+      /** DRM syncobj handle for syncobj-based fences */
+      uint32_t syncobj;
+   };
 };
 
 struct anv_fence {
-   struct anv_bo bo;
-   struct drm_i915_gem_execbuffer2 execbuf;
-   struct drm_i915_gem_exec_object2 exec2_objects[1];
-   enum anv_fence_state state;
+   /* Permanent fence state.  Every fence has some form of permanent state
+    * (type != ANV_SEMAPHORE_TYPE_NONE).  This may be a BO to fence on (for
+    * cross-process fences0 or it could just be a dummy for use internally.
+    */
+   struct anv_fence_impl permanent;
+
+   /* Temporary fence state.  A fence *may* have temporary state.  That state
+    * is added to the fence by an import operation and is reset back to
+    * ANV_SEMAPHORE_TYPE_NONE when the fence is reset.  A fence with temporary
+    * state cannot be signaled because the fence must already be signaled
+    * before the temporary state can be exported from the fence in the other
+    * process and imported here.
+    */
+   struct anv_fence_impl temporary;
 };
 
 struct anv_event {
