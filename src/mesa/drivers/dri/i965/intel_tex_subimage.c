@@ -80,6 +80,7 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
                                bool for_glTexImage)
 {
    struct brw_context *brw = brw_context(ctx);
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct intel_texture_image *image = intel_texture_image(texImage);
    int src_pitch;
 
@@ -98,7 +99,7 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
     * with _mesa_image_row_stride. However, before removing the restrictions
     * we need tests.
     */
-   if (!brw->has_llc ||
+   if (!devinfo->has_llc ||
        !(type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_INT_8_8_8_8_REV) ||
        !(texImage->TexObject->Target == GL_TEXTURE_2D ||
          texImage->TexObject->Target == GL_TEXTURE_RECTANGLE) ||
@@ -142,7 +143,7 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
     * parts of the memory aren't swizzled at all. Userspace just can't handle
     * that.
     */
-   if (brw->gen < 5 && brw->has_swizzling)
+   if (devinfo->gen < 5 && brw->has_swizzling)
       return false;
 
    int level = texImage->Level + texImage->TexObject->MinLevel;

@@ -100,7 +100,7 @@ __gen_combine_address(struct brw_context *brw, void *location,
    }
 }
 
-static inline struct brw_address
+static struct brw_address
 rw_bo(struct brw_bo *bo, uint32_t offset)
 {
    return (struct brw_address) {
@@ -110,7 +110,7 @@ rw_bo(struct brw_bo *bo, uint32_t offset)
    };
 }
 
-static inline struct brw_address
+static struct brw_address
 ro_bo(struct brw_bo *bo, uint32_t offset)
 {
    return (struct brw_address) {
@@ -119,7 +119,7 @@ ro_bo(struct brw_bo *bo, uint32_t offset)
    };
 }
 
-static inline struct brw_address
+UNUSED static struct brw_address
 ggtt_bo(struct brw_bo *bo, uint32_t offset)
 {
    return (struct brw_address) {
@@ -130,13 +130,13 @@ ggtt_bo(struct brw_bo *bo, uint32_t offset)
 }
 
 #if GEN_GEN == 4
-static inline struct brw_address
+static struct brw_address
 KSP(struct brw_context *brw, uint32_t offset)
 {
    return ro_bo(brw->cache.bo, offset);
 }
 #else
-static inline uint32_t
+static uint32_t
 KSP(struct brw_context *brw, uint32_t offset)
 {
    return offset;
@@ -431,6 +431,7 @@ upload_format_size(uint32_t upload_format)
 static void
 genX(emit_vertices)(struct brw_context *brw)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    uint32_t *dw;
 
    brw_prepare_vertices(brw);
@@ -532,7 +533,7 @@ genX(emit_vertices)(struct brw_context *brw)
                            1 + GENX(VERTEX_ELEMENT_STATE_length));
       struct GENX(VERTEX_ELEMENT_STATE) elem = {
          .Valid = true,
-         .SourceElementFormat = ISL_FORMAT_R32G32B32A32_FLOAT,
+         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32B32A32_FLOAT,
          .Component0Control = VFCOMP_STORE_0,
          .Component1Control = VFCOMP_STORE_0,
          .Component2Control = VFCOMP_STORE_0,
@@ -563,7 +564,7 @@ genX(emit_vertices)(struct brw_context *brw)
           * vertex element may poke over the end of the buffer by 2 bytes.
           */
          const unsigned padding =
-            (GEN_GEN <= 7 && !GEN_IS_HASWELL && !brw->is_baytrail) * 2;
+            (GEN_GEN <= 7 && !GEN_IS_HASWELL && !devinfo->is_baytrail) * 2;
          const unsigned end = buffer->offset + buffer->size + padding;
          dw = genX(emit_vertex_buffer_state)(brw, dw, i, buffer->bo,
                                              buffer->offset,
@@ -725,13 +726,13 @@ genX(emit_vertices)(struct brw_context *brw)
       if (vs_prog_data->uses_basevertex ||
           vs_prog_data->uses_baseinstance) {
          elem_state.VertexBufferIndex = brw->vb.nr_buffers;
-         elem_state.SourceElementFormat = ISL_FORMAT_R32G32_UINT;
+         elem_state.SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32_UINT;
          elem_state.Component0Control = VFCOMP_STORE_SRC;
          elem_state.Component1Control = VFCOMP_STORE_SRC;
       }
 #else
       elem_state.VertexBufferIndex = brw->vb.nr_buffers;
-      elem_state.SourceElementFormat = ISL_FORMAT_R32G32_UINT;
+      elem_state.SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32_UINT;
       if (vs_prog_data->uses_basevertex)
          elem_state.Component0Control = VFCOMP_STORE_SRC;
 
@@ -753,7 +754,7 @@ genX(emit_vertices)(struct brw_context *brw)
       struct GENX(VERTEX_ELEMENT_STATE) elem_state = {
          .Valid = true,
          .VertexBufferIndex = brw->vb.nr_buffers + 1,
-         .SourceElementFormat = ISL_FORMAT_R32_UINT,
+         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32_UINT,
          .Component0Control = VFCOMP_STORE_SRC,
          .Component1Control = VFCOMP_STORE_0,
          .Component2Control = VFCOMP_STORE_0,
@@ -1590,7 +1591,9 @@ genX(upload_sf)(struct brw_context *brw)
 
       /* _NEW_LINE */
 #if GEN_GEN == 8
-      if (brw->is_cherryview)
+      const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
+      if (devinfo->is_cherryview)
          sf.CHVLineWidth = brw_get_line_width(brw);
       else
          sf.LineWidth = brw_get_line_width(brw);
@@ -2201,7 +2204,7 @@ const struct brw_tracked_state genX(cc_vp) = {
 
 /* ---------------------------------------------------------------------- */
 
-static inline void
+static void
 set_scissor_bits(const struct gl_context *ctx, int i,
                  bool render_to_fbo, unsigned fb_width, unsigned fb_height,
                  struct GENX(SCISSOR_RECT) *sc)
@@ -2551,7 +2554,7 @@ genX(upload_gs_state)(struct brw_context *brw)
     * whole fixed function pipeline" means to emit a PIPE_CONTROL with the "CS
     * Stall" bit set.
     */
-   if (brw->gt == 2 && brw->gs.enabled != active)
+   if (devinfo->gt == 2 && brw->gs.enabled != active)
       gen7_emit_cs_stall_flush(brw);
 #endif
 
@@ -3018,6 +3021,7 @@ UNUSED static const uint32_t push_constant_opcodes[] = {
 static void
 genX(upload_push_constant_packets)(struct brw_context *brw)
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
    struct gl_context *ctx = &brw->ctx;
 
    UNUSED uint32_t mocs = GEN_GEN < 8 ? GEN7_MOCS_L3 : 0;
@@ -3030,13 +3034,13 @@ genX(upload_push_constant_packets)(struct brw_context *brw)
       &brw->wm.base,
    };
 
-   if (GEN_GEN == 7 && !GEN_IS_HASWELL && !brw->is_baytrail &&
+   if (GEN_GEN == 7 && !GEN_IS_HASWELL && !devinfo->is_baytrail &&
        stage_states[MESA_SHADER_VERTEX]->push_constants_dirty)
       gen7_emit_vs_workaround_flush(brw);
 
    for (int stage = 0; stage <= MESA_SHADER_FRAGMENT; stage++) {
       struct brw_stage_state *stage_state = stage_states[stage];
-      struct gl_program *prog = ctx->_Shader->CurrentProgram[stage];
+      UNUSED struct gl_program *prog = ctx->_Shader->CurrentProgram[stage];
 
       if (!stage_state->push_constants_dirty)
          continue;
@@ -3656,7 +3660,7 @@ genX(upload_3dstate_so_buffers)(struct brw_context *brw)
 #endif
 }
 
-static inline bool
+static bool
 query_active(struct gl_query_object *q)
 {
    return q && q->Active;
