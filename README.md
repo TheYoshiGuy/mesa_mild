@@ -48,22 +48,5 @@ WINEDEBUG="+opengl" MESA_DEBUG=context MESA_GLSL=log  wine MyApplication.exe |& 
 of course you can prepend with a proper MESA_GL_VERSION_OVERRIDE.
 
 
-Building :
 
-Just pay attention to libdrm's version, (and LLVM/CLANG, eventually)  all should be bleeding edge.
-
-
-If you run archlinux's derivative, you can use the script buildmesa.sh available in pkgbuild subdirectory it *might help* (but doesn't seem to work with manjaro):
-- You need to have at least a [multilib] repository enabled  in /etc/pacman.conf
-- You need to have [mesa-git] repository  enabled in /etc/pacman.conf
-- You probably need to check your /etc/makepkg.conf options (CFLAGS, CXXFLAGS, LDFLAGS, MAKEFLAGS)
-
-
-Notes:
-
- buildmesa.sh isn't supported, and is going to be deprecated in favor of a container based approach.
-
- This version is unsupported upstream, if it breaks your system, blame me, blame the world, but don't blame people from mesa's developpement team.
-
- They do an excellent job, and I do not :) [ http://www.phoronix.com/scan.php?page=article&item=amdgpu-1730-radeonsi&num=1 ]
 
