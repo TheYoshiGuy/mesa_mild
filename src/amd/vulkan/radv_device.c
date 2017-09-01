@@ -29,6 +29,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include "radv_debug.h"
 #include "radv_private.h"
 #include "radv_cs.h"
 #include "util/disk_cache.h"
@@ -408,6 +409,7 @@ static const struct debug_control radv_debug_options[] = {
 	{"unsafemath", RADV_DEBUG_UNSAFE_MATH},
 	{"allbos", RADV_DEBUG_ALL_BOS},
 	{"noibs", RADV_DEBUG_NO_IBS},
+	{"spirv", RADV_DEBUG_DUMP_SPIRV},
 	{NULL, 0}
 };
 
@@ -1214,13 +1216,7 @@ VkResult radv_CreateDevice(
 	}
 
 	if (getenv("RADV_TRACE_FILE")) {
-		device->trace_bo = device->ws->buffer_create(device->ws, 4096, 8,
-							     RADEON_DOMAIN_VRAM, RADEON_FLAG_CPU_ACCESS);
-		if (!device->trace_bo)
-			goto fail;
-
-		device->trace_id_ptr = device->ws->buffer_map(device->trace_bo);
-		if (!device->trace_id_ptr)
+		if (!radv_init_trace(device))
 			goto fail;
 	}
 
@@ -1376,21 +1372,6 @@ void radv_GetDeviceQueue(
 	RADV_FROM_HANDLE(radv_device, device, _device);
 
 	*pQueue = radv_queue_to_handle(&device->queues[queueFamilyIndex][queueIndex]);
-}
-
-static void radv_dump_trace(struct radv_device *device,
-			    struct radeon_winsys_cs *cs)
-{
-	const char *filename = getenv("RADV_TRACE_FILE");
-	FILE *f = fopen(filename, "w");
-	if (!f) {
-		fprintf(stderr, "Failed to write trace dump to %s\n", filename);
-		return;
-	}
-
-	fprintf(f, "Trace ID: %x\n", *device->trace_id_ptr);
-	device->ws->cs_dump(cs, f, (const int*)device->trace_id_ptr, 2);
-	fclose(f);
 }
 
 static void
@@ -2148,16 +2129,7 @@ VkResult radv_QueueSubmit(
 			}
 			fence_emitted = true;
 			if (queue->device->trace_bo) {
-				bool success = queue->device->ws->ctx_wait_idle(
-							queue->hw_ctx,
-							radv_queue_family_to_ring(
-								queue->queue_family_index),
-							queue->queue_idx);
-
-				if (!success) { /* Hang */
-					radv_dump_trace(queue->device, cs_array[j]);
-					abort();
-				}
+				radv_check_gpu_hangs(queue, cs_array[j]);
 			}
 		}
 

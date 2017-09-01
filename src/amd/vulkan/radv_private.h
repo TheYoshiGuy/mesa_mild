@@ -55,7 +55,6 @@
 #include "ac_nir_to_llvm.h"
 #include "ac_gpu_info.h"
 #include "ac_surface.h"
-#include "radv_debug.h"
 #include "radv_descriptor_set.h"
 
 #include <llvm-c/TargetMachine.h>
@@ -556,6 +555,9 @@ struct radv_device {
 	uint32_t fmask_mrt_offset_counter;
 	struct list_head shader_slabs;
 	mtx_t shader_slab_mutex;
+
+	/* For detecting VM faults reported by dmesg. */
+	uint64_t dmesg_timestamp;
 };
 
 struct radv_device_memory {
