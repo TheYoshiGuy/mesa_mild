@@ -40,6 +40,8 @@
 
 #define FILE_DEBUG_FLAG DEBUG_BUFMGR
 
+#define BATCH_SZ (8192*sizeof(uint32_t))
+
 static void
 intel_batchbuffer_reset(struct intel_batchbuffer *batch,
                         struct brw_bufmgr *bufmgr,
@@ -130,7 +132,7 @@ add_exec_bo(struct intel_batchbuffer *batch, struct brw_bo *bo)
       (struct drm_i915_gem_exec_object2) {
          .handle = bo->gem_handle,
          .alignment = bo->align,
-         .offset = bo->offset64,
+         .offset = bo->gtt_offset,
          .flags = bo->kflags,
       };
 
@@ -310,7 +312,7 @@ do_batch_dump(struct brw_context *brw)
 
    uint32_t *data = map ? map : batch->map;
    uint32_t *end = data + USED_BATCH(*batch);
-   uint32_t gtt_offset = map ? batch->bo->offset64 : 0;
+   uint32_t gtt_offset = map ? batch->bo->gtt_offset : 0;
    int length;
 
    bool color = INTEL_DEBUG & DEBUG_COLOR;
@@ -454,7 +456,7 @@ brw_new_batch(struct brw_context *brw)
    }
    brw->batch.reloc_count = 0;
    brw->batch.exec_count = 0;
-   brw->batch.aperture_space = BATCH_SZ;
+   brw->batch.aperture_space = 0;
 
    /* Create a new batchbuffer and reset the associated state: */
    intel_batchbuffer_reset_and_clear_render_cache(brw);
@@ -614,11 +616,12 @@ execbuffer(int fd,
       bo->idle = false;
       bo->index = -1;
 
-      /* Update brw_bo::offset64 */
-      if (batch->validation_list[i].offset != bo->offset64) {
+      /* Update brw_bo::gtt_offset */
+      if (batch->validation_list[i].offset != bo->gtt_offset) {
          DBG("BO %d migrated: 0x%" PRIx64 " -> 0x%llx\n",
-             bo->gem_handle, bo->offset64, batch->validation_list[i].offset);
-         bo->offset64 = batch->validation_list[i].offset;
+             bo->gem_handle, bo->gtt_offset,
+             batch->validation_list[i].offset);
+         bo->gtt_offset = batch->validation_list[i].offset;
       }
    }
 
@@ -652,7 +655,7 @@ do_flush_locked(struct brw_context *brw, int in_fence_fd, int *out_fence_fd)
       /* The requirement for using I915_EXEC_NO_RELOC are:
        *
        *   The addresses written in the objects must match the corresponding
-       *   reloc.presumed_offset which in turn must match the corresponding
+       *   reloc.gtt_offset which in turn must match the corresponding
        *   execobject.offset.
        *
        *   Any render targets written to in the batch must be flagged with
