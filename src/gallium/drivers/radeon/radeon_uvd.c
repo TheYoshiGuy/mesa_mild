@@ -969,7 +969,7 @@ static void get_mjpeg_slice_header(struct ruvd_decoder *dec, struct pipe_mjpeg_p
 			continue;
 
 		buf[size++] = i;
-		memcpy((buf + size), &pic->quantization_table.quantiser_table, 64);
+		memcpy((buf + size), &pic->quantization_table.quantiser_table[i], 64);
 		size += 64;
 	}
 
@@ -1011,6 +1011,17 @@ static void get_mjpeg_slice_header(struct ruvd_decoder *dec, struct pipe_mjpeg_p
 	*bs = util_bswap16(size - saved_size - 2);
 
 	saved_size = size;
+
+	/* DRI */
+	if (pic->slice_parameter.restart_interval) {
+		buf[size++] = 0xff;
+		buf[size++] = 0xdd;
+		buf[size++] = 0x00;
+		buf[size++] = 0x04;
+		bs = (uint16_t*)&buf[size++];
+		*bs = util_bswap16(pic->slice_parameter.restart_interval);
+		saved_size = ++size;
+	}
 
 	/* SOF */
 	buf[size++] = 0xff;

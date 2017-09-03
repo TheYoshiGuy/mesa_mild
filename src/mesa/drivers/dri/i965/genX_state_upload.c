@@ -75,17 +75,6 @@ struct brw_address {
    uint32_t offset;
 };
 
-static uint64_t
-emit_reloc(struct brw_context *brw,
-           void *location, struct brw_address address, uint32_t delta)
-{
-   uint32_t offset = (char *) location - (char *) brw->batch.map;
-
-   return brw_emit_reloc(&brw->batch, offset, address.bo,
-                         address.offset + delta,
-                         address.reloc_flags);
-}
-
 #define __gen_address_type struct brw_address
 #define __gen_user_data struct brw_context
 
@@ -96,7 +85,11 @@ __gen_combine_address(struct brw_context *brw, void *location,
    if (address.bo == NULL) {
       return address.offset + delta;
    } else {
-      return emit_reloc(brw, location, address, delta);
+      uint32_t offset = (char *) location - (char *) brw->batch.map;
+
+      return brw_emit_reloc(&brw->batch, offset, address.bo,
+                            address.offset + delta,
+                            address.reloc_flags);
    }
 }
 
@@ -5015,13 +5008,11 @@ genX(update_sampler_state)(struct brw_context *brw,
                                  texObj->StencilSampling,
                                  &border_color_offset);
    }
-   if (GEN_GEN < 6) {
-      samp_st.BorderColorPointer =
-         brw_emit_reloc(&brw->batch, batch_offset_for_sampler_state + 8,
-                        brw->batch.bo, border_color_offset, 0);
-   } else {
+#if GEN_GEN < 6
+      samp_st.BorderColorPointer = ro_bo(brw->batch.bo, border_color_offset);
+#else
       samp_st.BorderColorPointer = border_color_offset;
-   }
+#endif
 
 #if GEN_GEN >= 8
    samp_st.LODPreClampMode = CLAMP_MODE_OGL;
