@@ -61,7 +61,8 @@ struct u_log_context;
 /* Pipeline & streamout query controls. */
 #define R600_CONTEXT_START_PIPELINE_STATS	(1u << 1)
 #define R600_CONTEXT_STOP_PIPELINE_STATS	(1u << 2)
-#define R600_CONTEXT_PRIVATE_FLAG		(1u << 3)
+#define R600_CONTEXT_FLUSH_FOR_RENDER_COND	(1u << 3)
+#define R600_CONTEXT_PRIVATE_FLAG		(1u << 4)
 
 /* special primitive types */
 #define R600_PRIM_RECTANGLE_LIST	PIPE_PRIM_MAX
@@ -69,20 +70,19 @@ struct u_log_context;
 #define R600_NOT_QUERY		0xffffffff
 
 /* Debug flags. */
-/* logging and features */
-#define DBG_TEX			(1 << 0)
-#define DBG_NIR			(1 << 1)
-#define DBG_COMPUTE		(1 << 2)
-#define DBG_VM			(1 << 3)
+#define DBG_VS			(1 << PIPE_SHADER_VERTEX)
+#define DBG_PS			(1 << PIPE_SHADER_FRAGMENT)
+#define DBG_GS			(1 << PIPE_SHADER_GEOMETRY)
+#define DBG_TCS			(1 << PIPE_SHADER_TESS_CTRL)
+#define DBG_TES			(1 << PIPE_SHADER_TESS_EVAL)
+#define DBG_CS			(1 << PIPE_SHADER_COMPUTE)
+#define DBG_ALL_SHADERS		(DBG_FS - 1)
+#define DBG_FS			(1 << 6) /* fetch shader */
+#define DBG_TEX			(1 << 7)
+#define DBG_NIR			(1 << 8)
+#define DBG_COMPUTE		(1 << 9)
 /* gap */
-/* shader logging */
-#define DBG_FS			(1 << 5)
-#define DBG_VS			(1 << 6)
-#define DBG_GS			(1 << 7)
-#define DBG_PS			(1 << 8)
-#define DBG_CS			(1 << 9)
-#define DBG_TCS			(1 << 10)
-#define DBG_TES			(1 << 11)
+#define DBG_VM			(1 << 11)
 #define DBG_NO_IR		(1 << 12)
 #define DBG_NO_TGSI		(1 << 13)
 #define DBG_NO_ASM		(1 << 14)
@@ -453,6 +453,11 @@ struct r600_common_screen {
 		 * in the CP are seen by L2 clients.
 		 */
 		unsigned cp_to_L2;
+
+		/* Context flags to set so that all writes from earlier jobs
+		 * that end in L2 are seen by CP.
+		 */
+		unsigned L2_to_cp;
 
 		/* Context flags to set so that all writes from earlier
 		 * compute jobs are seen by L2 clients.
