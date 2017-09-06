@@ -115,7 +115,7 @@ static void si_emit_cb_render_state(struct si_context *sctx, struct r600_atom *a
 	/* GFX9: Flush DFSM when CB_TARGET_MASK changes.
 	 * I think we don't have to do anything between IBs.
 	 */
-	if (sctx->b.chip_class >= GFX9 &&
+	if (sctx->screen->dfsm_allowed &&
 	    sctx->last_cb_target_mask != cb_target_mask) {
 		sctx->last_cb_target_mask = cb_target_mask;
 
@@ -623,6 +623,13 @@ static void si_bind_blend_state(struct pipe_context *ctx, void *state)
 	    old_blend->blend_enable_4bit != blend->blend_enable_4bit ||
 	    old_blend->need_src_alpha_4bit != blend->need_src_alpha_4bit)
 		sctx->do_update_shaders = true;
+
+	if (sctx->screen->dpbb_allowed &&
+	    (!old_blend ||
+	     old_blend->alpha_to_coverage != blend->alpha_to_coverage ||
+	     old_blend->blend_enable_4bit != blend->blend_enable_4bit ||
+	     old_blend->cb_target_enabled_4bit != blend->cb_target_enabled_4bit))
+		si_mark_atom_dirty(sctx, &sctx->dpbb_state);
 }
 
 static void si_delete_blend_state(struct pipe_context *ctx, void *state)
@@ -1044,6 +1051,14 @@ static uint32_t si_translate_stencil_op(int s_op)
 	return 0;
 }
 
+static bool si_dsa_writes_stencil(const struct pipe_stencil_state *s)
+{
+	return s->enabled && s->writemask &&
+	       (s->fail_op  != PIPE_STENCIL_OP_KEEP ||
+		s->zfail_op != PIPE_STENCIL_OP_KEEP ||
+		s->zpass_op != PIPE_STENCIL_OP_KEEP);
+}
+
 static void *si_create_dsa_state(struct pipe_context *ctx,
 				 const struct pipe_depth_stencil_alpha_state *state)
 {
@@ -1101,6 +1116,15 @@ static void *si_create_dsa_state(struct pipe_context *ctx,
 		si_pm4_set_reg(pm4, R_028024_DB_DEPTH_BOUNDS_MAX, fui(state->depth.bounds_max));
 	}
 
+	dsa->depth_enabled = state->depth.enabled;
+	dsa->depth_write_enabled = state->depth.enabled &&
+				   state->depth.writemask;
+	dsa->stencil_enabled = state->stencil[0].enabled;
+	dsa->stencil_write_enabled = state->stencil[0].enabled &&
+				     (si_dsa_writes_stencil(&state->stencil[0]) ||
+				      si_dsa_writes_stencil(&state->stencil[1]));
+	dsa->db_can_write = dsa->depth_write_enabled ||
+			    dsa->stencil_write_enabled;
 	return dsa;
 }
 
@@ -1123,6 +1147,13 @@ static void si_bind_dsa_state(struct pipe_context *ctx, void *state)
 
 	if (!old_dsa || old_dsa->alpha_func != dsa->alpha_func)
 		sctx->do_update_shaders = true;
+
+	if (sctx->screen->dpbb_allowed &&
+	    (!old_dsa ||
+	     (old_dsa->depth_enabled != dsa->depth_enabled ||
+	      old_dsa->stencil_enabled != dsa->stencil_enabled ||
+	      old_dsa->db_can_write != dsa->db_can_write)))
+		si_mark_atom_dirty(sctx, &sctx->dpbb_state);
 }
 
 static void si_delete_dsa_state(struct pipe_context *ctx, void *state)
@@ -2674,6 +2705,9 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	si_mark_atom_dirty(sctx, &sctx->cb_render_state);
 	si_mark_atom_dirty(sctx, &sctx->framebuffer.atom);
 
+	if (sctx->screen->dpbb_allowed)
+		si_mark_atom_dirty(sctx, &sctx->dpbb_state);
+
 	if (sctx->framebuffer.any_dst_linear != old_any_dst_linear)
 		si_mark_atom_dirty(sctx, &sctx->msaa_config);
 
@@ -2959,7 +2993,7 @@ static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom 
 	radeon_set_context_reg(cs, R_028208_PA_SC_WINDOW_SCISSOR_BR,
 			       S_028208_BR_X(state->width) | S_028208_BR_Y(state->height));
 
-	if (sctx->b.chip_class >= GFX9) {
+	if (sctx->screen->dfsm_allowed) {
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_BREAK_BATCH) | EVENT_INDEX(0));
 	}
@@ -3037,7 +3071,7 @@ static void si_emit_msaa_config(struct si_context *sctx, struct r600_atom *atom)
 				sc_mode_cntl_1);
 
 	/* GFX9: Flush DFSM when the AA mode changes. */
-	if (sctx->b.chip_class >= GFX9) {
+	if (sctx->screen->dfsm_allowed) {
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_FLUSH_DFSM) | EVENT_INDEX(0));
 	}
@@ -3055,6 +3089,8 @@ static void si_set_min_samples(struct pipe_context *ctx, unsigned min_samples)
 
 	if (sctx->framebuffer.nr_samples > 1)
 		si_mark_atom_dirty(sctx, &sctx->msaa_config);
+	if (sctx->screen->dpbb_allowed)
+		si_mark_atom_dirty(sctx, &sctx->dpbb_state);
 }
 
 /*
@@ -4114,6 +4150,7 @@ void si_init_state_functions(struct si_context *sctx)
 	si_init_atom(sctx, &sctx->framebuffer.atom, &sctx->atoms.s.framebuffer, si_emit_framebuffer_state);
 	si_init_atom(sctx, &sctx->msaa_sample_locs.atom, &sctx->atoms.s.msaa_sample_locs, si_emit_msaa_sample_locs);
 	si_init_atom(sctx, &sctx->db_render_state, &sctx->atoms.s.db_render_state, si_emit_db_render_state);
+	si_init_atom(sctx, &sctx->dpbb_state, &sctx->atoms.s.dpbb_state, si_emit_dpbb_state);
 	si_init_atom(sctx, &sctx->msaa_config, &sctx->atoms.s.msaa_config, si_emit_msaa_config);
 	si_init_atom(sctx, &sctx->sample_mask.atom, &sctx->atoms.s.sample_mask, si_emit_sample_mask);
 	si_init_atom(sctx, &sctx->cb_render_state, &sctx->atoms.s.cb_render_state, si_emit_cb_render_state);
@@ -4726,12 +4763,6 @@ static void si_init_config(struct si_context *sctx)
 			assert(0);
 		}
 
-		si_pm4_set_reg(pm4, R_028060_DB_DFSM_CONTROL,
-			       S_028060_PUNCHOUT_MODE(V_028060_FORCE_OFF));
-		/* TODO: Enable the binner: */
-		si_pm4_set_reg(pm4, R_028C44_PA_SC_BINNER_CNTL_0,
-			       S_028C44_BINNING_MODE(V_028C44_DISABLE_BINNING_USE_LEGACY_SC) |
-			       S_028C44_DISABLE_START_OF_PRIM(1));
 		si_pm4_set_reg(pm4, R_028C48_PA_SC_BINNER_CNTL_1,
 			       S_028C48_MAX_ALLOC_COUNT(MIN2(128, pc_lines / (4 * num_se))) |
 			       S_028C48_MAX_PRIM_PER_BATCH(1023));

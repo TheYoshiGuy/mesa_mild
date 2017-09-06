@@ -96,6 +96,8 @@ struct si_screen {
 	bool				has_draw_indirect_multi;
 	bool				has_ds_bpermute;
 	bool				has_msaa_sample_loc_bug;
+	bool				dpbb_allowed;
+	bool				dfsm_allowed;
 	bool				llvm_has_working_vgpr_indexing;
 
 	/* Whether shaders are monolithic (1-part) or separate (3-part). */
@@ -308,6 +310,7 @@ struct si_context {
 	struct si_framebuffer		framebuffer;
 	struct si_sample_locs		msaa_sample_locs;
 	struct r600_atom		db_render_state;
+	struct r600_atom		dpbb_state;
 	struct r600_atom		msaa_config;
 	struct si_sample_mask		sample_mask;
 	struct r600_atom		cb_render_state;
