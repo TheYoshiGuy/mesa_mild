@@ -61,9 +61,9 @@
 /* Writeback & invalidate the L2 metadata cache. It can only be coupled with
  * a CB or DB flush. */
 #define SI_CONTEXT_INV_L2_METADATA	(R600_CONTEXT_PRIVATE_FLAG << 5)
-/* gap */
 /* Framebuffer caches. */
-#define SI_CONTEXT_FLUSH_AND_INV_DB	(R600_CONTEXT_PRIVATE_FLAG << 7)
+#define SI_CONTEXT_FLUSH_AND_INV_DB	(R600_CONTEXT_PRIVATE_FLAG << 6)
+#define SI_CONTEXT_FLUSH_AND_INV_DB_META (R600_CONTEXT_PRIVATE_FLAG << 7)
 #define SI_CONTEXT_FLUSH_AND_INV_CB	(R600_CONTEXT_PRIVATE_FLAG << 8)
 /* Engine synchronization. */
 #define SI_CONTEXT_VS_PARTIAL_FLUSH	(R600_CONTEXT_PRIVATE_FLAG << 9)
@@ -389,6 +389,7 @@ struct si_context {
 
 	/* Emitted draw state. */
 	bool			gs_tri_strip_adj_fix:1;
+	bool			ls_vgpr_fix:1;
 	int			last_index_size;
 	int			last_base_vertex;
 	int			last_start_instance;
