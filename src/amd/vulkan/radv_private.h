@@ -760,9 +760,10 @@ struct radv_attachment_state {
 };
 
 struct radv_cmd_state {
-	uint32_t                                      vb_dirty;
+	bool                                          vb_dirty;
 	radv_cmd_dirty_mask_t                         dirty;
 	bool                                          push_descriptors_dirty;
+	bool predicating;
 
 	struct radv_pipeline *                        pipeline;
 	struct radv_pipeline *                        emitted_pipeline;
@@ -777,8 +778,8 @@ struct radv_cmd_state {
 	struct radv_attachment_state *                attachments;
 	VkRect2D                                     render_area;
 	uint32_t                                     index_type;
-	uint64_t                                     index_va;
 	uint32_t                                     max_index_count;
+	uint64_t                                     index_va;
 	int32_t                                      last_primitive_reset_en;
 	uint32_t                                     last_primitive_reset_index;
 	enum radv_cmd_flush_bits                     flush_bits;
@@ -787,7 +788,6 @@ struct radv_cmd_state {
 	uint32_t                                      descriptors_dirty;
 	uint32_t                                      trace_id;
 	uint32_t                                      last_ia_multi_vgt_param;
-	bool predicating;
 };
 
 struct radv_cmd_pool {
@@ -1005,10 +1005,10 @@ struct radv_shader_variant {
 	struct radeon_winsys_bo *bo;
 	uint64_t bo_offset;
 	struct ac_shader_config config;
+	uint32_t code_size;
 	struct ac_shader_variant_info info;
 	unsigned rsrc1;
 	unsigned rsrc2;
-	uint32_t code_size;
 
 	struct list_head slab_list;
 };
@@ -1227,17 +1227,16 @@ struct radv_image {
 	 */
 	VkFormat vk_format;
 	VkImageAspectFlags aspects;
-	struct ac_surf_info info;
 	VkImageUsageFlags usage; /**< Superset of VkImageCreateInfo::usage. */
+	struct ac_surf_info info;
 	VkImageTiling tiling; /** VkImageCreateInfo::tiling */
 	VkImageCreateFlags flags; /** VkImageCreateInfo::flags */
 
 	VkDeviceSize size;
 	uint32_t alignment;
 
-	bool exclusive;
 	unsigned queue_family_mask;
-
+	bool exclusive;
 	bool shareable;
 
 	/* Set when bound */

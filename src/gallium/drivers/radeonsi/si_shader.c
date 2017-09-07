@@ -320,10 +320,35 @@ get_tcs_in_patch_stride(struct si_shader_context *ctx)
 	return unpack_param(ctx, ctx->param_vs_state_bits, 8, 13);
 }
 
-static LLVMValueRef
-get_tcs_out_patch_stride(struct si_shader_context *ctx)
+static unsigned get_tcs_out_vertex_dw_stride_constant(struct si_shader_context *ctx)
 {
-	return unpack_param(ctx, ctx->param_tcs_out_lds_layout, 0, 13);
+	assert(ctx->type == PIPE_SHADER_TESS_CTRL);
+
+	if (ctx->shader->key.mono.u.ff_tcs_inputs_to_copy)
+		return util_last_bit64(ctx->shader->key.mono.u.ff_tcs_inputs_to_copy) * 4;
+
+	return util_last_bit64(ctx->shader->selector->outputs_written) * 4;
+}
+
+static LLVMValueRef get_tcs_out_vertex_dw_stride(struct si_shader_context *ctx)
+{
+	unsigned stride = get_tcs_out_vertex_dw_stride_constant(ctx);
+
+	return LLVMConstInt(ctx->i32, stride, 0);
+}
+
+static LLVMValueRef get_tcs_out_patch_stride(struct si_shader_context *ctx)
+{
+	if (ctx->shader->key.mono.u.ff_tcs_inputs_to_copy)
+		return unpack_param(ctx, ctx->param_tcs_out_lds_layout, 0, 13);
+
+	const struct tgsi_shader_info *info = &ctx->shader->selector->info;
+	unsigned tcs_out_vertices = info->properties[TGSI_PROPERTY_TCS_VERTICES_OUT];
+	unsigned vertex_dw_stride = get_tcs_out_vertex_dw_stride_constant(ctx);
+	unsigned num_patch_outputs = util_last_bit64(ctx->shader->selector->patch_outputs_written);
+	unsigned patch_dw_stride = tcs_out_vertices * vertex_dw_stride +
+				   num_patch_outputs * 4;
+	return LLVMConstInt(ctx->i32, patch_dw_stride, 0);
 }
 
 static LLVMValueRef
@@ -383,6 +408,42 @@ get_tcs_out_current_patch_data_offset(struct si_shader_context *ctx)
 			    LLVMBuildMul(gallivm->builder, patch_stride,
 					 rel_patch_id, ""),
 			    "");
+}
+
+static LLVMValueRef get_num_tcs_out_vertices(struct si_shader_context *ctx)
+{
+	unsigned tcs_out_vertices =
+		ctx->shader->selector ?
+		ctx->shader->selector->info.properties[TGSI_PROPERTY_TCS_VERTICES_OUT] : 0;
+
+	/* If !tcs_out_vertices, it's either the fixed-func TCS or the TCS epilog. */
+	if (ctx->type == PIPE_SHADER_TESS_CTRL && tcs_out_vertices)
+		return LLVMConstInt(ctx->i32, tcs_out_vertices, 0);
+
+	return unpack_param(ctx, ctx->param_tcs_offchip_layout, 6, 6);
+}
+
+static LLVMValueRef get_tcs_in_vertex_dw_stride(struct si_shader_context *ctx)
+{
+	unsigned stride;
+
+	switch (ctx->type) {
+	case PIPE_SHADER_VERTEX:
+		stride = util_last_bit64(ctx->shader->selector->outputs_written);
+		return LLVMConstInt(ctx->i32, stride * 4, 0);
+
+	case PIPE_SHADER_TESS_CTRL:
+		if (ctx->screen->b.chip_class >= GFX9 &&
+		    ctx->shader->is_monolithic) {
+			stride = util_last_bit64(ctx->shader->key.part.tcs.ls->outputs_written);
+			return LLVMConstInt(ctx->i32, stride * 4, 0);
+		}
+		return unpack_param(ctx, ctx->param_vs_state_bits, 24, 8);
+
+	default:
+		assert(0);
+		return NULL;
+	}
 }
 
 static LLVMValueRef get_instance_index_for_fetch(
@@ -804,7 +865,7 @@ static LLVMValueRef get_tcs_tes_buffer_address(struct si_shader_context *ctx,
 	LLVMValueRef base_addr, vertices_per_patch, num_patches, total_vertices;
 	LLVMValueRef param_stride, constant16;
 
-	vertices_per_patch = unpack_param(ctx, ctx->param_tcs_offchip_layout, 6, 6);
+	vertices_per_patch = get_num_tcs_out_vertices(ctx);
 	num_patches = unpack_param(ctx, ctx->param_tcs_offchip_layout, 0, 6);
 	total_vertices = LLVMBuildMul(gallivm->builder, vertices_per_patch,
 	                              num_patches, "");
@@ -1034,7 +1095,7 @@ static LLVMValueRef fetch_input_tcs(
 	struct si_shader_context *ctx = si_shader_context(bld_base);
 	LLVMValueRef dw_addr, stride;
 
-	stride = unpack_param(ctx, ctx->param_vs_state_bits, 24, 8);
+	stride = get_tcs_in_vertex_dw_stride(ctx);
 	dw_addr = get_tcs_in_current_patch_offset(ctx);
 	dw_addr = get_dw_address(ctx, NULL, reg, stride, dw_addr);
 
@@ -1050,7 +1111,7 @@ static LLVMValueRef fetch_output_tcs(
 	LLVMValueRef dw_addr, stride;
 
 	if (reg->Register.Dimension) {
-		stride = unpack_param(ctx, ctx->param_tcs_out_lds_layout, 13, 8);
+		stride = get_tcs_out_vertex_dw_stride(ctx);
 		dw_addr = get_tcs_out_current_patch_offset(ctx);
 		dw_addr = get_dw_address(ctx, NULL, reg, stride, dw_addr);
 	} else {
@@ -1103,7 +1164,7 @@ static void store_output_tcs(struct lp_build_tgsi_context *bld_base,
 	}
 
 	if (reg->Register.Dimension) {
-		stride = unpack_param(ctx, ctx->param_tcs_out_lds_layout, 13, 8);
+		stride = get_tcs_out_vertex_dw_stride(ctx);
 		dw_addr = get_tcs_out_current_patch_offset(ctx);
 		dw_addr = get_dw_address(ctx, reg, NULL, stride, dw_addr);
 		skip_lds_store = !sh_info->reads_pervertex_outputs;
@@ -1493,9 +1554,9 @@ static LLVMValueRef load_sample_position(struct si_shader_context *ctx, LLVMValu
 	return lp_build_gather_values(gallivm, pos, 4);
 }
 
-static void declare_system_value(struct si_shader_context *ctx,
-				 unsigned index,
-				 const struct tgsi_full_declaration *decl)
+void si_load_system_value(struct si_shader_context *ctx,
+			  unsigned index,
+			  const struct tgsi_full_declaration *decl)
 {
 	struct lp_build_context *bld = &ctx->bld_base.base;
 	struct gallivm_state *gallivm = &ctx->gallivm;
@@ -1622,7 +1683,7 @@ static void declare_system_value(struct si_shader_context *ctx,
 		if (ctx->type == PIPE_SHADER_TESS_CTRL)
 			value = unpack_param(ctx, ctx->param_tcs_out_lds_layout, 26, 6);
 		else if (ctx->type == PIPE_SHADER_TESS_EVAL)
-			value = unpack_param(ctx, ctx->param_tcs_offchip_layout, 6, 6);
+			value = get_num_tcs_out_vertices(ctx);
 		else
 			assert(!"invalid shader stage for TGSI_SEMANTIC_VERTICESIN");
 		break;
@@ -1770,8 +1831,8 @@ static void declare_system_value(struct si_shader_context *ctx,
 	ctx->system_values[index] = value;
 }
 
-static void declare_compute_memory(struct si_shader_context *ctx,
-                                   const struct tgsi_full_declaration *decl)
+void si_declare_compute_memory(struct si_shader_context *ctx,
+			       const struct tgsi_full_declaration *decl)
 {
 	struct si_shader_selector *sel = ctx->shader->selector;
 	struct gallivm_state *gallivm = &ctx->gallivm;
@@ -2582,7 +2643,7 @@ static void si_copy_tcs_inputs(struct lp_build_tgsi_context *bld_base)
 	buffer = desc_from_addr_base64k(ctx, ctx->param_tcs_offchip_addr_base64k);
 	buffer_offset = LLVMGetParam(ctx->main_fn, ctx->param_tcs_offchip_offset);
 
-	lds_vertex_stride = unpack_param(ctx, ctx->param_vs_state_bits, 24, 8);
+	lds_vertex_stride = get_tcs_in_vertex_dw_stride(ctx);
 	lds_vertex_offset = LLVMBuildMul(gallivm->builder, invocation_id,
 	                                 lds_vertex_stride, "");
 	lds_base = get_tcs_in_current_patch_offset(ctx);
@@ -2969,8 +3030,7 @@ static void si_llvm_emit_ls_epilogue(struct lp_build_tgsi_context *bld_base)
 	unsigned i, chan;
 	LLVMValueRef vertex_id = LLVMGetParam(ctx->main_fn,
 					      ctx->param_rel_auto_id);
-	LLVMValueRef vertex_dw_stride =
-		unpack_param(ctx, ctx->param_vs_state_bits, 24, 8);
+	LLVMValueRef vertex_dw_stride = get_tcs_in_vertex_dw_stride(ctx);
 	LLVMValueRef base_dw_addr = LLVMBuildMul(gallivm->builder, vertex_id,
 						 vertex_dw_stride, "");
 
@@ -5691,7 +5751,6 @@ static bool si_compile_tgsi_main(struct si_shader_context *ctx,
 		bld_base->emit_epilogue = si_tgsi_emit_epilogue;
 		break;
 	case PIPE_SHADER_COMPUTE:
-		ctx->declare_memory_region = declare_compute_memory;
 		break;
 	default:
 		assert(!"Unsupported shader type");
@@ -6344,8 +6403,6 @@ int si_compile_tgsi_shader(struct si_screen *sscreen,
 	       sizeof(shader->info.vs_output_param_offset));
 
 	shader->info.uses_instanceid = sel->info.uses_instanceid;
-
-	ctx.load_system_value = declare_system_value;
 
 	if (!si_compile_tgsi_main(&ctx, is_monolithic)) {
 		si_llvm_dispose(&ctx);

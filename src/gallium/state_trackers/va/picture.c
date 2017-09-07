@@ -591,7 +591,7 @@ vlVaEndPicture(VADriverContextP ctx, VAContextID context_id)
    vlVaSurface *surf;
    void *feedback;
    struct pipe_screen *screen;
-   bool interlaced;
+   bool supported;
    bool realloc = false;
    enum pipe_format format;
 
@@ -621,14 +621,17 @@ vlVaEndPicture(VADriverContextP ctx, VAContextID context_id)
    context->mpeg4.frame_num++;
 
    screen = context->decoder->context->screen;
-   interlaced = screen->get_video_param(screen, context->decoder->profile,
-                                        context->decoder->entrypoint,
-                                        PIPE_VIDEO_CAP_SUPPORTS_INTERLACED);
+   supported = screen->get_video_param(screen, context->decoder->profile,
+                                       context->decoder->entrypoint,
+                                       surf->buffer->interlaced ?
+                                       PIPE_VIDEO_CAP_SUPPORTS_INTERLACED :
+                                       PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE);
 
-   if (surf->buffer->interlaced != interlaced) {
-      surf->templat.interlaced = screen->get_video_param(screen, context->decoder->profile,
-                                                         PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
-                                                         PIPE_VIDEO_CAP_PREFERS_INTERLACED);
+   if (!supported) {
+      surf->templat.interlaced = screen->get_video_param(screen,
+                                       context->decoder->profile,
+                                       context->decoder->entrypoint,
+                                       PIPE_VIDEO_CAP_PREFERS_INTERLACED);
       realloc = true;
    }
 
@@ -657,13 +660,22 @@ vlVaEndPicture(VADriverContextP ctx, VAContextID context_id)
    }
 
    if (realloc) {
-      surf->buffer->destroy(surf->buffer);
+      struct pipe_video_buffer *old_buf = surf->buffer;
 
       if (vlVaHandleSurfaceAllocate(ctx, surf, &surf->templat) != VA_STATUS_SUCCESS) {
          mtx_unlock(&drv->mutex);
          return VA_STATUS_ERROR_ALLOCATION_FAILED;
       }
 
+      if (context->decoder->entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE) {
+         if (old_buf->interlaced)
+            vl_compositor_yuv_deint(&drv->cstate, &drv->compositor, old_buf, surf->buffer);
+         else
+            /* Can't convert from progressive to interlaced yet */
+            return VA_STATUS_ERROR_INVALID_SURFACE;
+      }
+
+      old_buf->destroy(old_buf);
       context->target = surf->buffer;
    }
 

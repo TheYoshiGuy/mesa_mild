@@ -78,13 +78,6 @@ struct si_shader_context {
 			   const struct tgsi_full_declaration *decl,
 			   LLVMValueRef out[4]);
 
-	void (*load_system_value)(struct si_shader_context *,
-				  unsigned index,
-				  const struct tgsi_full_declaration *decl);
-
-	void (*declare_memory_region)(struct si_shader_context *,
-				      const struct tgsi_full_declaration *decl);
-
 	/** This array contains the input values for the shader.  Typically these
 	  * values will be in the form of a target intrinsic that will inform the
 	  * backend how to load the actual inputs to the shader.
@@ -168,8 +161,6 @@ struct si_shader_context {
 	/* Layout of TCS outputs / TES inputs:
 	 *   [0:12] = stride between output patches in DW, num_outputs * num_vertices * 4
 	 *            max = 32*32*4 + 32*4
-	 *   [13:20] = stride between output vertices in DW = num_inputs * 4
-	 *             max = 32*4
 	 *   [26:31] = gl_PatchVerticesIn, max = 32
 	 */
 	int param_tcs_out_lds_layout;
@@ -324,6 +315,12 @@ LLVMValueRef si_load_sampler_desc(struct si_shader_context *ctx,
 LLVMValueRef si_load_image_desc(struct si_shader_context *ctx,
 				LLVMValueRef list, LLVMValueRef index,
 				enum ac_descriptor_type desc_type, bool dcc_off);
+
+void si_load_system_value(struct si_shader_context *ctx,
+			  unsigned index,
+			  const struct tgsi_full_declaration *decl);
+void si_declare_compute_memory(struct si_shader_context *ctx,
+			       const struct tgsi_full_declaration *decl);
 
 void si_llvm_load_input_vs(
 	struct si_shader_context *ctx,
