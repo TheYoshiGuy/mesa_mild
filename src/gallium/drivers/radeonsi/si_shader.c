@@ -89,8 +89,6 @@ static void si_llvm_emit_barrier(const struct lp_build_tgsi_action *action,
 static void si_dump_shader_key(unsigned processor, const struct si_shader *shader,
 			       FILE *f);
 
-static unsigned llvm_get_type_size(LLVMTypeRef type);
-
 static void si_build_vs_prolog_function(struct si_shader_context *ctx,
 					union si_shader_part_key *key);
 static void si_build_tcs_epilog_function(struct si_shader_context *ctx,
@@ -3532,47 +3530,6 @@ static void si_llvm_return_fs_outputs(struct ac_shader_abi *abi,
 	ctx->return_value = ret;
 }
 
-/* Prevent optimizations (at least of memory accesses) across the current
- * point in the program by emitting empty inline assembly that is marked as
- * having side effects.
- *
- * Optionally, a value can be passed through the inline assembly to prevent
- * LLVM from hoisting calls to ReadNone functions.
- */
-static void emit_optimization_barrier(struct si_shader_context *ctx,
-				      LLVMValueRef *pvgpr)
-{
-	static int counter = 0;
-
-	LLVMBuilderRef builder = ctx->gallivm.builder;
-	char code[16];
-
-	snprintf(code, sizeof(code), "; %d", p_atomic_inc_return(&counter));
-
-	if (!pvgpr) {
-		LLVMTypeRef ftype = LLVMFunctionType(ctx->voidt, NULL, 0, false);
-		LLVMValueRef inlineasm = LLVMConstInlineAsm(ftype, code, "", true, false);
-		LLVMBuildCall(builder, inlineasm, NULL, 0, "");
-	} else {
-		LLVMTypeRef ftype = LLVMFunctionType(ctx->i32, &ctx->i32, 1, false);
-		LLVMValueRef inlineasm = LLVMConstInlineAsm(ftype, code, "=v,0", true, false);
-		LLVMValueRef vgpr = *pvgpr;
-		LLVMTypeRef vgpr_type = LLVMTypeOf(vgpr);
-		unsigned vgpr_size = llvm_get_type_size(vgpr_type);
-		LLVMValueRef vgpr0;
-
-		assert(vgpr_size % 4 == 0);
-
-		vgpr = LLVMBuildBitCast(builder, vgpr, LLVMVectorType(ctx->i32, vgpr_size / 4), "");
-		vgpr0 = LLVMBuildExtractElement(builder, vgpr, ctx->i32_0, "");
-		vgpr0 = LLVMBuildCall(builder, inlineasm, &vgpr0, 1, "");
-		vgpr = LLVMBuildInsertElement(builder, vgpr, vgpr0, ctx->i32_0, "");
-		vgpr = LLVMBuildBitCast(builder, vgpr, vgpr_type, "");
-
-		*pvgpr = vgpr;
-	}
-}
-
 void si_emit_waitcnt(struct si_shader_context *ctx, unsigned simm16)
 {
 	struct gallivm_state *gallivm = &ctx->gallivm;
@@ -3857,32 +3814,6 @@ static void build_interp_intrinsic(const struct lp_build_tgsi_action *action,
 	}
 }
 
-static LLVMValueRef si_emit_ballot(struct si_shader_context *ctx,
-				   LLVMValueRef value)
-{
-	struct gallivm_state *gallivm = &ctx->gallivm;
-	LLVMValueRef args[3] = {
-		value,
-		ctx->i32_0,
-		LLVMConstInt(ctx->i32, LLVMIntNE, 0)
-	};
-
-	/* We currently have no other way to prevent LLVM from lifting the icmp
-	 * calls to a dominating basic block.
-	 */
-	emit_optimization_barrier(ctx, &args[0]);
-
-	if (LLVMTypeOf(args[0]) != ctx->i32)
-		args[0] = LLVMBuildBitCast(gallivm->builder, args[0], ctx->i32, "");
-
-	return lp_build_intrinsic(gallivm->builder,
-				  "llvm.amdgcn.icmp.i32",
-				  ctx->i64, args, 3,
-				  LP_FUNC_ATTR_NOUNWIND |
-				  LP_FUNC_ATTR_READNONE |
-				  LP_FUNC_ATTR_CONVERGENT);
-}
-
 static void vote_all_emit(
 	const struct lp_build_tgsi_action *action,
 	struct lp_build_tgsi_context *bld_base,
@@ -3890,13 +3821,8 @@ static void vote_all_emit(
 {
 	struct si_shader_context *ctx = si_shader_context(bld_base);
 	struct gallivm_state *gallivm = &ctx->gallivm;
-	LLVMValueRef active_set, vote_set;
-	LLVMValueRef tmp;
 
-	active_set = si_emit_ballot(ctx, ctx->i32_1);
-	vote_set = si_emit_ballot(ctx, emit_data->args[0]);
-
-	tmp = LLVMBuildICmp(gallivm->builder, LLVMIntEQ, vote_set, active_set, "");
+        LLVMValueRef tmp = ac_build_vote_all(&ctx->ac, emit_data->args[0]);
 	emit_data->output[emit_data->chan] =
 		LLVMBuildSExt(gallivm->builder, tmp, ctx->i32, "");
 }
@@ -3908,13 +3834,8 @@ static void vote_any_emit(
 {
 	struct si_shader_context *ctx = si_shader_context(bld_base);
 	struct gallivm_state *gallivm = &ctx->gallivm;
-	LLVMValueRef vote_set;
-	LLVMValueRef tmp;
 
-	vote_set = si_emit_ballot(ctx, emit_data->args[0]);
-
-	tmp = LLVMBuildICmp(gallivm->builder, LLVMIntNE,
-			    vote_set, LLVMConstInt(ctx->i64, 0, 0), "");
+        LLVMValueRef tmp = ac_build_vote_any(&ctx->ac, emit_data->args[0]);
 	emit_data->output[emit_data->chan] =
 		LLVMBuildSExt(gallivm->builder, tmp, ctx->i32, "");
 }
@@ -3926,16 +3847,8 @@ static void vote_eq_emit(
 {
 	struct si_shader_context *ctx = si_shader_context(bld_base);
 	struct gallivm_state *gallivm = &ctx->gallivm;
-	LLVMValueRef active_set, vote_set;
-	LLVMValueRef all, none, tmp;
 
-	active_set = si_emit_ballot(ctx, ctx->i32_1);
-	vote_set = si_emit_ballot(ctx, emit_data->args[0]);
-
-	all = LLVMBuildICmp(gallivm->builder, LLVMIntEQ, vote_set, active_set, "");
-	none = LLVMBuildICmp(gallivm->builder, LLVMIntEQ,
-			     vote_set, LLVMConstInt(ctx->i64, 0, 0), "");
-	tmp = LLVMBuildOr(gallivm->builder, all, none, "");
+        LLVMValueRef tmp = ac_build_vote_eq(&ctx->ac, emit_data->args[0]);
 	emit_data->output[emit_data->chan] =
 		LLVMBuildSExt(gallivm->builder, tmp, ctx->i32, "");
 }
@@ -3950,7 +3863,7 @@ static void ballot_emit(
 	LLVMValueRef tmp;
 
 	tmp = lp_build_emit_fetch(bld_base, emit_data->inst, 0, TGSI_CHAN_X);
-	tmp = si_emit_ballot(ctx, tmp);
+	tmp = ac_build_ballot(&ctx->ac, tmp);
 	tmp = LLVMBuildBitCast(builder, tmp, ctx->v2i32, "");
 
 	emit_data->output[0] = LLVMBuildExtractElement(builder, tmp, ctx->i32_0, "");
@@ -3981,7 +3894,7 @@ static void read_lane_emit(
 	/* We currently have no other way to prevent LLVM from lifting the icmp
 	 * calls to a dominating basic block.
 	 */
-	emit_optimization_barrier(ctx, &emit_data->args[0]);
+	ac_build_optimization_barrier(&ctx->ac, &emit_data->args[0]);
 
 	for (unsigned i = 0; i < emit_data->arg_count; ++i) {
 		emit_data->args[i] = LLVMBuildBitCast(builder, emit_data->args[i],
@@ -4223,29 +4136,6 @@ static void declare_streamout_params(struct si_shader_context *ctx,
 			continue;
 
 		ctx->param_streamout_offset[i] = add_arg(fninfo, ARG_SGPR, ctx->ac.i32);
-	}
-}
-
-static unsigned llvm_get_type_size(LLVMTypeRef type)
-{
-	LLVMTypeKind kind = LLVMGetTypeKind(type);
-
-	switch (kind) {
-	case LLVMIntegerTypeKind:
-		return LLVMGetIntTypeWidth(type) / 8;
-	case LLVMFloatTypeKind:
-		return 4;
-	case LLVMPointerTypeKind:
-		return 8;
-	case LLVMVectorTypeKind:
-		return LLVMGetVectorSize(type) *
-		       llvm_get_type_size(LLVMGetElementType(type));
-	case LLVMArrayTypeKind:
-		return LLVMGetArrayLength(type) *
-		       llvm_get_type_size(LLVMGetElementType(type));
-	default:
-		assert(0);
-		return 0;
 	}
 }
 
@@ -4702,10 +4592,10 @@ static void create_function(struct si_shader_context *ctx)
 	shader->info.num_input_vgprs = 0;
 
 	for (i = 0; i < fninfo.num_sgpr_params; ++i)
-		shader->info.num_input_sgprs += llvm_get_type_size(fninfo.types[i]) / 4;
+		shader->info.num_input_sgprs += ac_get_type_size(fninfo.types[i]) / 4;
 
 	for (; i < fninfo.num_params; ++i)
-		shader->info.num_input_vgprs += llvm_get_type_size(fninfo.types[i]) / 4;
+		shader->info.num_input_vgprs += ac_get_type_size(fninfo.types[i]) / 4;
 
 	assert(shader->info.num_input_vgprs >= num_prolog_vgprs);
 	shader->info.num_input_vgprs -= num_prolog_vgprs;
@@ -5671,7 +5561,7 @@ static void si_count_scratch_private_memory(struct si_shader_context *ctx)
 			LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(inst));
 			/* No idea why LLVM aligns allocas to 4 elements. */
 			unsigned alignment = LLVMGetAlignment(inst);
-			unsigned dw_size = align(llvm_get_type_size(type) / 4, alignment);
+			unsigned dw_size = align(ac_get_type_size(type) / 4, alignment);
 			ctx->shader->config.private_mem_vgprs += dw_size;
 		}
 		bb = LLVMGetNextBasicBlock(bb);
@@ -6193,9 +6083,9 @@ static void si_build_wrapper_function(struct si_shader_context *ctx,
 
 		if (ac_is_sgpr_param(param)) {
 			assert(num_vgprs == 0);
-			num_sgprs += llvm_get_type_size(LLVMTypeOf(param)) / 4;
+			num_sgprs += ac_get_type_size(LLVMTypeOf(param)) / 4;
 		} else {
-			num_vgprs += llvm_get_type_size(LLVMTypeOf(param)) / 4;
+			num_vgprs += ac_get_type_size(LLVMTypeOf(param)) / 4;
 		}
 	}
 
@@ -6203,7 +6093,7 @@ static void si_build_wrapper_function(struct si_shader_context *ctx,
 	while (gprs < num_sgprs + num_vgprs) {
 		LLVMValueRef param = LLVMGetParam(parts[main_part], fninfo.num_params);
 		LLVMTypeRef type = LLVMTypeOf(param);
-		unsigned size = llvm_get_type_size(type) / 4;
+		unsigned size = ac_get_type_size(type) / 4;
 
 		add_arg(&fninfo, gprs < num_sgprs ? ARG_SGPR : ARG_VGPR, type);
 
@@ -6230,7 +6120,7 @@ static void si_build_wrapper_function(struct si_shader_context *ctx,
 		LLVMValueRef param = LLVMGetParam(ctx->main_fn, i);
 		LLVMTypeRef param_type = LLVMTypeOf(param);
 		LLVMTypeRef out_type = i < fninfo.num_sgpr_params ? ctx->i32 : ctx->f32;
-		unsigned size = llvm_get_type_size(param_type) / 4;
+		unsigned size = ac_get_type_size(param_type) / 4;
 
 		if (size == 1) {
 			if (param_type != out_type)
@@ -6292,7 +6182,7 @@ static void si_build_wrapper_function(struct si_shader_context *ctx,
 
 			param = LLVMGetParam(parts[part], param_idx);
 			param_type = LLVMTypeOf(param);
-			param_size = llvm_get_type_size(param_type) / 4;
+			param_size = ac_get_type_size(param_type) / 4;
 			is_sgpr = ac_is_sgpr_param(param);
 
 			if (is_sgpr) {
