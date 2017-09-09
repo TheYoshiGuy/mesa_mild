@@ -330,9 +330,6 @@ radv_pipeline_cache_insert_shader(struct radv_pipeline_cache *cache,
 				  struct radv_shader_variant *variant,
 				  const void *code, unsigned code_size);
 
-void radv_shader_variant_destroy(struct radv_device *device,
-				 struct radv_shader_variant *variant);
-
 struct radv_meta_state {
 	VkAllocationCallbacks alloc;
 
@@ -950,15 +947,7 @@ struct radv_event {
 	uint64_t *map;
 };
 
-struct nir_shader;
-
-struct radv_shader_module {
-	struct nir_shader *                          nir;
-	unsigned char                                sha1[20];
-	uint32_t                                     size;
-	char                                         data[0];
-};
-
+struct radv_shader_module;
 struct ac_shader_variant_key;
 
 void
@@ -989,35 +978,6 @@ mesa_to_vk_shader_stage(gl_shader_stage mesa_stage)
 		     __tmp = (gl_shader_stage)((stage_bits) & RADV_STAGE_MASK);	\
 	     stage = __builtin_ffs(__tmp) - 1, __tmp;			\
 	     __tmp &= ~(1 << (stage)))
-
-
-struct radv_shader_slab {
-	struct list_head slabs;
-	struct list_head shaders;
-	struct radeon_winsys_bo *bo;
-	uint64_t size;
-	char *ptr;
-};
-
-struct radv_shader_variant {
-	uint32_t ref_count;
-
-	struct radeon_winsys_bo *bo;
-	uint64_t bo_offset;
-	struct ac_shader_config config;
-	uint32_t code_size;
-	struct ac_shader_variant_info info;
-	unsigned rsrc1;
-	unsigned rsrc2;
-
-	struct list_head slab_list;
-};
-
-
-void *radv_alloc_shader_memory(struct radv_device *device,
-                              struct radv_shader_variant *shader);
-
-void radv_destroy_shader_slabs(struct radv_device *device);
 
 struct radv_depth_stencil_state {
 	uint32_t db_depth_control;
@@ -1076,6 +1036,14 @@ struct radv_tessellation_state {
 	uint32_t tf_param;
 };
 
+struct radv_vertex_elements_info {
+	uint32_t rsrc_word3[MAX_VERTEX_ATTRIBS];
+	uint32_t format_size[MAX_VERTEX_ATTRIBS];
+	uint32_t binding[MAX_VERTEX_ATTRIBS];
+	uint32_t offset[MAX_VERTEX_ATTRIBS];
+	uint32_t count;
+};
+
 struct radv_pipeline {
 	struct radv_device *                          device;
 	uint32_t                                     dynamic_state_mask;
@@ -1089,11 +1057,8 @@ struct radv_pipeline {
 	struct radv_shader_variant *gs_copy_shader;
 	VkShaderStageFlags                           active_stages;
 
-	uint32_t va_rsrc_word3[MAX_VERTEX_ATTRIBS];
-	uint32_t va_format_size[MAX_VERTEX_ATTRIBS];
-	uint32_t va_binding[MAX_VERTEX_ATTRIBS];
-	uint32_t va_offset[MAX_VERTEX_ATTRIBS];
-	uint32_t num_vertex_attribs;
+	struct radv_vertex_elements_info             vertex_elements;
+
 	uint32_t                                     binding_stride[MAX_VBS];
 
 	union {
@@ -1137,7 +1102,6 @@ static inline bool radv_pipeline_has_tess(struct radv_pipeline *pipeline)
 	return pipeline->shaders[MESA_SHADER_TESS_EVAL] ? true : false;
 }
 
-uint32_t radv_shader_stage_to_user_data_0(gl_shader_stage stage, bool has_gs, bool has_tess);
 struct ac_userdata_info *radv_lookup_user_sgpr(struct radv_pipeline *pipeline,
 					       gl_shader_stage stage,
 					       int idx);

@@ -31,6 +31,7 @@
 #include <fcntl.h>
 #include "radv_debug.h"
 #include "radv_private.h"
+#include "radv_shader.h"
 #include "radv_cs.h"
 #include "util/disk_cache.h"
 #include "util/strtod.h"
@@ -410,6 +411,7 @@ static const struct debug_control radv_debug_options[] = {
 	{"allbos", RADV_DEBUG_ALL_BOS},
 	{"noibs", RADV_DEBUG_NO_IBS},
 	{"spirv", RADV_DEBUG_DUMP_SPIRV},
+	{"vmfaults", RADV_DEBUG_VM_FAULTS},
 	{NULL, 0}
 };
 
