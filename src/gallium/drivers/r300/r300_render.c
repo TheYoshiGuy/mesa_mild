@@ -1114,9 +1114,9 @@ struct draw_stage* r300_draw_stage(struct r300_context* r300)
  * somewhat inefficient. Instead we use a rectangular point sprite. */
 void r300_blitter_draw_rectangle(struct blitter_context *blitter,
                                  int x1, int y1, int x2, int y2,
-                                 float depth,
+                                 float depth, unsigned num_instances,
                                  enum blitter_attrib_type type,
-                                 const union pipe_color_union *attrib)
+                                 const union blitter_attrib *attrib)
 {
     struct r300_context *r300 = r300_context(util_blitter_get_pipe(blitter));
     unsigned last_sprite_coord_enable = r300->sprite_coord_enable;
@@ -1125,21 +1125,24 @@ void r300_blitter_draw_rectangle(struct blitter_context *blitter,
     unsigned vertex_size =
             type == UTIL_BLITTER_ATTRIB_COLOR || !r300->draw ? 8 : 4;
     unsigned dwords = 13 + vertex_size +
-                      (type == UTIL_BLITTER_ATTRIB_TEXCOORD ? 7 : 0);
-    static const union pipe_color_union zeros;
+                      (type == UTIL_BLITTER_ATTRIB_TEXCOORD_XY ? 7 : 0);
+    static const union blitter_attrib zeros;
     CS_LOCALS(r300);
 
     /* XXX workaround for a lockup in MSAA resolve on SWTCL chipsets, this
      * function most probably doesn't handle type=NONE correctly */
-    if (!r300->screen->caps.has_tcl && type == UTIL_BLITTER_ATTRIB_NONE) {
-        util_blitter_draw_rectangle(blitter, x1, y1, x2, y2, depth, type, attrib);
+    if ((!r300->screen->caps.has_tcl && type == UTIL_BLITTER_ATTRIB_NONE) ||
+        type == UTIL_BLITTER_ATTRIB_TEXCOORD_XYZW ||
+        num_instances > 1) {
+        util_blitter_draw_rectangle(blitter, x1, y1, x2, y2, depth,
+                                    num_instances, type, attrib);
         return;
     }
 
     if (r300->skip_rendering)
         return;
 
-    if (type == UTIL_BLITTER_ATTRIB_TEXCOORD)
+    if (type == UTIL_BLITTER_ATTRIB_TEXCOORD_XY)
         r300->sprite_coord_enable = 1;
 
     r300_update_derived_state(r300);
@@ -1156,15 +1159,15 @@ void r300_blitter_draw_rectangle(struct blitter_context *blitter,
     /* Set up GA. */
     OUT_CS_REG(R300_GA_POINT_SIZE, (height * 6) | ((width * 6) << 16));
 
-    if (type == UTIL_BLITTER_ATTRIB_TEXCOORD) {
+    if (type == UTIL_BLITTER_ATTRIB_TEXCOORD_XY) {
         /* Set up the GA to generate texcoords. */
         OUT_CS_REG(R300_GB_ENABLE, R300_GB_POINT_STUFF_ENABLE |
                    (R300_GB_TEX_STR << R300_GB_TEX0_SOURCE_SHIFT));
         OUT_CS_REG_SEQ(R300_GA_POINT_S0, 4);
-        OUT_CS_32F(attrib->f[0]);
-        OUT_CS_32F(attrib->f[3]);
-        OUT_CS_32F(attrib->f[2]);
-        OUT_CS_32F(attrib->f[1]);
+        OUT_CS_32F(attrib->texcoord.x1);
+        OUT_CS_32F(attrib->texcoord.y2);
+        OUT_CS_32F(attrib->texcoord.x2);
+        OUT_CS_32F(attrib->texcoord.y1);
     }
 
     /* Set up VAP controls. */
@@ -1188,7 +1191,7 @@ void r300_blitter_draw_rectangle(struct blitter_context *blitter,
     if (vertex_size == 8) {
         if (!attrib)
             attrib = &zeros;
-        OUT_CS_TABLE(attrib->f, 4);
+        OUT_CS_TABLE(attrib->color, 4);
     }
     END_CS;
 

@@ -211,9 +211,10 @@ void r600_gfx_wait_fence(struct r600_common_context *ctx,
 }
 
 void r600_draw_rectangle(struct blitter_context *blitter,
-			 int x1, int y1, int x2, int y2, float depth,
+			 int x1, int y1, int x2, int y2,
+			 float depth, unsigned num_instances,
 			 enum blitter_attrib_type type,
-			 const union pipe_color_union *attrib)
+			 const union blitter_attrib *attrib)
 {
 	struct r600_common_context *rctx =
 		(struct r600_common_context*)util_blitter_get_pipe(blitter);
@@ -221,11 +222,6 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 	struct pipe_resource *buf = NULL;
 	unsigned offset = 0;
 	float *vb;
-
-	if (type == UTIL_BLITTER_ATTRIB_TEXCOORD) {
-		util_blitter_draw_rectangle(blitter, x1, y1, x2, y2, depth, type, attrib);
-		return;
-	}
 
 	/* Some operations (like color resolve on r6xx) don't work
 	 * with the conventional primitive types.
@@ -241,7 +237,7 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 	rctx->b.set_viewport_states(&rctx->b, 0, 1, &viewport);
 
 	/* Upload vertices. The hw rectangle has only 3 vertices,
-	 * I guess the 4th one is derived from the first 3.
+	 * The 4th one is derived from the first 3.
 	 * The vertex specification should match u_blitter's vertex element state. */
 	u_upload_alloc(rctx->b.stream_uploader, 0, sizeof(float) * 24,
 		       rctx->screen->info.tcc_cache_line_size,
@@ -264,15 +260,36 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 	vb[18] = depth;
 	vb[19] = 1;
 
-	if (attrib) {
-		memcpy(vb+4, attrib->f, sizeof(float)*4);
-		memcpy(vb+12, attrib->f, sizeof(float)*4);
-		memcpy(vb+20, attrib->f, sizeof(float)*4);
+	switch (type) {
+	case UTIL_BLITTER_ATTRIB_COLOR:
+		memcpy(vb+4, attrib->color, sizeof(float)*4);
+		memcpy(vb+12, attrib->color, sizeof(float)*4);
+		memcpy(vb+20, attrib->color, sizeof(float)*4);
+		break;
+	case UTIL_BLITTER_ATTRIB_TEXCOORD_XYZW:
+	case UTIL_BLITTER_ATTRIB_TEXCOORD_XY:
+		vb[6] = vb[14] = vb[22] = attrib->texcoord.z;
+		vb[7] = vb[15] = vb[23] = attrib->texcoord.w;
+		/* fall through */
+		vb[4] = attrib->texcoord.x1;
+		vb[5] = attrib->texcoord.y1;
+		vb[12] = attrib->texcoord.x1;
+		vb[13] = attrib->texcoord.y2;
+		vb[20] = attrib->texcoord.x2;
+		vb[21] = attrib->texcoord.y1;
+		break;
+	default:; /* Nothing to do. */
 	}
 
 	/* draw */
-	util_draw_vertex_buffer(&rctx->b, NULL, buf, blitter->vb_slot, offset,
-				R600_PRIM_RECTANGLE_LIST, 3, 2);
+	struct pipe_vertex_buffer vbuffer = {};
+	vbuffer.buffer.resource = buf;
+	vbuffer.stride = 2 * 4 * sizeof(float); /* vertex size */
+	vbuffer.buffer_offset = offset;
+
+	rctx->b.set_vertex_buffers(&rctx->b, blitter->vb_slot, 1, &vbuffer);
+	util_draw_arrays_instanced(&rctx->b, R600_PRIM_RECTANGLE_LIST, 0, 3,
+				   0, num_instances);
 	pipe_resource_reference(&buf, NULL);
 }
 
