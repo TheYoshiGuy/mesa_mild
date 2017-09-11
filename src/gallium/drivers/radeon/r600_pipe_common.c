@@ -411,6 +411,50 @@ void r600_postflush_resume_features(struct r600_common_context *ctx)
 		r600_resume_queries(ctx);
 }
 
+static void r600_add_fence_dependency(struct r600_common_context *rctx,
+				      struct pipe_fence_handle *fence)
+{
+	struct radeon_winsys *ws = rctx->ws;
+
+	if (rctx->dma.cs)
+		ws->cs_add_fence_dependency(rctx->dma.cs, fence);
+	ws->cs_add_fence_dependency(rctx->gfx.cs, fence);
+}
+
+static void r600_fence_server_sync(struct pipe_context *ctx,
+				   struct pipe_fence_handle *fence)
+{
+	struct r600_common_context *rctx = (struct r600_common_context *)ctx;
+	struct r600_multi_fence *rfence = (struct r600_multi_fence *)fence;
+
+	/* Only amdgpu needs to handle fence dependencies (for fence imports).
+	 * radeon synchronizes all rings by default and will not implement
+	 * fence imports.
+	 */
+	if (rctx->screen->info.drm_major == 2)
+		return;
+
+	/* Only imported fences need to be handled by fence_server_sync,
+	 * because the winsys handles synchronizations automatically for BOs
+	 * within the process.
+	 *
+	 * Simply skip unflushed fences here, and the winsys will drop no-op
+	 * dependencies (i.e. dependencies within the same ring).
+	 */
+	if (rfence->gfx_unflushed.ctx)
+		return;
+
+	/* All unflushed commands will not start execution before
+	 * this fence dependency is signalled.
+	 *
+	 * Should we flush the context to allow more GPU parallelism?
+	 */
+	if (rfence->sdma)
+		r600_add_fence_dependency(rctx, rfence->sdma);
+	if (rfence->gfx)
+		r600_add_fence_dependency(rctx, rfence->gfx);
+}
+
 static void r600_flush_from_st(struct pipe_context *ctx,
 			       struct pipe_fence_handle **fence,
 			       unsigned flags)
@@ -453,8 +497,11 @@ static void r600_flush_from_st(struct pipe_context *ctx,
 	if (fence) {
 		struct r600_multi_fence *multi_fence =
 			CALLOC_STRUCT(r600_multi_fence);
-		if (!multi_fence)
-			return;
+		if (!multi_fence) {
+			ws->fence_reference(&sdma_fence, NULL);
+			ws->fence_reference(&gfx_fence, NULL);
+			goto finish;
+		}
 
 		multi_fence->reference.count = 1;
 		/* If both fences are NULL, fence_finish will always return true. */
@@ -469,7 +516,7 @@ static void r600_flush_from_st(struct pipe_context *ctx,
 		screen->fence_reference(screen, fence, NULL);
 		*fence = (struct pipe_fence_handle*)multi_fence;
 	}
-
+finish:
 	if (!(flags & PIPE_FLUSH_DEFERRED)) {
 		if (rctx->dma.cs)
 			ws->cs_sync_flush(rctx->dma.cs);
@@ -681,6 +728,7 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	rctx->b.memory_barrier = r600_memory_barrier;
 	rctx->b.flush = r600_flush_from_st;
 	rctx->b.set_debug_callback = r600_set_debug_callback;
+	rctx->b.fence_server_sync = r600_fence_server_sync;
 	rctx->dma_clear_buffer = r600_dma_clear_buffer_fallback;
 
 	/* evergreen_compute.c has a special codepath for global buffers.
