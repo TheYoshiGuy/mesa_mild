@@ -142,7 +142,6 @@ static VkResult radv_create_cmd_buffer(
 	VkCommandBuffer*                            pCommandBuffer)
 {
 	struct radv_cmd_buffer *cmd_buffer;
-	VkResult result;
 	unsigned ring;
 	cmd_buffer = vk_alloc(&pool->alloc, sizeof(*cmd_buffer), 8,
 				VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
@@ -171,8 +170,8 @@ static VkResult radv_create_cmd_buffer(
 
 	cmd_buffer->cs = device->ws->cs_create(device->ws, ring);
 	if (!cmd_buffer->cs) {
-		result = VK_ERROR_OUT_OF_HOST_MEMORY;
-		goto fail;
+		vk_free(&cmd_buffer->pool->alloc, cmd_buffer);
+		return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 	}
 
 	*pCommandBuffer = radv_cmd_buffer_to_handle(cmd_buffer);
@@ -182,11 +181,6 @@ static VkResult radv_create_cmd_buffer(
 	list_inithead(&cmd_buffer->upload.list);
 
 	return VK_SUCCESS;
-
-fail:
-	vk_free(&cmd_buffer->pool->alloc, cmd_buffer);
-
-	return result;
 }
 
 static void
@@ -208,7 +202,8 @@ radv_cmd_buffer_destroy(struct radv_cmd_buffer *cmd_buffer)
 	vk_free(&cmd_buffer->pool->alloc, cmd_buffer);
 }
 
-static void  radv_reset_cmd_buffer(struct radv_cmd_buffer *cmd_buffer)
+static VkResult
+radv_reset_cmd_buffer(struct radv_cmd_buffer *cmd_buffer)
 {
 
 	cmd_buffer->device->ws->cs_reset(cmd_buffer->cs);
@@ -243,6 +238,8 @@ static void  radv_reset_cmd_buffer(struct radv_cmd_buffer *cmd_buffer)
 					     &fence_ptr);
 		cmd_buffer->gfx9_fence_bo = cmd_buffer->upload.upload_bo;
 	}
+
+	return cmd_buffer->record_result;
 }
 
 static bool
@@ -861,9 +858,10 @@ static void polaris_set_vgt_vertex_reuse(struct radv_cmd_buffer *cmd_buffer,
 }
 
 static void
-radv_emit_graphics_pipeline(struct radv_cmd_buffer *cmd_buffer,
-			    struct radv_pipeline *pipeline)
+radv_emit_graphics_pipeline(struct radv_cmd_buffer *cmd_buffer)
 {
+	struct radv_pipeline *pipeline = cmd_buffer->state.pipeline;
+
 	if (!pipeline || cmd_buffer->state.emitted_pipeline == pipeline)
 		return;
 
@@ -1385,18 +1383,15 @@ static void
 radv_flush_push_descriptors(struct radv_cmd_buffer *cmd_buffer)
 {
 	struct radv_descriptor_set *set = &cmd_buffer->push_descriptors.set;
-	uint32_t *ptr = NULL;
 	unsigned bo_offset;
 
-	if (!radv_cmd_buffer_upload_alloc(cmd_buffer, set->size, 32,
-	                                  &bo_offset,
-	                                  (void**) &ptr))
+	if (!radv_cmd_buffer_upload_data(cmd_buffer, set->size, 32,
+					 set->mapped_ptr,
+					 &bo_offset))
 		return;
 
 	set->va = cmd_buffer->device->ws->buffer_get_va(cmd_buffer->upload.upload_bo);
 	set->va += bo_offset;
-
-	memcpy(ptr, set->mapped_ptr, set->size);
 }
 
 static void
@@ -1610,7 +1605,6 @@ radv_cmd_buffer_flush_state(struct radv_cmd_buffer *cmd_buffer,
 			    bool indirect_draw,
 			    uint32_t draw_vertex_count)
 {
-	struct radv_pipeline *pipeline = cmd_buffer->state.pipeline;
 	uint32_t ia_multi_vgt_param;
 
 	MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws,
@@ -1620,7 +1614,7 @@ radv_cmd_buffer_flush_state(struct radv_cmd_buffer *cmd_buffer,
 		return;
 
 	if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_PIPELINE)
-		radv_emit_graphics_pipeline(cmd_buffer, pipeline);
+		radv_emit_graphics_pipeline(cmd_buffer);
 
 	if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_RENDER_TARGETS)
 		radv_emit_framebuffer_state(cmd_buffer);
@@ -1894,12 +1888,11 @@ VkResult radv_AllocateCommandBuffers(
 			list_del(&cmd_buffer->pool_link);
 			list_addtail(&cmd_buffer->pool_link, &pool->cmd_buffers);
 
-			radv_reset_cmd_buffer(cmd_buffer);
+			result = radv_reset_cmd_buffer(cmd_buffer);
 			cmd_buffer->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
 			cmd_buffer->level = pAllocateInfo->level;
 
 			pCommandBuffers[i] = radv_cmd_buffer_to_handle(cmd_buffer);
-			result = VK_SUCCESS;
 		} else {
 			result = radv_create_cmd_buffer(device, pool, pAllocateInfo->level,
 			                                &pCommandBuffers[i]);
@@ -1940,8 +1933,7 @@ VkResult radv_ResetCommandBuffer(
 	VkCommandBufferResetFlags flags)
 {
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
-	radv_reset_cmd_buffer(cmd_buffer);
-	return VK_SUCCESS;
+	return radv_reset_cmd_buffer(cmd_buffer);
 }
 
 static void emit_gfx_buffer_state(struct radv_cmd_buffer *cmd_buffer)
@@ -1963,9 +1955,11 @@ VkResult radv_BeginCommandBuffer(
 	const VkCommandBufferBeginInfo *pBeginInfo)
 {
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
-	VkResult result = VK_SUCCESS;
+	VkResult result;
 
-	radv_reset_cmd_buffer(cmd_buffer);
+	result = radv_reset_cmd_buffer(cmd_buffer);
+	if (result != VK_SUCCESS)
+		return result;
 
 	memset(&cmd_buffer->state, 0, sizeof(cmd_buffer->state));
 	cmd_buffer->state.last_primitive_reset_en = -1;
@@ -2597,10 +2591,13 @@ VkResult radv_ResetCommandPool(
 	VkCommandPoolResetFlags                     flags)
 {
 	RADV_FROM_HANDLE(radv_cmd_pool, pool, commandPool);
+	VkResult result;
 
 	list_for_each_entry(struct radv_cmd_buffer, cmd_buffer,
 			    &pool->cmd_buffers, pool_link) {
-		radv_reset_cmd_buffer(cmd_buffer);
+		result = radv_reset_cmd_buffer(cmd_buffer);
+		if (result != VK_SUCCESS)
+			return result;
 	}
 
 	return VK_SUCCESS;
