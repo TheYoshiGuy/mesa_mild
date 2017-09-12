@@ -64,10 +64,11 @@ anv_compute_heap_size(int fd, uint64_t *heap_size)
       /* If, for whatever reason, we can't actually get the GTT size from the
        * kernel (too old?) fall back to the aperture size.
        */
-      anv_perf_warn("Failed to get I915_CONTEXT_PARAM_GTT_SIZE: %m");
+      anv_perf_warn(NULL, NULL,
+                    "Failed to get I915_CONTEXT_PARAM_GTT_SIZE: %m");
 
       if (anv_gem_get_aperture(fd, &gtt_size) == -1) {
-         return vk_errorf(VK_ERROR_INITIALIZATION_FAILED,
+         return vk_errorf(NULL, NULL, VK_ERROR_INITIALIZATION_FAILED,
                           "failed to get aperture size: %m");
       }
    }
@@ -209,13 +210,15 @@ anv_physical_device_init_uuids(struct anv_physical_device *device)
 {
    const struct build_id_note *note = build_id_find_nhdr("libvulkan_intel.so");
    if (!note) {
-      return vk_errorf(VK_ERROR_INITIALIZATION_FAILED,
+      return vk_errorf(device->instance, device,
+                       VK_ERROR_INITIALIZATION_FAILED,
                        "Failed to find build-id");
    }
 
    unsigned build_id_len = build_id_length(note);
    if (build_id_len < 20) {
-      return vk_errorf(VK_ERROR_INITIALIZATION_FAILED,
+      return vk_errorf(device->instance, device,
+                       VK_ERROR_INITIALIZATION_FAILED,
                        "build-id too short.  It needs to be a SHA");
    }
 
@@ -265,6 +268,8 @@ anv_physical_device_init(struct anv_physical_device *device,
    VkResult result;
    int fd;
 
+   brw_process_intel_debug_variable();
+
    fd = open(path, O_RDWR | O_CLOEXEC);
    if (fd < 0)
       return vk_error(VK_ERROR_INCOMPATIBLE_DRIVER);
@@ -297,7 +302,8 @@ anv_physical_device_init(struct anv_physical_device *device,
       /* Broadwell, Cherryview, Skylake, Broxton, Kabylake is as fully
        * supported as anything */
    } else {
-      result = vk_errorf(VK_ERROR_INCOMPATIBLE_DRIVER,
+      result = vk_errorf(device->instance, device,
+                         VK_ERROR_INCOMPATIBLE_DRIVER,
                          "Vulkan not yet supported on %s", device->name);
       goto fail;
    }
@@ -307,27 +313,31 @@ anv_physical_device_init(struct anv_physical_device *device,
       device->cmd_parser_version =
          anv_gem_get_param(fd, I915_PARAM_CMD_PARSER_VERSION);
       if (device->cmd_parser_version == -1) {
-         result = vk_errorf(VK_ERROR_INITIALIZATION_FAILED,
+         result = vk_errorf(device->instance, device,
+                            VK_ERROR_INITIALIZATION_FAILED,
                             "failed to get command parser version");
          goto fail;
       }
    }
 
    if (!anv_gem_get_param(fd, I915_PARAM_HAS_WAIT_TIMEOUT)) {
-      result = vk_errorf(VK_ERROR_INITIALIZATION_FAILED,
+      result = vk_errorf(device->instance, device,
+                         VK_ERROR_INITIALIZATION_FAILED,
                          "kernel missing gem wait");
       goto fail;
    }
 
    if (!anv_gem_get_param(fd, I915_PARAM_HAS_EXECBUF2)) {
-      result = vk_errorf(VK_ERROR_INITIALIZATION_FAILED,
+      result = vk_errorf(device->instance, device,
+                         VK_ERROR_INITIALIZATION_FAILED,
                          "kernel missing execbuf2");
       goto fail;
    }
 
    if (!device->info.has_llc &&
        anv_gem_get_param(fd, I915_PARAM_MMAP_VERSION) < 1) {
-      result = vk_errorf(VK_ERROR_INITIALIZATION_FAILED,
+      result = vk_errorf(device->instance, device,
+                         VK_ERROR_INITIALIZATION_FAILED,
                          "kernel missing wc mmap");
       goto fail;
    }
@@ -371,8 +381,6 @@ anv_physical_device_init(struct anv_physical_device *device,
       if (max_cs_threads > device->info.max_cs_threads)
          device->info.max_cs_threads = max_cs_threads;
    }
-
-   brw_process_intel_debug_variable();
 
    device->compiler = brw_compiler_create(NULL, &device->info);
    if (device->compiler == NULL) {
@@ -446,6 +454,13 @@ VkResult anv_CreateInstance(
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO);
 
+   /* Check if user passed a debug report callback to be used during
+    * Create/Destroy of instance.
+    */
+   const VkDebugReportCallbackCreateInfoEXT *ctor_cb =
+      vk_find_struct_const(pCreateInfo->pNext,
+                           DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT);
+
    uint32_t client_version;
    if (pCreateInfo->pApplicationInfo &&
        pCreateInfo->pApplicationInfo->apiVersion != 0) {
@@ -456,7 +471,18 @@ VkResult anv_CreateInstance(
 
    if (VK_MAKE_VERSION(1, 0, 0) > client_version ||
        client_version > VK_MAKE_VERSION(1, 0, 0xfff)) {
-      return vk_errorf(VK_ERROR_INCOMPATIBLE_DRIVER,
+
+      if (ctor_cb && ctor_cb->flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+         ctor_cb->pfnCallback(VK_DEBUG_REPORT_ERROR_BIT_EXT,
+                              VK_DEBUG_REPORT_OBJECT_TYPE_INSTANCE_EXT,
+                              VK_NULL_HANDLE, /* No handle available yet. */
+                              __LINE__,
+                              0,
+                              "anv",
+                              "incompatible driver version",
+                              ctor_cb->pUserData);
+
+      return vk_errorf(NULL, NULL, VK_ERROR_INCOMPATIBLE_DRIVER,
                        "Client requested version %d.%d.%d",
                        VK_VERSION_MAJOR(client_version),
                        VK_VERSION_MINOR(client_version),
@@ -484,6 +510,20 @@ VkResult anv_CreateInstance(
    instance->apiVersion = client_version;
    instance->physicalDeviceCount = -1;
 
+   if (pthread_mutex_init(&instance->callbacks_mutex, NULL) != 0) {
+      vk_free2(&default_alloc, pAllocator, instance);
+      return vk_error(VK_ERROR_INITIALIZATION_FAILED);
+   }
+
+   list_inithead(&instance->callbacks);
+
+   /* Store report debug callback to be used during DestroyInstance. */
+   if (ctor_cb) {
+      instance->destroy_debug_cb.flags = ctor_cb->flags;
+      instance->destroy_debug_cb.callback = ctor_cb->pfnCallback;
+      instance->destroy_debug_cb.data = ctor_cb->pUserData;
+   }
+
    _mesa_locale_init();
 
    VG(VALGRIND_CREATE_MEMPOOL(instance, 0, false));
@@ -509,6 +549,8 @@ void anv_DestroyInstance(
    }
 
    VG(VALGRIND_DESTROY_MEMPOOL(instance));
+
+   pthread_mutex_destroy(&instance->callbacks_mutex);
 
    _mesa_locale_fini();
 
@@ -1327,16 +1369,17 @@ anv_device_query_status(struct anv_device *device)
    if (ret == -1) {
       /* We don't know the real error. */
       device->lost = true;
-      return vk_errorf(VK_ERROR_DEVICE_LOST, "get_reset_stats failed: %m");
+      return vk_errorf(device->instance, device, VK_ERROR_DEVICE_LOST,
+                       "get_reset_stats failed: %m");
    }
 
    if (active) {
       device->lost = true;
-      return vk_errorf(VK_ERROR_DEVICE_LOST,
+      return vk_errorf(device->instance, device, VK_ERROR_DEVICE_LOST,
                        "GPU hung on one of our command buffers");
    } else if (pending) {
       device->lost = true;
-      return vk_errorf(VK_ERROR_DEVICE_LOST,
+      return vk_errorf(device->instance, device, VK_ERROR_DEVICE_LOST,
                        "GPU hung with commands in-flight");
    }
 
@@ -1356,7 +1399,8 @@ anv_device_bo_busy(struct anv_device *device, struct anv_bo *bo)
    } else if (ret == -1) {
       /* We don't know the real error. */
       device->lost = true;
-      return vk_errorf(VK_ERROR_DEVICE_LOST, "gem wait failed: %m");
+      return vk_errorf(device->instance, device, VK_ERROR_DEVICE_LOST,
+                       "gem wait failed: %m");
    }
 
    /* Query for device status after the busy call.  If the BO we're checking
@@ -1378,7 +1422,8 @@ anv_device_wait(struct anv_device *device, struct anv_bo *bo,
    } else if (ret == -1) {
       /* We don't know the real error. */
       device->lost = true;
-      return vk_errorf(VK_ERROR_DEVICE_LOST, "gem wait failed: %m");
+      return vk_errorf(device->instance, device, VK_ERROR_DEVICE_LOST,
+                       "gem wait failed: %m");
    }
 
    /* Query for device status after the wait.  If the BO we're waiting on got
