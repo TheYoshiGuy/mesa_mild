@@ -1425,6 +1425,12 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 							     sctx->framebuffer.nr_samples <= 1;
 			key->part.ps.epilog.clamp_color = rs->clamp_fragment_color;
 
+			if (sctx->ps_iter_samples > 1 &&
+			    sel->info.reads_samplemask) {
+				key->part.ps.prolog.samplemask_log_ps_iter =
+					util_logbase2(util_next_power_of_two(sctx->ps_iter_samples));
+			}
+
 			if (rs->force_persample_interp &&
 			    rs->multisample_enable &&
 			    sctx->framebuffer.nr_samples > 1 &&
@@ -1456,6 +1462,9 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 					sel->info.uses_linear_center +
 					sel->info.uses_linear_centroid +
 					sel->info.uses_linear_sample > 1;
+
+				if (sel->info.opcode_count[TGSI_OPCODE_INTERP_SAMPLE])
+					key->mono.u.ps.interpolate_at_sample_force_center = 1;
 			}
 		}
 
@@ -1786,7 +1795,7 @@ static void si_parse_next_shader_property(const struct tgsi_shader_info *info,
  * si_shader_selector initialization. Since it can be done asynchronously,
  * there is no way to report compile failures to applications.
  */
-void si_init_shader_selector_async(void *job, int thread_index)
+static void si_init_shader_selector_async(void *job, int thread_index)
 {
 	struct si_shader_selector *sel = (struct si_shader_selector *)job;
 	struct si_screen *sscreen = sel->screen;

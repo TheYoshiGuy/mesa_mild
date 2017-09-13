@@ -531,7 +531,7 @@ swr_create_vertex_elements_state(struct pipe_context *pipe,
             ? ComponentControl::StoreSrc
             : ComponentControl::Store1Fp;
          velems->fsState.layout[i].ComponentPacking = ComponentEnable::XYZW;
-         velems->fsState.layout[i].InstanceDataStepRate =
+         velems->fsState.layout[i].InstanceAdvancementState =
             attribs[i].instance_divisor;
 
          /* Calculate the pitch of each stream */
@@ -795,7 +795,7 @@ swr_update_texture_state(struct swr_context *ctx,
 
          jit_tex->width = res->width0;
          jit_tex->height = res->height0;
-         jit_tex->base_ptr = swr->pBaseAddress;
+         jit_tex->base_ptr = (uint8_t*)swr->xpBaseAddress;
          if (view->target != PIPE_BUFFER) {
             jit_tex->first_level = view->u.tex.first_level;
             jit_tex->last_level = view->u.tex.last_level;
@@ -902,7 +902,7 @@ swr_change_rt(struct swr_context *ctx,
    struct SWR_SURFACE_STATE *rt = &pDC->renderTargets[attachment];
 
    /* Do nothing if the render target hasn't changed */
-   if ((!sf || !sf->texture) && rt->pBaseAddress == nullptr)
+   if ((!sf || !sf->texture) && (void*)(rt->xpBaseAddress) == nullptr)
       return false;
 
    /* Deal with disabling RT up front */
@@ -918,12 +918,12 @@ swr_change_rt(struct swr_context *ctx,
    const SWR_SURFACE_STATE *swr_surface = &swr->swr;
    SWR_FORMAT fmt = mesa_to_swr_format(sf->format);
 
-   if (attachment == SWR_ATTACHMENT_STENCIL && swr->secondary.pBaseAddress) {
+   if (attachment == SWR_ATTACHMENT_STENCIL && swr->secondary.xpBaseAddress) {
       swr_surface = &swr->secondary;
       fmt = swr_surface->format;
    }
 
-   if (rt->pBaseAddress == swr_surface->pBaseAddress &&
+   if (rt->xpBaseAddress == swr_surface->xpBaseAddress &&
        rt->format == fmt &&
        rt->lod == sf->u.tex.level &&
        rt->arrayIndex == sf->u.tex.first_layer)
@@ -932,7 +932,7 @@ swr_change_rt(struct swr_context *ctx,
    bool need_fence = false;
 
    /* StoreTile for changed target */
-   if (rt->pBaseAddress) {
+   if (rt->xpBaseAddress) {
       /* If changing attachment to a new target, mark tiles as
        * INVALID so they are reloaded from surface. */
       swr_store_render_target(&ctx->pipe, attachment, SWR_TILE_INVALID);
@@ -1157,14 +1157,6 @@ swr_update_derived(struct pipe_context *pipe,
 
       rastState->depthClipEnable = rasterizer->depth_clip;
       rastState->clipHalfZ = rasterizer->clip_halfz;
-
-      rastState->clipDistanceMask =
-         ctx->vs->info.base.num_written_clipdistance ?
-         ctx->vs->info.base.clipdist_writemask & rasterizer->clip_plane_enable :
-         rasterizer->clip_plane_enable;
-
-      rastState->cullDistanceMask =
-         ctx->vs->info.base.culldist_writemask << ctx->vs->info.base.num_written_clipdistance;
 
       ctx->api.pfnSwrSetRastState(ctx->swrContext, rastState);
    }
@@ -1765,6 +1757,17 @@ swr_update_derived(struct pipe_context *pipe,
    backendState.readRenderTargetArrayIndex = pLastFE->writes_layer;
    backendState.readViewportArrayIndex = pLastFE->writes_viewport_index;
    backendState.vertexAttribOffset = VERTEX_ATTRIB_START_SLOT; // TODO: optimize
+
+   backendState.clipDistanceMask =
+      ctx->vs->info.base.num_written_clipdistance ?
+      ctx->vs->info.base.clipdist_writemask & ctx->rasterizer->clip_plane_enable :
+      ctx->rasterizer->clip_plane_enable;
+
+   backendState.cullDistanceMask =
+      ctx->vs->info.base.culldist_writemask << ctx->vs->info.base.num_written_clipdistance;
+
+   // Assume old layout of SGV, POSITION, CLIPCULL, ATTRIB
+   backendState.vertexClipCullOffset = backendState.vertexAttribOffset - 2;
 
    ctx->api.pfnSwrSetBackendState(ctx->swrContext, &backendState);
 

@@ -424,6 +424,7 @@ struct si_ps_prolog_bits {
 	unsigned	force_linear_center_interp:1;
 	unsigned	bc_optimize_for_persp:1;
 	unsigned	bc_optimize_for_linear:1;
+	unsigned	samplemask_log_ps_iter:3;
 };
 
 /* Common PS bits between the shader key and the epilog key. */
@@ -465,6 +466,7 @@ union si_shader_part_key {
 		unsigned	colors_read:8; /* color input components read */
 		unsigned	num_interp_inputs:5; /* BCOLOR is at this location */
 		unsigned	face_vgpr_index:5;
+		unsigned	ancillary_vgpr_index:5;
 		unsigned	wqm:1;
 		char		color_attr_index[2];
 		char		color_interp_vgpr_index[2]; /* -1 == constant */
@@ -515,6 +517,9 @@ struct si_shader_key {
 			uint64_t	ff_tcs_inputs_to_copy; /* for fixed-func TCS */
 			/* When PS needs PrimID and GS is disabled. */
 			unsigned	vs_export_prim_id:1;
+			struct {
+				unsigned interpolate_at_sample_force_center:1;
+			} ps;
 		} u;
 	} mono;
 
@@ -557,7 +562,8 @@ struct si_shader_info {
 	ubyte			vs_output_param_offset[SI_MAX_VS_OUTPUTS];
 	ubyte			num_input_sgprs;
 	ubyte			num_input_vgprs;
-	char			face_vgpr_index;
+	signed char		face_vgpr_index;
+	signed char		ancillary_vgpr_index;
 	bool			uses_instanceid;
 	ubyte			nr_pos_exports;
 	ubyte			nr_param_exports;
