@@ -135,6 +135,8 @@ blorp_surf_for_miptree(struct brw_context *brw,
                        unsigned start_layer, unsigned num_layers,
                        struct isl_surf tmp_surfs[1])
 {
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+
    if (mt->surf.msaa_layout == ISL_MSAA_LAYOUT_ARRAY) {
       const unsigned num_samples = mt->surf.samples;
       for (unsigned i = 0; i < num_layers; i++) {
@@ -162,6 +164,10 @@ blorp_surf_for_miptree(struct brw_context *brw,
       aux_surf = &mt->mcs_buf->surf;
    else if (mt->hiz_buf)
       aux_surf = &mt->hiz_buf->surf;
+
+   if (mt->format == MESA_FORMAT_S_UINT8 && is_render_target &&
+       devinfo->gen <= 7)
+      mt->r8stencil_needs_update = true;
 
    if (surf->aux_usage == ISL_AUX_USAGE_HIZ &&
        !intel_miptree_level_has_hiz(mt, *level))
@@ -847,22 +853,14 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
          brw_meta_convert_fast_clear_color(brw, irb->mt,
                                            &ctx->Color.ClearColor);
 
-      bool same_clear_color = memcmp(&irb->mt->fast_clear_color,
-                                     &clear_color, sizeof(clear_color)) == 0;
+      bool same_clear_color =
+         !intel_miptree_set_clear_color(ctx, irb->mt, clear_color);
 
       /* If the buffer is already in INTEL_FAST_CLEAR_STATE_CLEAR, the clear
        * is redundant and can be skipped.
        */
       if (aux_state == ISL_AUX_STATE_CLEAR && same_clear_color)
          return;
-
-      irb->mt->fast_clear_color = clear_color;
-
-      /* If the clear color has changed, we need to emit a new SURFACE_STATE
-       * on the next draw call.
-       */
-      if (!same_clear_color)
-         ctx->NewDriverState |= BRW_NEW_FAST_CLEAR_COLOR;
 
       DBG("%s (fast) to mt %p level %d layers %d+%d\n", __FUNCTION__,
           irb->mt, irb->mt_level, irb->mt_layer, num_layers);

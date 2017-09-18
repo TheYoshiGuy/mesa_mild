@@ -110,7 +110,7 @@ struct u_log_context;
 #define DBG_NO_RB_PLUS		(1ull << 45)
 #define DBG_SI_SCHED		(1ull << 46)
 #define DBG_MONOLITHIC_SHADERS	(1ull << 47)
-/* gap */
+#define DBG_NO_OUT_OF_ORDER	(1ull << 48)
 #define DBG_UNSAFE_MATH		(1ull << 49)
 #define DBG_NO_DCC_FB		(1ull << 50)
 #define DBG_TEST_VMFAULT_CP	(1ull << 51)
@@ -704,7 +704,9 @@ struct r600_common_context {
 			      uint64_t old_gpu_address);
 
 	/* Enable or disable occlusion queries. */
-	void (*set_occlusion_query_state)(struct pipe_context *ctx, bool enable);
+	void (*set_occlusion_query_state)(struct pipe_context *ctx,
+					  bool old_enable,
+					  bool old_perfect_enable);
 
 	void (*save_qbo_state)(struct pipe_context *ctx, struct r600_qbo_state *st);
 

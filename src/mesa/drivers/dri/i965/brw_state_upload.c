@@ -353,7 +353,7 @@ static struct dirty_bit_map brw_bits[] = {
    DEFINE_BIT(BRW_NEW_VIEWPORT_COUNT),
    DEFINE_BIT(BRW_NEW_CONSERVATIVE_RASTERIZATION),
    DEFINE_BIT(BRW_NEW_DRAW_CALL),
-   DEFINE_BIT(BRW_NEW_FAST_CLEAR_COLOR),
+   DEFINE_BIT(BRW_NEW_AUX_STATE),
    {0, 0, 0}
 };
 
@@ -480,7 +480,7 @@ brw_upload_pipeline_state(struct brw_context *brw,
 
    brw_select_pipeline(brw, pipeline);
 
-   if (0) {
+   if (unlikely(INTEL_DEBUG & DEBUG_REEMIT)) {
       /* Always re-emit all state. */
       brw->NewGLState = ~0;
       ctx->NewDriverState = ~0ull;

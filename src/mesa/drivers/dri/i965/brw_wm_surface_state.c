@@ -176,9 +176,9 @@ brw_emit_surface_state(struct brw_context *brw,
                                  surf_offset);
 
    isl_surf_fill_state(&brw->isl_dev, state, .surf = &mt->surf, .view = &view,
-                       .address = brw_emit_reloc(&brw->batch,
-                                                 *surf_offset + brw->isl_dev.ss.addr_offset,
-                                                 mt->bo, offset, reloc_flags),
+                       .address = brw_state_reloc(&brw->batch,
+                                                  *surf_offset + brw->isl_dev.ss.addr_offset,
+                                                  mt->bo, offset, reloc_flags),
                        .aux_surf = aux_surf, .aux_usage = aux_usage,
                        .aux_address = aux_offset,
                        .mocs = mocs, .clear_color = clear_color,
@@ -194,11 +194,11 @@ brw_emit_surface_state(struct brw_context *brw,
        */
       assert((aux_offset & 0xfff) == 0);
       uint32_t *aux_addr = state + brw->isl_dev.ss.aux_addr_offset;
-      *aux_addr = brw_emit_reloc(&brw->batch,
-                                 *surf_offset +
-                                 brw->isl_dev.ss.aux_addr_offset,
-                                 aux_bo, *aux_addr,
-                                 reloc_flags);
+      *aux_addr = brw_state_reloc(&brw->batch,
+                                  *surf_offset +
+                                  brw->isl_dev.ss.aux_addr_offset,
+                                  aux_bo, *aux_addr,
+                                  reloc_flags);
    }
 }
 
@@ -607,10 +607,10 @@ brw_emit_buffer_surface_state(struct brw_context *brw,
 
    isl_buffer_fill_state(&brw->isl_dev, dw,
                          .address = !bo ? buffer_offset :
-                                    brw_emit_reloc(&brw->batch,
-                                                   *out_offset + brw->isl_dev.ss.addr_offset,
-                                                   bo, buffer_offset,
-                                                   reloc_flags),
+                                    brw_state_reloc(&brw->batch,
+                                                    *out_offset + brw->isl_dev.ss.addr_offset,
+                                                    bo, buffer_offset,
+                                                    reloc_flags),
                          .size = buffer_size,
                          .format = surface_format,
                          .stride = pitch,
@@ -777,8 +777,8 @@ brw_update_sol_surface(struct brw_context *brw,
       BRW_SURFACE_MIPMAPLAYOUT_BELOW << BRW_SURFACE_MIPLAYOUT_SHIFT |
       surface_format << BRW_SURFACE_FORMAT_SHIFT |
       BRW_SURFACE_RC_READ_WRITE;
-   surf[1] = brw_emit_reloc(&brw->batch,
-                            *out_offset + 4, bo, offset_bytes, RELOC_WRITE);
+   surf[1] = brw_state_reloc(&brw->batch,
+                             *out_offset + 4, bo, offset_bytes, RELOC_WRITE);
    surf[2] = (width << BRW_SURFACE_WIDTH_SHIFT |
 	      height << BRW_SURFACE_HEIGHT_SHIFT);
    surf[3] = (depth << BRW_SURFACE_DEPTH_SHIFT |
@@ -870,9 +870,9 @@ emit_null_surface_state(struct brw_context *brw,
 
    surf[0] = (BRW_SURFACE_2D << BRW_SURFACE_TYPE_SHIFT |
 	      ISL_FORMAT_B8G8R8A8_UNORM << BRW_SURFACE_FORMAT_SHIFT);
-   surf[1] = brw_emit_reloc(&brw->batch, *out_offset + 4,
-                            brw->wm.multisampled_null_render_target_bo,
-                            0, RELOC_WRITE);
+   surf[1] = brw_state_reloc(&brw->batch, *out_offset + 4,
+                             brw->wm.multisampled_null_render_target_bo,
+                             0, RELOC_WRITE);
 
    surf[2] = ((width - 1) << BRW_SURFACE_WIDTH_SHIFT |
               (height - 1) << BRW_SURFACE_HEIGHT_SHIFT);
@@ -940,12 +940,12 @@ gen4_update_renderbuffer_surface(struct brw_context *brw,
 
    /* reloc */
    assert(mt->offset % mt->cpp == 0);
-   surf[1] = brw_emit_reloc(&brw->batch, offset + 4, mt->bo,
-                            mt->offset +
-                            intel_renderbuffer_get_tile_offsets(irb,
-                                                                &tile_x,
-                                                                &tile_y),
-                            RELOC_WRITE);
+   surf[1] = brw_state_reloc(&brw->batch, offset + 4, mt->bo,
+                             mt->offset +
+                             intel_renderbuffer_get_tile_offsets(irb,
+                                                                 &tile_x,
+                                                                 &tile_y),
+                             RELOC_WRITE);
 
    surf[2] = ((rb->Width - 1) << BRW_SURFACE_WIDTH_SHIFT |
 	      (rb->Height - 1) << BRW_SURFACE_HEIGHT_SHIFT);
@@ -1038,7 +1038,7 @@ const struct brw_tracked_state gen6_renderbuffer_surfaces = {
    .dirty = {
       .mesa = _NEW_BUFFERS,
       .brw = BRW_NEW_BATCH |
-             BRW_NEW_FAST_CLEAR_COLOR,
+             BRW_NEW_AUX_STATE,
    },
    .emit = update_renderbuffer_surfaces,
 };
@@ -1119,7 +1119,7 @@ const struct brw_tracked_state brw_renderbuffer_read_surfaces = {
    .dirty = {
       .mesa = _NEW_BUFFERS,
       .brw = BRW_NEW_BATCH |
-             BRW_NEW_FAST_CLEAR_COLOR |
+             BRW_NEW_AUX_STATE |
              BRW_NEW_FS_PROG_DATA,
    },
    .emit = update_renderbuffer_read_surfaces,
@@ -1216,7 +1216,7 @@ const struct brw_tracked_state brw_texture_surfaces = {
    .dirty = {
       .mesa = _NEW_TEXTURE,
       .brw = BRW_NEW_BATCH |
-             BRW_NEW_FAST_CLEAR_COLOR |
+             BRW_NEW_AUX_STATE |
              BRW_NEW_FRAGMENT_PROGRAM |
              BRW_NEW_FS_PROG_DATA |
              BRW_NEW_GEOMETRY_PROGRAM |
@@ -1259,7 +1259,7 @@ const struct brw_tracked_state brw_cs_texture_surfaces = {
       .mesa = _NEW_TEXTURE,
       .brw = BRW_NEW_BATCH |
              BRW_NEW_COMPUTE_PROGRAM |
-             BRW_NEW_FAST_CLEAR_COLOR,
+             BRW_NEW_AUX_STATE,
    },
    .emit = brw_update_cs_texture_surfaces,
 };
@@ -1467,7 +1467,7 @@ const struct brw_tracked_state brw_cs_image_surfaces = {
       .mesa = _NEW_TEXTURE | _NEW_PROGRAM,
       .brw = BRW_NEW_BATCH |
              BRW_NEW_CS_PROG_DATA |
-             BRW_NEW_FAST_CLEAR_COLOR |
+             BRW_NEW_AUX_STATE |
              BRW_NEW_IMAGE_UNITS
    },
    .emit = brw_upload_cs_image_surfaces,
@@ -1653,7 +1653,7 @@ const struct brw_tracked_state brw_wm_image_surfaces = {
    .dirty = {
       .mesa = _NEW_TEXTURE,
       .brw = BRW_NEW_BATCH |
-             BRW_NEW_FAST_CLEAR_COLOR |
+             BRW_NEW_AUX_STATE |
              BRW_NEW_FRAGMENT_PROGRAM |
              BRW_NEW_FS_PROG_DATA |
              BRW_NEW_IMAGE_UNITS

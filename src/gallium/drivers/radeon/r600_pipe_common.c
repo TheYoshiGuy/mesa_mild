@@ -126,7 +126,8 @@ void r600_gfx_write_event_eop(struct r600_common_context *ctx,
 		 */
 		if (ctx->chip_class == GFX9 &&
 		    query_type != PIPE_QUERY_OCCLUSION_COUNTER &&
-		    query_type != PIPE_QUERY_OCCLUSION_PREDICATE) {
+		    query_type != PIPE_QUERY_OCCLUSION_PREDICATE &&
+		    query_type != PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE) {
 			struct r600_resource *scratch = ctx->eop_bug_scratch;
 
 			assert(16 * ctx->screen->info.num_render_backends <=
@@ -890,6 +891,7 @@ static const struct debug_named_value common_debug_options[] = {
 	{ "nodccfb", DBG_NO_DCC_FB, "Disable separate DCC on the main framebuffer" },
 	{ "nodpbb", DBG_NO_DPBB, "Disable DPBB." },
 	{ "nodfsm", DBG_NO_DFSM, "Disable DFSM." },
+	{ "nooutoforder", DBG_NO_OUT_OF_ORDER, "Disable out-of-order rasterization" },
 
 	DEBUG_NAMED_VALUE_END /* must be last */
 };
