@@ -10,6 +10,7 @@ MKDIR_GEN = $(AM_V_at)$(MKDIR_P) $(@D)
 PYTHON_GEN = $(AM_V_GEN)$(PYTHON2) $(PYTHON_FLAGS)
 
 EXTRA_DIST = \
+	$(top_srcdir)/include/vulkan/vk_android_native_buffer.h \
 	util/gen_enum_to_str.py
 
 VULKAN_UTIL_SOURCES = \
@@ -69,7 +70,7 @@ wsi/wayland-drm-client-protocol.h : $(WL_DRM_XML)
 if HAVE_PLATFORM_WAYLAND
 AM_CPPFLAGS += \
 	-I$(top_builddir)/src/vulkan/wsi \
-	$(WAYLAND_CFLAGS) \
+	$(WAYLAND_CLIENT_CFLAGS) \
 	-DVK_USE_PLATFORM_WAYLAND_KHR
 
 VULKAN_WSI_SOURCES += \

@@ -1710,7 +1710,8 @@ for plat in $platforms; do
     case "$plat" in
     wayland)
 
-        PKG_CHECK_MODULES([WAYLAND], [wayland-client >= $WAYLAND_REQUIRED wayland-server >= $WAYLAND_REQUIRED])
+        PKG_CHECK_MODULES([WAYLAND_CLIENT], [wayland-client >= $WAYLAND_REQUIRED])
+        PKG_CHECK_MODULES([WAYLAND_SERVER], [wayland-server >= $WAYLAND_REQUIRED])
 
         if test "x$WAYLAND_SCANNER" = "x:"; then
                 AC_MSG_ERROR([wayland-scanner is needed to compile the wayland platform])
@@ -1718,7 +1719,7 @@ for plat in $platforms; do
         if test "x$have_wayland_protocols" = xno; then
                 AC_MSG_ERROR([wayland-protocols >= $WAYLAND_PROTOCOLS_REQUIRED is needed to compile the wayland platform])
         fi
-        DEFINES="$DEFINES -DHAVE_WAYLAND_PLATFORM"
+        DEFINES="$DEFINES -DHAVE_WAYLAND_PLATFORM -DWL_HIDE_DEPRECATED"
         ;;
 
     x11)

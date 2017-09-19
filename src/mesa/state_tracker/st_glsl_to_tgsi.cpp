@@ -3045,7 +3045,8 @@ glsl_to_tgsi_visitor::visit(ir_constant *ir)
       st_src_reg temp_base = get_temp(ir->type);
       st_dst_reg temp = st_dst_reg(temp_base);
 
-      foreach_in_list(ir_constant, field_value, &ir->components) {
+      for (i = 0; i < ir->type->length; i++) {
+         ir_constant *const field_value = ir->get_record_field(i);
          int size = type_size(field_value->type);
 
          assert(size > 0);
@@ -3073,7 +3074,7 @@ glsl_to_tgsi_visitor::visit(ir_constant *ir)
       in_array++;
 
       for (i = 0; i < ir->type->length; i++) {
-         ir->array_elements[i]->accept(this);
+         ir->const_elements[i]->accept(this);
          src = this->result;
          for (int j = 0; j < size; j++) {
             emit_asm(ir, TGSI_OPCODE_MOV, temp, src);
