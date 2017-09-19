@@ -1075,8 +1075,7 @@ intel_miptree_create_for_dri_image(struct brw_context *brw,
        * a worst case of compression.
        */
       enum isl_aux_state initial_state =
-         mod_info->supports_clear_color ? ISL_AUX_STATE_COMPRESSED_CLEAR :
-                                          ISL_AUX_STATE_COMPRESSED_NO_CLEAR;
+         isl_drm_modifier_get_default_aux_state(image->modifier);
 
       if (!create_ccs_buf_for_image(brw, image, mt, initial_state)) {
          intel_miptree_release(&mt);
@@ -2819,6 +2818,25 @@ intel_miptree_prepare_external(struct brw_context *brw,
    intel_miptree_prepare_access(brw, mt, 0, INTEL_REMAINING_LEVELS,
                                 0, INTEL_REMAINING_LAYERS,
                                 aux_usage, supports_fast_clear);
+}
+
+void
+intel_miptree_finish_external(struct brw_context *brw,
+                              struct intel_mipmap_tree *mt)
+{
+   if (!mt->mcs_buf)
+      return;
+
+   /* We just got this image in from the window system via glxBindTexImageEXT
+    * or similar and have no idea what the actual aux state is other than that
+    * we aren't in AUX_INVALID.  Reset the aux state to the default for the
+    * image's modifier.
+    */
+   enum isl_aux_state default_aux_state =
+      isl_drm_modifier_get_default_aux_state(mt->drm_modifier);
+   assert(mt->last_level == mt->first_level);
+   intel_miptree_set_aux_state(brw, mt, 0, 0, INTEL_REMAINING_LAYERS,
+                               default_aux_state);
 }
 
 /**

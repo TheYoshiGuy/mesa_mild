@@ -30,6 +30,7 @@
 
 #include "anv_private.h"
 #include "util/debug.h"
+#include "vk_util.h"
 
 #include "vk_format_info.h"
 
@@ -114,6 +115,39 @@ add_surface(struct anv_image *image, struct anv_surface *surf)
    surf->offset = align_u32(image->size, surf->isl.alignment);
    image->size = surf->offset + surf->isl.size;
    image->alignment = MAX2(image->alignment, surf->isl.alignment);
+}
+
+
+static bool
+all_formats_ccs_e_compatible(const struct gen_device_info *devinfo,
+                             const struct VkImageCreateInfo *vk_info)
+{
+   enum isl_format format =
+      anv_get_isl_format(devinfo, vk_info->format,
+                         VK_IMAGE_ASPECT_COLOR_BIT, vk_info->tiling);
+
+   if (!isl_format_supports_ccs_e(devinfo, format))
+      return false;
+
+   if (!(vk_info->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT))
+      return true;
+
+   const VkImageFormatListCreateInfoKHR *fmt_list =
+      vk_find_struct_const(vk_info->pNext, IMAGE_FORMAT_LIST_CREATE_INFO_KHR);
+
+   if (!fmt_list || fmt_list->viewFormatCount == 0)
+      return false;
+
+   for (uint32_t i = 0; i < fmt_list->viewFormatCount; i++) {
+      enum isl_format view_format =
+         anv_get_isl_format(devinfo, fmt_list->pViewFormats[i],
+                            VK_IMAGE_ASPECT_COLOR_BIT, vk_info->tiling);
+
+      if (!isl_formats_are_ccs_e_compatible(devinfo, format, view_format))
+         return false;
+   }
+
+   return true;
 }
 
 /**
@@ -319,8 +353,7 @@ make_surface(const struct anv_device *dev,
              * compression on at all times for these formats.
              */
             if (!(vk_info->usage & VK_IMAGE_USAGE_STORAGE_BIT) &&
-                !(vk_info->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) &&
-                isl_format_supports_ccs_e(&dev->info, format)) {
+                all_formats_ccs_e_compatible(&dev->info, vk_info)) {
                image->aux_usage = ISL_AUX_USAGE_CCS_E;
             }
          }
@@ -421,23 +454,48 @@ anv_DestroyImage(VkDevice _device, VkImage _image,
    vk_free2(&device->alloc, pAllocator, image);
 }
 
-VkResult anv_BindImageMemory(
-    VkDevice                                    _device,
-    VkImage                                     _image,
-    VkDeviceMemory                              _memory,
-    VkDeviceSize                                memoryOffset)
+static void
+anv_bind_image_memory(const VkBindImageMemoryInfoKHR *pBindInfo)
 {
-   ANV_FROM_HANDLE(anv_device_memory, mem, _memory);
-   ANV_FROM_HANDLE(anv_image, image, _image);
+   ANV_FROM_HANDLE(anv_device_memory, mem, pBindInfo->memory);
+   ANV_FROM_HANDLE(anv_image, image, pBindInfo->image);
+
+   assert(pBindInfo->sType == VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO_KHR);
 
    if (mem == NULL) {
       image->bo = NULL;
       image->offset = 0;
-      return VK_SUCCESS;
+      return;
    }
 
    image->bo = mem->bo;
-   image->offset = memoryOffset;
+   image->offset = pBindInfo->memoryOffset;
+}
+
+VkResult anv_BindImageMemory(
+    VkDevice                                    device,
+    VkImage                                     image,
+    VkDeviceMemory                              memory,
+    VkDeviceSize                                memoryOffset)
+{
+   anv_bind_image_memory(
+      &(VkBindImageMemoryInfoKHR) {
+         .sType         = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO_KHR,
+         .image         = image,
+         .memory        = memory,
+         .memoryOffset  = memoryOffset,
+      });
+
+   return VK_SUCCESS;
+}
+
+VkResult anv_BindImageMemory2KHR(
+    VkDevice                                    device,
+    uint32_t                                    bindInfoCount,
+    const VkBindImageMemoryInfoKHR*             pBindInfos)
+{
+   for (uint32_t i = 0; i < bindInfoCount; i++)
+      anv_bind_image_memory(&pBindInfos[i]);
 
    return VK_SUCCESS;
 }

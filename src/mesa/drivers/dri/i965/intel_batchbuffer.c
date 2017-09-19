@@ -62,8 +62,7 @@
 #define MAX_STATE_SIZE (64 * 1024)
 
 static void
-intel_batchbuffer_reset(struct intel_batchbuffer *batch,
-                        struct intel_screen *screen);
+intel_batchbuffer_reset(struct brw_context *brw);
 
 static bool
 uint_key_compare(const void *a, const void *b)
@@ -87,9 +86,10 @@ init_reloc_list(struct brw_reloc_list *rlist, int count)
 }
 
 void
-intel_batchbuffer_init(struct intel_screen *screen,
-                       struct intel_batchbuffer *batch)
+intel_batchbuffer_init(struct brw_context *brw)
 {
+   struct intel_screen *screen = brw->screen;
+   struct intel_batchbuffer *batch = &brw->batch;
    const struct gen_device_info *devinfo = &screen->devinfo;
 
    if (!devinfo->has_llc) {
@@ -123,7 +123,7 @@ intel_batchbuffer_init(struct intel_screen *screen,
    if (devinfo->gen == 6)
       batch->valid_reloc_flags |= EXEC_OBJECT_NEEDS_GTT;
 
-   intel_batchbuffer_reset(batch, screen);
+   intel_batchbuffer_reset(brw);
 }
 
 #define READ_ONCE(x) (*(volatile __typeof__(x) *)&(x))
@@ -170,9 +170,10 @@ add_exec_bo(struct intel_batchbuffer *batch, struct brw_bo *bo)
 }
 
 static void
-intel_batchbuffer_reset(struct intel_batchbuffer *batch,
-                        struct intel_screen *screen)
+intel_batchbuffer_reset(struct brw_context *brw)
 {
+   struct intel_screen *screen = brw->screen;
+   struct intel_batchbuffer *batch = &brw->batch;
    struct brw_bufmgr *bufmgr = screen->bufmgr;
 
    if (batch->last_bo != NULL) {
@@ -183,7 +184,7 @@ intel_batchbuffer_reset(struct intel_batchbuffer *batch,
 
    batch->bo = brw_bo_alloc(bufmgr, "batchbuffer", BATCH_SZ, 4096);
    if (!batch->batch_cpu_map) {
-      batch->map = brw_bo_map(NULL, batch->bo, MAP_READ | MAP_WRITE);
+      batch->map = brw_bo_map(brw, batch->bo, MAP_READ | MAP_WRITE);
    }
    batch->map_next = batch->map;
 
@@ -192,7 +193,7 @@ intel_batchbuffer_reset(struct intel_batchbuffer *batch,
       can_do_exec_capture(screen) ? EXEC_OBJECT_CAPTURE : 0;
    if (!batch->state_cpu_map) {
       batch->state_map =
-         brw_bo_map(NULL, batch->state_bo, MAP_READ | MAP_WRITE);
+         brw_bo_map(brw, batch->state_bo, MAP_READ | MAP_WRITE);
    }
 
    /* Avoid making 0 a valid state offset - otherwise the decoder will try
@@ -218,7 +219,7 @@ intel_batchbuffer_reset(struct intel_batchbuffer *batch,
 static void
 intel_batchbuffer_reset_and_clear_render_cache(struct brw_context *brw)
 {
-   intel_batchbuffer_reset(&brw->batch, brw->screen);
+   intel_batchbuffer_reset(brw);
    brw_render_cache_set_clear(brw);
 }
 
@@ -438,7 +439,7 @@ do_batch_dump(struct brw_context *brw)
 
    uint32_t *batch_data = brw_bo_map(brw, batch->bo, MAP_READ);
    uint32_t *state = brw_bo_map(brw, batch->state_bo, MAP_READ);
-   if (batch == NULL || state == NULL) {
+   if (batch_data == NULL || state == NULL) {
       fprintf(stderr, "WARNING: failed to map batchbuffer/statebuffer\n");
       return;
    }

@@ -937,7 +937,7 @@ brwCreateContext(gl_api api,
 
    intel_fbo_init(brw);
 
-   intel_batchbuffer_init(screen, &brw->batch);
+   intel_batchbuffer_init(brw);
 
    if (devinfo->gen >= 6) {
       /* Create a new hardware context.  Using a hardware context means that
@@ -1595,8 +1595,10 @@ intel_update_image_buffer(struct brw_context *intel,
    else
       last_mt = rb->singlesample_mt;
 
-   if (last_mt && last_mt->bo == buffer->bo)
+   if (last_mt && last_mt->bo == buffer->bo) {
+      intel_miptree_finish_external(intel, last_mt);
       return;
+   }
 
    enum isl_colorspace colorspace;
    switch (_mesa_get_format_color_encoding(intel_rb_format(rb))) {
