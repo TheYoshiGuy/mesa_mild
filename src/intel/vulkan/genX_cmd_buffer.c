@@ -179,34 +179,20 @@ add_surface_state_reloc(struct anv_cmd_buffer *cmd_buffer,
 }
 
 static void
-add_image_relocs(struct anv_cmd_buffer * const cmd_buffer,
-                 const struct anv_image * const image,
-                 const VkImageAspectFlags aspect_mask,
-                 const enum isl_aux_usage aux_usage,
-                 const struct anv_state state)
+add_image_relocs(struct anv_cmd_buffer *cmd_buffer,
+                 const struct anv_image *image,
+                 struct anv_surface_state state)
 {
    const struct isl_device *isl_dev = &cmd_buffer->device->isl_dev;
-   const uint32_t surf_offset = image->offset +
-      anv_image_get_surface_for_aspect_mask(image, aspect_mask)->offset;
 
-   add_surface_state_reloc(cmd_buffer, state, image->bo, surf_offset);
+   add_surface_state_reloc(cmd_buffer, state.state, image->bo, state.address);
 
-   if (aux_usage != ISL_AUX_USAGE_NONE) {
-      uint32_t aux_offset = image->offset + image->aux_surface.offset;
-
-      /* On gen7 and prior, the bottom 12 bits of the MCS base address are
-       * used to store other information.  This should be ok, however, because
-       * surface buffer addresses are always 4K page alinged.
-       */
-      assert((aux_offset & 0xfff) == 0);
-      uint32_t *aux_addr_dw = state.map + isl_dev->ss.aux_addr_offset;
-      aux_offset += *aux_addr_dw & 0xfff;
-
+   if (state.aux_address) {
       VkResult result =
          anv_reloc_list_add(&cmd_buffer->surface_relocs,
                             &cmd_buffer->pool->alloc,
-                            state.offset + isl_dev->ss.aux_addr_offset,
-                            image->bo, aux_offset);
+                            state.state.offset + isl_dev->ss.aux_addr_offset,
+                            image->bo, state.aux_address);
       if (result != VK_SUCCESS)
          anv_batch_set_error(&cmd_buffer->batch, result);
    }
@@ -641,8 +627,25 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
    /* No work is necessary if the layout stays the same or if this subresource
     * range lacks auxiliary data.
     */
-   if (initial_layout == final_layout ||
-       base_layer >= anv_image_aux_layers(image, base_level))
+   if (initial_layout == final_layout)
+      return;
+
+   if (image->shadow_surface.isl.size > 0 &&
+       final_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+      /* This surface is a linear compressed image with a tiled shadow surface
+       * for texturing.  The client is about to use it in READ_ONLY_OPTIMAL so
+       * we need to ensure the shadow copy is up-to-date.
+       */
+      assert(image->aspects == VK_IMAGE_ASPECT_COLOR_BIT);
+      assert(image->color_surface.isl.tiling == ISL_TILING_LINEAR);
+      assert(image->shadow_surface.isl.tiling != ISL_TILING_LINEAR);
+      assert(isl_format_is_compressed(image->color_surface.isl.format));
+      anv_image_copy_to_shadow(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                               base_level, level_count,
+                               base_layer, layer_count);
+   }
+
+   if (base_layer >= anv_image_aux_layers(image, base_level))
       return;
 
    /* A transition of a 3D subresource works on all slices at a time. */
@@ -768,34 +771,32 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
 
       genX(load_needs_resolve_predicate)(cmd_buffer, image, level);
 
+      enum isl_aux_usage aux_usage = image->aux_usage == ISL_AUX_USAGE_NONE ?
+                                     ISL_AUX_USAGE_CCS_D : image->aux_usage;
+
       /* Create a surface state with the right clear color and perform the
        * resolve.
        */
-      struct anv_state surface_state =
-         anv_cmd_buffer_alloc_surface_state(cmd_buffer);
-      isl_surf_fill_state(&cmd_buffer->device->isl_dev, surface_state.map,
-                          .surf = &image->color_surface.isl,
-                          .view = &(struct isl_view) {
-                              .usage = ISL_SURF_USAGE_RENDER_TARGET_BIT,
-                              .format = image->color_surface.isl.format,
-                              .swizzle = ISL_SWIZZLE_IDENTITY,
-                              .base_level = level,
-                              .levels = 1,
-                              .base_array_layer = base_layer,
-                              .array_len = layer_count,
-                           },
-                          .aux_surf = &image->aux_surface.isl,
-                          .aux_usage = image->aux_usage == ISL_AUX_USAGE_NONE ?
-                                       ISL_AUX_USAGE_CCS_D : image->aux_usage,
-                          .mocs = cmd_buffer->device->default_mocs);
-      add_image_relocs(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
-                       image->aux_usage == ISL_AUX_USAGE_CCS_E ?
-                       ISL_AUX_USAGE_CCS_E : ISL_AUX_USAGE_CCS_D,
-                       surface_state);
-      anv_state_flush(cmd_buffer->device, surface_state);
-      genX(copy_fast_clear_dwords)(cmd_buffer, surface_state, image, level,
-                                   false /* copy to ss */);
-      anv_ccs_resolve(cmd_buffer, surface_state, image, level, layer_count,
+      struct anv_surface_state surface_state;
+      surface_state.state = anv_cmd_buffer_alloc_surface_state(cmd_buffer);
+      anv_image_fill_surface_state(cmd_buffer->device,
+                                   image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                   &(struct isl_view) {
+                                      .format = image->color_surface.isl.format,
+                                      .swizzle = ISL_SWIZZLE_IDENTITY,
+                                      .base_level = level,
+                                      .levels = 1,
+                                      .base_array_layer = base_layer,
+                                      .array_len = layer_count,
+                                   },
+                                   ISL_SURF_USAGE_RENDER_TARGET_BIT,
+                                   aux_usage, NULL, 0,
+                                   &surface_state, NULL);
+      add_image_relocs(cmd_buffer, image, surface_state);
+      genX(copy_fast_clear_dwords)(cmd_buffer, surface_state.state, image,
+                                   level, false /* copy to ss */);
+      anv_ccs_resolve(cmd_buffer, surface_state.state, image,
+                      level, layer_count,
                       image->aux_usage == ISL_AUX_USAGE_CCS_E ?
                       BLORP_FAST_CLEAR_OP_RESOLVE_PARTIAL :
                       BLORP_FAST_CLEAR_OP_RESOLVE_FULL);
@@ -858,13 +859,13 @@ genX(cmd_buffer_setup_attachments)(struct anv_cmd_buffer *cmd_buffer,
 
    for (uint32_t i = 0; i < pass->attachment_count; ++i) {
       if (vk_format_is_color(pass->attachments[i].format)) {
-         state->attachments[i].color_rt_state = next_state;
+         state->attachments[i].color.state = next_state;
          next_state.offset += ss_stride;
          next_state.map += ss_stride;
       }
 
       if (need_input_attachment_state(&pass->attachments[i])) {
-         state->attachments[i].input_att_state = next_state;
+         state->attachments[i].input.state = next_state;
          next_state.offset += ss_stride;
          next_state.map += ss_stride;
       }
@@ -917,21 +918,19 @@ genX(cmd_buffer_setup_attachments)(struct anv_cmd_buffer *cmd_buffer,
                                                state, i, begin->renderArea,
                                                &clear_color);
 
-            struct isl_view view = iview->isl;
-            view.usage |= ISL_SURF_USAGE_RENDER_TARGET_BIT;
-            view.swizzle = anv_swizzle_for_render(view.swizzle);
-            isl_surf_fill_state(isl_dev,
-                                state->attachments[i].color_rt_state.map,
-                                .surf = &iview->image->color_surface.isl,
-                                .view = &view,
-                                .aux_surf = &iview->image->aux_surface.isl,
-                                .aux_usage = state->attachments[i].aux_usage,
-                                .clear_color = clear_color,
-                                .mocs = cmd_buffer->device->default_mocs);
+            anv_image_fill_surface_state(cmd_buffer->device,
+                                         iview->image,
+                                         VK_IMAGE_ASPECT_COLOR_BIT,
+                                         &iview->isl,
+                                         ISL_SURF_USAGE_RENDER_TARGET_BIT,
+                                         state->attachments[i].aux_usage,
+                                         &clear_color,
+                                         0,
+                                         &state->attachments[i].color,
+                                         NULL);
 
-            add_image_relocs(cmd_buffer, iview->image, iview->aspect_mask,
-                             state->attachments[i].aux_usage,
-                             state->attachments[i].color_rt_state);
+            add_image_relocs(cmd_buffer, iview->image,
+                             state->attachments[i].color);
          } else {
             /* This field will be initialized after the first subpass
              * transition.
@@ -942,24 +941,21 @@ genX(cmd_buffer_setup_attachments)(struct anv_cmd_buffer *cmd_buffer,
          }
 
          if (need_input_attachment_state(&pass->attachments[i])) {
-            struct isl_view view = iview->isl;
-            view.usage |= ISL_SURF_USAGE_TEXTURE_BIT;
-            isl_surf_fill_state(isl_dev,
-                                state->attachments[i].input_att_state.map,
-                                .surf = &iview->image->color_surface.isl,
-                                .view = &view,
-                                .aux_surf = &iview->image->aux_surface.isl,
-                                .aux_usage = state->attachments[i].input_aux_usage,
-                                .clear_color = clear_color,
-                                .mocs = cmd_buffer->device->default_mocs);
+            anv_image_fill_surface_state(cmd_buffer->device,
+                                         iview->image,
+                                         VK_IMAGE_ASPECT_COLOR_BIT,
+                                         &iview->isl,
+                                         ISL_SURF_USAGE_TEXTURE_BIT,
+                                         state->attachments[i].input_aux_usage,
+                                         &clear_color,
+                                         0,
+                                         &state->attachments[i].input,
+                                         NULL);
 
-            add_image_relocs(cmd_buffer, iview->image, iview->aspect_mask,
-                             state->attachments[i].input_aux_usage,
-                             state->attachments[i].input_att_state);
+            add_image_relocs(cmd_buffer, iview->image,
+                             state->attachments[i].input);
          }
       }
-
-      anv_state_flush(cmd_buffer->device, state->render_pass_states);
    }
 
    return VK_SUCCESS;
@@ -1555,7 +1551,7 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
             if (att == VK_ATTACHMENT_UNUSED) {
                surface_state = cmd_buffer->state.null_surface_state;
             } else {
-               surface_state = cmd_buffer->state.attachments[att].color_rt_state;
+               surface_state = cmd_buffer->state.attachments[att].color.state;
             }
          } else {
             surface_state = cmd_buffer->state.null_surface_state;
@@ -1577,18 +1573,13 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
 
       case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
-         enum isl_aux_usage aux_usage;
-         if (desc->layout == VK_IMAGE_LAYOUT_GENERAL) {
-            surface_state = desc->image_view->general_sampler_surface_state;
-            aux_usage = desc->image_view->general_sampler_aux_usage;
-         } else {
-            surface_state = desc->image_view->optimal_sampler_surface_state;
-            aux_usage = desc->image_view->optimal_sampler_aux_usage;
-         }
+         struct anv_surface_state sstate =
+            (desc->layout == VK_IMAGE_LAYOUT_GENERAL) ?
+            desc->image_view->general_sampler_surface_state :
+            desc->image_view->optimal_sampler_surface_state;
+         surface_state = sstate.state;
          assert(surface_state.alloc_size);
-         add_image_relocs(cmd_buffer, desc->image_view->image,
-                          desc->image_view->aspect_mask,
-                          aux_usage, surface_state);
+         add_image_relocs(cmd_buffer, desc->image_view->image, sstate);
          break;
       }
       case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
@@ -1597,18 +1588,13 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
             /* For depth and stencil input attachments, we treat it like any
              * old texture that a user may have bound.
              */
-            enum isl_aux_usage aux_usage;
-            if (desc->layout == VK_IMAGE_LAYOUT_GENERAL) {
-               surface_state = desc->image_view->general_sampler_surface_state;
-               aux_usage = desc->image_view->general_sampler_aux_usage;
-            } else {
-               surface_state = desc->image_view->optimal_sampler_surface_state;
-               aux_usage = desc->image_view->optimal_sampler_aux_usage;
-            }
+            struct anv_surface_state sstate =
+               (desc->layout == VK_IMAGE_LAYOUT_GENERAL) ?
+               desc->image_view->general_sampler_surface_state :
+               desc->image_view->optimal_sampler_surface_state;
+            surface_state = sstate.state;
             assert(surface_state.alloc_size);
-            add_image_relocs(cmd_buffer, desc->image_view->image,
-                             desc->image_view->aspect_mask,
-                             aux_usage, surface_state);
+            add_image_relocs(cmd_buffer, desc->image_view->image, sstate);
          } else {
             /* For color input attachments, we create the surface state at
              * vkBeginRenderPass time so that we can include aux and clear
@@ -1617,18 +1603,17 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
             assert(binding->input_attachment_index < subpass->input_count);
             const unsigned subpass_att = binding->input_attachment_index;
             const unsigned att = subpass->input_attachments[subpass_att].attachment;
-            surface_state = cmd_buffer->state.attachments[att].input_att_state;
+            surface_state = cmd_buffer->state.attachments[att].input.state;
          }
          break;
 
       case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: {
-         surface_state = (binding->write_only)
+         struct anv_surface_state sstate = (binding->write_only)
             ? desc->image_view->writeonly_storage_surface_state
             : desc->image_view->storage_surface_state;
+         surface_state = sstate.state;
          assert(surface_state.alloc_size);
-         add_image_relocs(cmd_buffer, desc->image_view->image,
-                          desc->image_view->aspect_mask,
-                          desc->image_view->image->aux_usage, surface_state);
+         add_image_relocs(cmd_buffer, desc->image_view->image, sstate);
 
          struct brw_image_param *image_param =
             &cmd_buffer->state.push_constants[stage]->images[image++];
@@ -2953,7 +2938,7 @@ cmd_buffer_subpass_sync_fast_clear_values(struct anv_cmd_buffer *cmd_buffer)
        */
       if (att_state->pending_clear_aspects && att_state->fast_clear) {
          /* Update the fast clear state entry. */
-         genX(copy_fast_clear_dwords)(cmd_buffer, att_state->color_rt_state,
+         genX(copy_fast_clear_dwords)(cmd_buffer, att_state->color.state,
                                       iview->image, iview->isl.base_level,
                                       true /* copy from ss */);
 
@@ -2977,13 +2962,13 @@ cmd_buffer_subpass_sync_fast_clear_values(struct anv_cmd_buffer *cmd_buffer)
           *
           * TODO: Do this only once per render pass instead of every subpass.
           */
-         genX(copy_fast_clear_dwords)(cmd_buffer, att_state->color_rt_state,
+         genX(copy_fast_clear_dwords)(cmd_buffer, att_state->color.state,
                                       iview->image, iview->isl.base_level,
                                       false /* copy to ss */);
 
          if (need_input_attachment_state(rp_att) &&
              att_state->input_aux_usage != ISL_AUX_USAGE_NONE) {
-            genX(copy_fast_clear_dwords)(cmd_buffer, att_state->input_att_state,
+            genX(copy_fast_clear_dwords)(cmd_buffer, att_state->input.state,
                                          iview->image, iview->isl.base_level,
                                          false /* copy to ss */);
          }
