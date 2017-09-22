@@ -631,6 +631,8 @@ brw_finish_batch(struct brw_context *brw)
 {
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
+   brw->no_batch_wrap = true;
+
    /* Capture the closing pipeline statistics register values necessary to
     * support query objects (in the non-hardware context world).
     */
@@ -665,6 +667,15 @@ brw_finish_batch(struct brw_context *brw)
                                           PIPE_CONTROL_CS_STALL);
       }
    }
+
+   /* Mark the end of the buffer. */
+   intel_batchbuffer_emit_dword(&brw->batch, MI_BATCH_BUFFER_END);
+   if (USED_BATCH(brw->batch) & 1) {
+      /* Round batchbuffer usage to 2 DWORDs. */
+      intel_batchbuffer_emit_dword(&brw->batch, MI_NOOP);
+   }
+
+   brw->no_batch_wrap = false;
 }
 
 static void
@@ -878,6 +889,12 @@ _intel_batchbuffer_flush_fence(struct brw_context *brw,
    if (USED_BATCH(brw->batch) == 0)
       return 0;
 
+   /* Check that we didn't just wrap our batchbuffer at a bad time. */
+   assert(!brw->no_batch_wrap);
+
+   brw_finish_batch(brw);
+   intel_upload_finish(brw);
+
    if (brw->throttle_batch[0] == NULL) {
       brw->throttle_batch[0] = brw->batch.bo;
       brw_bo_reference(brw->throttle_batch[0]);
@@ -896,20 +913,6 @@ _intel_batchbuffer_flush_fence(struct brw_context *brw,
               brw->batch.batch_relocs.reloc_count,
               brw->batch.state_relocs.reloc_count);
    }
-
-   brw_finish_batch(brw);
-
-   /* Mark the end of the buffer. */
-   intel_batchbuffer_emit_dword(&brw->batch, MI_BATCH_BUFFER_END);
-   if (USED_BATCH(brw->batch) & 1) {
-      /* Round batchbuffer usage to 2 DWORDs. */
-      intel_batchbuffer_emit_dword(&brw->batch, MI_NOOP);
-   }
-
-   intel_upload_finish(brw);
-
-   /* Check that we didn't just wrap our batchbuffer at a bad time. */
-   assert(!brw->no_batch_wrap);
 
    ret = do_flush_locked(brw, in_fence_fd, out_fence_fd);
 
