@@ -122,7 +122,9 @@ radv_init_surface(struct radv_device *device,
 		          (const struct  VkImageFormatListCreateInfoKHR *)
 		                vk_find_struct_const(pCreateInfo->pNext,
 		                                     IMAGE_FORMAT_LIST_CREATE_INFO_KHR);
-		if (format_list) {
+
+		/* We have to ignore the existence of the list if viewFormatCount = 0 */
+		if (format_list && format_list->viewFormatCount) {
 			/* compatibility is transitive, so we only need to check
 			 * one format with everything else. */
 			for (unsigned i = 0; i < format_list->viewFormatCount; ++i) {
@@ -147,7 +149,7 @@ radv_init_surface(struct radv_device *device,
 		surface->flags |= RADEON_SURF_SCANOUT;
 	return 0;
 }
-#define ATI_VENDOR_ID 0x1002
+
 static uint32_t si_get_bo_metadata_word1(struct radv_device *device)
 {
 	return (ATI_VENDOR_ID << 16) | device->physical_device->rad_info.pci_id;

@@ -74,6 +74,8 @@ typedef uint32_t xcb_window_t;
 
 #include "wsi_common.h"
 
+#define ATI_VENDOR_ID 0x1002
+
 #define MAX_VBS         32
 #define MAX_VERTEX_ATTRIBS 32
 #define MAX_RTS          8
@@ -325,7 +327,8 @@ radv_create_shader_variant_from_pipeline_cache(struct radv_device *device,
 					       const unsigned char *sha1);
 
 struct radv_shader_variant *
-radv_pipeline_cache_insert_shader(struct radv_pipeline_cache *cache,
+radv_pipeline_cache_insert_shader(struct radv_device *device,
+				  struct radv_pipeline_cache *cache,
 				  const unsigned char *sha1,
 				  struct radv_shader_variant *variant,
 				  const void *code, unsigned code_size);
@@ -697,16 +700,20 @@ struct radv_vertex_binding {
 	VkDeviceSize                                 offset;
 };
 
-struct radv_dynamic_state {
-	struct {
-		uint32_t                                  count;
-		VkViewport                                viewports[MAX_VIEWPORTS];
-	} viewport;
+struct radv_viewport_state {
+	uint32_t                                          count;
+	VkViewport                                        viewports[MAX_VIEWPORTS];
+};
 
-	struct {
-		uint32_t                                  count;
-		VkRect2D                                  scissors[MAX_SCISSORS];
-	} scissor;
+struct radv_scissor_state {
+	uint32_t                                          count;
+	VkRect2D                                          scissors[MAX_SCISSORS];
+};
+
+struct radv_dynamic_state {
+	struct radv_viewport_state                        viewport;
+
+	struct radv_scissor_state                         scissor;
 
 	float                                        line_width;
 
@@ -1132,13 +1139,6 @@ struct radv_graphics_pipeline_create_info {
 	bool db_resummarize;
 	uint32_t custom_blend_mode;
 };
-
-VkResult
-radv_pipeline_init(struct radv_pipeline *pipeline, struct radv_device *device,
-		   struct radv_pipeline_cache *cache,
-		   const VkGraphicsPipelineCreateInfo *pCreateInfo,
-		   const struct radv_graphics_pipeline_create_info *extra,
-		   const VkAllocationCallbacks *alloc);
 
 VkResult
 radv_graphics_pipeline_create(VkDevice device,

@@ -116,14 +116,25 @@ struct vl_compositor
    void *fs_rgba;
 
    struct {
-      void *y;
-      void *uv;
-   } fs_weave_yuv;
+      struct {
+         void *y;
+         void *uv;
+      } weave;
+      struct {
+         void *y;
+         void *uv;
+      } bob;
+   } fs_yuv;
 
    struct {
       void *rgb;
       void *yuv;
    } fs_palette;
+
+   struct {
+      void *y;
+      void *uv;
+   } fs_rgb_yuv;
 };
 
 /**
@@ -240,6 +251,30 @@ vl_compositor_set_layer_rotation(struct vl_compositor_state *state,
                                  unsigned layer,
                                  enum vl_compositor_rotation rotate);
 
+/**
+ * deinterlace yuv buffer with full abilities
+ */
+void
+vl_compositor_yuv_deint_full(struct vl_compositor_state *state,
+                             struct vl_compositor *compositor,
+                             struct pipe_video_buffer *src,
+                             struct pipe_video_buffer *dst,
+                             struct u_rect *src_rect,
+                             struct u_rect *dst_rect,
+                             enum vl_compositor_deinterlace deinterlace);
+
+/**
++ * convert rgb to yuv
++ */
+void
+vl_compositor_convert_rgb_to_yuv(struct vl_compositor_state *state,
+                                 struct vl_compositor *compositor,
+                                 unsigned layer,
+                                 struct pipe_resource *src_res,
+                                 struct pipe_video_buffer *dst,
+                                 struct u_rect *src_rect,
+                                 struct u_rect *dst_rect);
+
 /*@}*/
 
 /**
@@ -263,14 +298,5 @@ vl_compositor_cleanup(struct vl_compositor *compositor);
  */
 void
 vl_compositor_cleanup_state(struct vl_compositor_state *state);
-
-/**
- * deinterlace yuv buffer
- */
-void
-vl_compositor_yuv_deint(struct vl_compositor_state *state,
-                        struct vl_compositor *compositor,
-                        struct pipe_video_buffer *src,
-                        struct pipe_video_buffer *dst);
 
 #endif /* vl_compositor_h */

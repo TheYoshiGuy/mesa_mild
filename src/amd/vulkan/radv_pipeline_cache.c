@@ -162,6 +162,8 @@ radv_create_shader_variant_from_pipeline_cache(struct radv_device *device,
 
 	if (cache)
 		entry = radv_pipeline_cache_search(cache, sha1);
+	else
+		entry = radv_pipeline_cache_search(device->mem_cache, sha1);
 
 	if (!entry)
 		return NULL;
@@ -262,13 +264,14 @@ radv_pipeline_cache_add_entry(struct radv_pipeline_cache *cache,
 }
 
 struct radv_shader_variant *
-radv_pipeline_cache_insert_shader(struct radv_pipeline_cache *cache,
+radv_pipeline_cache_insert_shader(struct radv_device *device,
+				  struct radv_pipeline_cache *cache,
 				  const unsigned char *sha1,
 				  struct radv_shader_variant *variant,
 				  const void *code, unsigned code_size)
 {
 	if (!cache)
-		return variant;
+		cache = device->mem_cache;
 
 	pthread_mutex_lock(&cache->mutex);
 	struct cache_entry *entry = radv_pipeline_cache_search_unlocked(cache, sha1);
@@ -330,7 +333,7 @@ radv_pipeline_cache_load(struct radv_pipeline_cache *cache,
 		return;
 	if (header.header_version != VK_PIPELINE_CACHE_HEADER_VERSION_ONE)
 		return;
-	if (header.vendor_id != 0x1002)
+	if (header.vendor_id != ATI_VENDOR_ID)
 		return;
 	if (header.device_id != device->physical_device->rad_info.pci_id)
 		return;
@@ -431,7 +434,7 @@ VkResult radv_GetPipelineCacheData(
 	header = p;
 	header->header_size = sizeof(*header);
 	header->header_version = VK_PIPELINE_CACHE_HEADER_VERSION_ONE;
-	header->vendor_id = 0x1002;
+	header->vendor_id = ATI_VENDOR_ID;
 	header->device_id = device->physical_device->rad_info.pci_id;
 	memcpy(header->uuid, device->physical_device->cache_uuid, VK_UUID_SIZE);
 	p += header->header_size;
