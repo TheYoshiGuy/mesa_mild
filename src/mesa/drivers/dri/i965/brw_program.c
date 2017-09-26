@@ -107,6 +107,12 @@ brw_create_nir(struct brw_context *brw,
    NIR_PASS(progress, nir, nir_lower_system_values);
    NIR_PASS_V(nir, brw_nir_lower_uniforms, is_scalar);
 
+   return nir;
+}
+
+void
+brw_shader_gather_info(nir_shader *nir, struct gl_program *prog)
+{
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
    /* Copy the info we just generated back into the gl_program */
@@ -115,23 +121,12 @@ brw_create_nir(struct brw_context *brw,
    prog->info = nir->info;
    prog->info.name = prog_name;
    prog->info.label = prog_label;
-
-   if (shader_prog) {
-      NIR_PASS_V(nir, nir_lower_samplers, shader_prog);
-      NIR_PASS_V(nir, nir_lower_atomics, shader_prog);
-   }
-
-   return nir;
 }
 
 static unsigned
 get_new_program_id(struct intel_screen *screen)
 {
-   static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
-   pthread_mutex_lock(&m);
-   unsigned id = screen->program_id++;
-   pthread_mutex_unlock(&m);
-   return id;
+   return p_atomic_inc_return(&screen->program_id);
 }
 
 static struct gl_program *brwNewProgram(struct gl_context *ctx, GLenum target,
@@ -221,6 +216,8 @@ brwProgramStringNotify(struct gl_context *ctx,
 
       prog->nir = brw_create_nir(brw, NULL, prog, MESA_SHADER_FRAGMENT, true);
 
+      brw_shader_gather_info(prog->nir, prog);
+
       brw_fs_precompile(ctx, prog);
       break;
    }
@@ -242,6 +239,8 @@ brwProgramStringNotify(struct gl_context *ctx,
 
       prog->nir = brw_create_nir(brw, NULL, prog, MESA_SHADER_VERTEX,
                                  compiler->scalar_stage[MESA_SHADER_VERTEX]);
+
+      brw_shader_gather_info(prog->nir, prog);
 
       brw_vs_precompile(ctx, prog);
       break;
