@@ -1219,10 +1219,6 @@ r600_texture_create_object(struct pipe_screen *screen,
 		si_init_resource_fields(rscreen, resource, rtex->size,
 					  rtex->surface.surf_alignment);
 
-		/* Displayable surfaces are not suballocated. */
-		if (resource->b.b.bind & PIPE_BIND_SCANOUT)
-			resource->flags |= RADEON_FLAG_NO_SUBALLOC;
-
 		if (!si_alloc_resource(rscreen, resource)) {
 			FREE(rtex);
 			return NULL;
@@ -1910,8 +1906,7 @@ void vi_disable_dcc_if_incompatible_format(struct r600_common_context *rctx,
 {
 	struct r600_texture *rtex = (struct r600_texture *)tex;
 
-	if (vi_dcc_enabled(rtex, level) &&
-	    !vi_dcc_formats_compatible(tex->format, view_format))
+	if (vi_dcc_formats_are_incompatible(tex, level, view_format))
 		if (!si_texture_disable_dcc(rctx, (struct r600_texture*)tex))
 			rctx->decompress_dcc(&rctx->b, rtex);
 }

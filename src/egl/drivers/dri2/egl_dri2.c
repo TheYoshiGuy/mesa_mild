@@ -628,6 +628,18 @@ dri2_setup_screen(_EGLDisplay *disp)
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    unsigned int api_mask;
 
+   /*
+    * EGL 1.5 specification defines the default value to 1. Moreover,
+    * eglSwapInterval() is required to clamp requested value to the supported
+    * range. Since the default value is implicitly assumed to be supported,
+    * use it as both minimum and maximum for the platforms that do not allow
+    * changing the interval. Platforms, which allow it (e.g. x11, wayland)
+    * override these values already.
+    */
+   dri2_dpy->min_swap_interval = 1;
+   dri2_dpy->max_swap_interval = 1;
+   dri2_dpy->default_swap_interval = 1;
+
    if (dri2_dpy->image_driver) {
       api_mask = dri2_dpy->image_driver->getAPIMask(dri2_dpy->dri_screen);
    } else if (dri2_dpy->dri2) {
@@ -2718,16 +2730,17 @@ dri2_wl_release_buffer(void *user_data, struct wl_drm_buffer *buffer)
    dri2_dpy->image->destroyImage(buffer->driver_buffer);
 }
 
+static struct wayland_drm_callbacks wl_drm_callbacks = {
+        .authenticate = NULL,
+        .reference_buffer = dri2_wl_reference_buffer,
+        .release_buffer = dri2_wl_release_buffer
+};
+
 static EGLBoolean
 dri2_bind_wayland_display_wl(_EGLDriver *drv, _EGLDisplay *disp,
                              struct wl_display *wl_dpy)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
-   const struct wayland_drm_callbacks wl_drm_callbacks = {
-      .authenticate = (int(*)(void *, uint32_t)) dri2_dpy->vtbl->authenticate,
-      .reference_buffer = dri2_wl_reference_buffer,
-      .release_buffer = dri2_wl_release_buffer
-   };
    int flags = 0;
    uint64_t cap;
 
@@ -2735,6 +2748,9 @@ dri2_bind_wayland_display_wl(_EGLDriver *drv, _EGLDisplay *disp,
 
    if (dri2_dpy->wl_server_drm)
            return EGL_FALSE;
+
+   wl_drm_callbacks.authenticate =
+      (int(*)(void *, uint32_t)) dri2_dpy->vtbl->authenticate;
 
    if (drmGetCap(dri2_dpy->fd, DRM_CAP_PRIME, &cap) == 0 &&
        cap == (DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT) &&
