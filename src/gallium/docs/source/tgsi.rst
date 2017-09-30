@@ -351,6 +351,18 @@ This instruction replicates its result.
   dst = src0.x^{src1.x}
 
 
+.. opcode:: LDEXP - Multiply Number by Integral Power of 2
+
+src1 is an integer.
+
+.. math::
+
+  dst.x = src0.x * 2^{src1.x}
+  dst.y = src0.y * 2^{src1.y}
+  dst.z = src0.z * 2^{src1.z}
+  dst.w = src0.w * 2^{src1.w}
+
+
 .. opcode:: COS - Cosine
 
 This instruction replicates its result.
@@ -1838,17 +1850,15 @@ two-component vectors with doubled precision in each component.
 
 Like the ``frexp()`` routine in many math libraries, this opcode stores the
 exponent of its source to ``dst0``, and the significand to ``dst1``, such that
-:math:`dst1 \times 2^{dst0} = src` .
+:math:`dst1 \times 2^{dst0} = src` . The results are replicated across
+channels.
 
 .. math::
 
-  dst0.xy = exp(src.xy)
+  dst0.xy = dst.zw = frac(src.xy)
 
-  dst1.xy = frac(src.xy)
+  dst1 = frac(src.xy)
 
-  dst0.zw = exp(src.zw)
-
-  dst1.zw = frac(src.zw)
 
 .. opcode:: DLDEXP - Multiply Number by Integral Power of 2
 
@@ -1859,7 +1869,7 @@ source is an integer.
 
   dst.xy = src0.xy \times 2^{src1.x}
 
-  dst.zw = src0.zw \times 2^{src1.y}
+  dst.zw = src0.zw \times 2^{src1.z}
 
 .. opcode:: DMIN - Minimum
 
@@ -2468,6 +2478,18 @@ after lookup.
 
   NOTE: no driver has implemented this opcode yet (and no state tracker
   emits it).  This information is subject to change.
+
+.. opcode:: LOD - level of detail
+
+   Same syntax as the SAMPLE opcode but instead of performing an actual
+   texture lookup/filter, return the computed LOD information that the
+   texture pipe would use to access the texture. The Y component contains
+   the computed LOD lambda_prime. The X component contains the LOD that will
+   be accessed, based on min/max lod's and mipmap filters.
+   The Z and W components are set to 0.
+
+   Syntax: ``LOD dst, address, sampler_view, sampler``
+
 
 .. _resourceopcodes:
 

@@ -379,6 +379,20 @@ void si_set_mutable_tex_desc_fields(struct si_screen *sscreen,
 	}
 }
 
+static void si_set_sampler_state_desc(struct si_sampler_state *sstate,
+				      struct si_sampler_view *sview,
+				      struct r600_texture *tex,
+				      uint32_t *desc)
+{
+	if (sview && sview->is_integer)
+		memcpy(desc, sstate->integer_val, 4*4);
+	else if (tex && tex->upgraded_depth &&
+		 (!sview || !sview->is_stencil_sampler))
+		memcpy(desc, sstate->upgraded_depth_val, 4*4);
+	else
+		memcpy(desc, sstate->val, 4*4);
+}
+
 static void si_set_sampler_view_desc(struct si_context *sctx,
 				     struct si_sampler_view *sview,
 				     struct si_sampler_state *sstate,
@@ -423,7 +437,9 @@ static void si_set_sampler_view_desc(struct si_context *sctx,
 		memcpy(desc + 8, null_texture_descriptor, 4*4);
 
 		if (sstate)
-			memcpy(desc + 12, sstate->val, 4*4);
+			si_set_sampler_state_desc(sstate, sview,
+						  is_buffer ? NULL : rtex,
+						  desc + 12);
 	}
 }
 
@@ -465,8 +481,8 @@ static void si_set_sampler_view(struct si_context *sctx,
 		memcpy(desc + 8, null_texture_descriptor, 4*4);
 		/* Re-set the sampler state if we are transitioning from FMASK. */
 		if (views->sampler_states[slot])
-			memcpy(desc + 12,
-			       views->sampler_states[slot]->val, 4*4);
+			si_set_sampler_state_desc(views->sampler_states[slot], NULL, NULL,
+						  desc + 12);
 
 		views->enabled_mask &= ~(1u << slot);
 	}
@@ -845,13 +861,21 @@ static void si_bind_sampler_states(struct pipe_context *ctx,
 		/* If FMASK is bound, don't overwrite it.
 		 * The sampler state will be set after FMASK is unbound.
 		 */
-		if (samplers->views.views[slot] &&
-		    samplers->views.views[slot]->texture &&
-		    samplers->views.views[slot]->texture->target != PIPE_BUFFER &&
-		    ((struct r600_texture*)samplers->views.views[slot]->texture)->fmask.size)
+		struct si_sampler_view *sview =
+			(struct si_sampler_view *)samplers->views.views[slot];
+
+		struct r600_texture *tex = NULL;
+
+		if (sview && sview->base.texture &&
+		    sview->base.texture->target != PIPE_BUFFER)
+			tex = (struct r600_texture *)sview->base.texture;
+
+		if (tex && tex->fmask.size)
 			continue;
 
-		memcpy(desc->list + desc_slot * 16 + 12, sstates[i]->val, 4*4);
+		si_set_sampler_state_desc(sstates[i], sview, tex,
+					  desc->list + desc_slot * 16 + 12);
+
 		sctx->descriptors_dirty |= 1u << si_sampler_and_image_descriptors_idx(shader);
 	}
 }
