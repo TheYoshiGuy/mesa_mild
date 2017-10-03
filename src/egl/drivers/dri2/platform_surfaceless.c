@@ -36,6 +36,7 @@
 #include "egl_dri2.h"
 #include "egl_dri2_fallbacks.h"
 #include "loader.h"
+#include "util/debug.h"
 
 static __DRIimage*
 surfaceless_alloc_image(struct dri2_egl_display *dri2_dpy,
@@ -267,12 +268,53 @@ static const __DRIextension *image_loader_extensions[] = {
    NULL,
 };
 
+static bool
+surfaceless_probe_device(_EGLDisplay *dpy, bool swrast)
+{
+   struct dri2_egl_display *dri2_dpy = dpy->DriverData;
+   const int limit = 64;
+   const int base = 128;
+   int fd;
+   int i;
+
+   for (i = 0; i < limit; ++i) {
+      char *card_path;
+      if (asprintf(&card_path, DRM_RENDER_DEV_NAME, DRM_DIR_NAME, base + i) < 0)
+         continue;
+
+      fd = loader_open_device(card_path);
+      free(card_path);
+      if (fd < 0)
+         continue;
+
+      if (swrast)
+         dri2_dpy->driver_name = strdup("kms_swrast");
+      else
+         dri2_dpy->driver_name = loader_get_driver_for_fd(fd);
+      if (!dri2_dpy->driver_name) {
+         close(fd);
+         continue;
+      }
+
+      dri2_dpy->fd = fd;
+      if (dri2_load_driver_dri3(dpy))
+         return true;
+
+      close(fd);
+      dri2_dpy->fd = -1;
+      free(dri2_dpy->driver_name);
+      dri2_dpy->driver_name = NULL;
+   }
+
+   return false;
+}
+
 EGLBoolean
 dri2_initialize_surfaceless(_EGLDriver *drv, _EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy;
    const char* err;
-   int driver_loaded = 0;
+   bool driver_loaded = false;
 
    loader_set_logger(_eglLog);
 
@@ -283,33 +325,14 @@ dri2_initialize_surfaceless(_EGLDriver *drv, _EGLDisplay *disp)
    dri2_dpy->fd = -1;
    disp->DriverData = (void *) dri2_dpy;
 
-   const int limit = 64;
-   const int base = 128;
-   for (int i = 0; i < limit; ++i) {
-      char *card_path;
-      if (asprintf(&card_path, DRM_RENDER_DEV_NAME, DRM_DIR_NAME, base + i) < 0)
-         continue;
-
-      dri2_dpy->fd = loader_open_device(card_path);
-
-      free(card_path);
-      if (dri2_dpy->fd < 0)
-         continue;
-
-      dri2_dpy->driver_name = loader_get_driver_for_fd(dri2_dpy->fd);
-      if (dri2_dpy->driver_name) {
-         if (dri2_load_driver_dri3(disp)) {
-            driver_loaded = 1;
-            break;
-         }
-         free(dri2_dpy->driver_name);
-         dri2_dpy->driver_name = NULL;
-      }
-      close(dri2_dpy->fd);
-      dri2_dpy->fd = -1;
+   if (!env_var_as_boolean("LIBGL_ALWAYS_SOFTWARE", false)) {
+      driver_loaded = surfaceless_probe_device(disp, false);
+      if (!driver_loaded)
+         _eglLog(_EGL_WARNING,
+                 "No hardware driver found, falling back to software rendering");
    }
 
-   if (!driver_loaded) {
+   if (!driver_loaded && !surfaceless_probe_device(disp, true)) {
       err = "DRI2: failed to load driver";
       goto cleanup;
    }

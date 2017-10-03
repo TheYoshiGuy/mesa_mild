@@ -134,6 +134,7 @@ struct svga_shader_emitter_v10
 
    /* Samplers */
    unsigned num_samplers;
+   boolean sampler_view[PIPE_MAX_SAMPLERS];  /**< True if sampler view exists*/
    ubyte sampler_target[PIPE_MAX_SAMPLERS];  /**< TGSI_TEXTURE_x */
    ubyte sampler_return_type[PIPE_MAX_SAMPLERS];  /**< TGSI_RETURN_TYPE_x */
 
@@ -1869,9 +1870,9 @@ translate_interpolation(const struct svga_shader_emitter_v10 *emit,
 
 /**
  * Translate a TGSI property to VGPU10.
- * Don't emit any instructions yet, only need to gather the primitive property information.
- * The output primitive topology might be changed later. The final property instructions
- * will be emitted as part of the pre-helper code.
+ * Don't emit any instructions yet, only need to gather the primitive property
+ * information.  The output primitive topology might be changed later. The
+ * final property instructions will be emitted as part of the pre-helper code.
  */
 static boolean
 emit_vgpu10_property(struct svga_shader_emitter_v10 *emit,
@@ -2322,6 +2323,7 @@ emit_vgpu10_declaration(struct svga_shader_emitter_v10 *emit,
          emit->sampler_target[unit] = decl->SamplerView.Resource;
          /* Note: we can ignore YZW return types for now */
          emit->sampler_return_type[unit] = decl->SamplerView.ReturnTypeX;
+         emit->sampler_view[unit] = TRUE;
       }
       return TRUE;
 
@@ -2420,7 +2422,9 @@ emit_input_declarations(struct svga_shader_emitter_v10 *emit)
          selMode = VGPU10_OPERAND_4_COMPONENT_MASK_MODE;
          name = VGPU10_NAME_UNDEFINED;
 
-         /* all geometry shader inputs are two dimensional except gl_PrimitiveID */
+         /* all geometry shader inputs are two dimensional except
+          * gl_PrimitiveID
+          */
          dim = VGPU10_OPERAND_INDEX_2D;
 
          if (semantic_name == TGSI_SEMANTIC_PRIMID) {
@@ -2886,14 +2890,17 @@ emit_constant_declaration(struct svga_shader_emitter_v10 *emit)
 
    for (i = 0; i < emit->num_samplers; i++) {
 
-      /* Texcoord scale factors for RECT textures */
-      if (emit->key.tex[i].unnormalized) {
-         emit->texcoord_scale_index[i] = total_consts++;
-      }
+      if (emit->sampler_view[i]) {
 
-      /* Texture buffer sizes */
-      if (emit->sampler_target[i] == TGSI_TEXTURE_BUFFER) {
-         emit->texture_buffer_size_index[i] = total_consts++;
+         /* Texcoord scale factors for RECT textures */
+         if (emit->key.tex[i].unnormalized) {
+            emit->texcoord_scale_index[i] = total_consts++;
+         }
+
+         /* Texture buffer sizes */
+         if (emit->sampler_target[i] == TGSI_TEXTURE_BUFFER) {
+            emit->texture_buffer_size_index[i] = total_consts++;
+         }
       }
    }
 
