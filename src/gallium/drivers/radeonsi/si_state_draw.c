@@ -1249,12 +1249,22 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	 * current_rast_prim for this draw_vbo call. */
 	if (sctx->gs_shader.cso)
 		rast_prim = sctx->gs_shader.cso->gs_output_prim;
-	else if (sctx->tes_shader.cso)
-		rast_prim = sctx->tes_shader.cso->info.properties[TGSI_PROPERTY_TES_PRIM_MODE];
-	else
+	else if (sctx->tes_shader.cso) {
+		if (sctx->tes_shader.cso->info.properties[TGSI_PROPERTY_TES_POINT_MODE])
+			rast_prim = PIPE_PRIM_POINTS;
+		else
+			rast_prim = sctx->tes_shader.cso->info.properties[TGSI_PROPERTY_TES_PRIM_MODE];
+	} else
 		rast_prim = info->mode;
 
 	if (rast_prim != sctx->current_rast_prim) {
+		bool old_is_poly = sctx->current_rast_prim >= PIPE_PRIM_TRIANGLES;
+		bool new_is_poly = rast_prim >= PIPE_PRIM_TRIANGLES;
+		if (old_is_poly != new_is_poly) {
+			sctx->scissors.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
+			si_mark_atom_dirty(sctx, &sctx->scissors.atom);
+		}
+
 		sctx->current_rast_prim = rast_prim;
 		sctx->do_update_shaders = true;
 	}
@@ -1388,7 +1398,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	 * involved alternative workaround.
 	 */
 	if (sctx->b.chip_class == GFX9 &&
-	    si_is_atom_dirty(sctx, &sctx->b.scissors.atom)) {
+	    si_is_atom_dirty(sctx, &sctx->scissors.atom)) {
 		sctx->b.flags |= SI_CONTEXT_PS_PARTIAL_FLUSH;
 		si_emit_cache_flush(sctx);
 	}

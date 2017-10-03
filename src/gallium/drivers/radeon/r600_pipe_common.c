@@ -734,7 +734,6 @@ bool si_common_context_init(struct r600_common_context *rctx,
 	rctx->b.set_device_reset_callback = r600_set_device_reset_callback;
 
 	si_init_context_texture_functions(rctx);
-	si_init_viewport_functions(rctx);
 	si_streamout_init(rctx);
 	si_init_query_functions(rctx);
 	si_init_msaa(&rctx->b);
@@ -1000,17 +999,12 @@ static const char* r600_get_name(struct pipe_screen* pscreen)
 static float r600_get_paramf(struct pipe_screen* pscreen,
 			     enum pipe_capf param)
 {
-	struct r600_common_screen *rscreen = (struct r600_common_screen *)pscreen;
-
 	switch (param) {
 	case PIPE_CAPF_MAX_LINE_WIDTH:
 	case PIPE_CAPF_MAX_LINE_WIDTH_AA:
 	case PIPE_CAPF_MAX_POINT_WIDTH:
 	case PIPE_CAPF_MAX_POINT_WIDTH_AA:
-		if (rscreen->family >= CHIP_CEDAR)
-			return 16384.0f;
-		else
-			return 8192.0f;
+		return 8192.0f;
 	case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
 		return 16.0f;
 	case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
@@ -1499,7 +1493,6 @@ bool si_common_screen_init(struct r600_common_screen *rscreen,
 		       1 << util_logbase2(rscreen->force_aniso));
 	}
 
-	util_format_s3tc_init();
 	(void) mtx_init(&rscreen->aux_context_lock, mtx_plain);
 	(void) mtx_init(&rscreen->gpu_load_mutex, mtx_plain);
 

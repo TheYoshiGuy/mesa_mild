@@ -147,10 +147,6 @@ swr_is_format_supported(struct pipe_screen *_screen,
       return FALSE;
    }
 
-   if (format_desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
-      return util_format_s3tc_enabled;
-   }
-
    return TRUE;
 }
 
@@ -1145,8 +1141,6 @@ swr_create_screen_internal(struct sw_winsys *winsys)
    screen->hJitMgr = JitCreateContext(KNOB_SIMD_WIDTH, "", "swr");
 
    swr_fence_init(&screen->base);
-
-   util_format_s3tc_init();
 
    swr_validate_env_options(screen);
 

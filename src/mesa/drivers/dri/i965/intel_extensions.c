@@ -242,8 +242,10 @@ intelInitExtensions(struct gl_context *ctx)
                devinfo->gen >= 8 || devinfo->is_haswell;
          }
 
-         if (can_do_predicate_writes(brw->screen))
+         if (can_do_predicate_writes(brw->screen)) {
             brw->predicate.supported = true;
+            ctx->Extensions.ARB_indirect_parameters = true;
+         }
       }
    }
 
@@ -299,8 +301,6 @@ intelInitExtensions(struct gl_context *ctx)
    if (ctx->API != API_OPENGL_CORE)
       ctx->Extensions.ARB_color_buffer_float = true;
 
-   if (ctx->Mesa_DXTn || driQueryOptionb(&brw->optionCache, "force_s3tc_enable"))
-      ctx->Extensions.EXT_texture_compression_s3tc = true;
-
+   ctx->Extensions.EXT_texture_compression_s3tc = true;
    ctx->Extensions.ANGLE_texture_compression_dxt = true;
 }

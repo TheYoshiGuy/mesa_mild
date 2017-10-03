@@ -72,8 +72,6 @@ dri_fill_st_options(struct dri_screen *screen)
       driQueryOptionb(optionCache, "force_glsl_extensions_warn");
    options->force_glsl_version =
       driQueryOptioni(optionCache, "force_glsl_version");
-   options->force_s3tc_enable =
-      driQueryOptionb(optionCache, "force_s3tc_enable");
    options->allow_glsl_extension_directive_midshader =
       driQueryOptionb(optionCache, "allow_glsl_extension_directive_midshader");
    options->allow_glsl_builtin_variable_redeclaration =
@@ -506,19 +504,6 @@ dri_init_screen_helper(struct dri_screen *screen,
       screen->target = PIPE_TEXTURE_2D;
    else
       screen->target = PIPE_TEXTURE_RECT;
-
-   /* Handle force_s3tc_enable. */
-   if (!util_format_s3tc_enabled && screen->options.force_s3tc_enable) {
-      /* Ensure libtxc_dxtn has been loaded if available.
-       * Forcing S3TC on before calling this would prevent loading
-       * the library.
-       * This is just a precaution, the driver should have called it
-       * already.
-       */
-      util_format_s3tc_init();
-
-      util_format_s3tc_enabled = TRUE;
-   }
 
    dri_postprocessing_init(screen);
 
