@@ -268,13 +268,8 @@ emit_resolve(struct radv_cmd_buffer *cmd_buffer,
 
 	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB;
 
-	VkPipeline pipeline_h = device->meta_state.resolve.pipeline;
-	RADV_FROM_HANDLE(radv_pipeline, pipeline, pipeline_h);
-
-	if (cmd_buffer->state.pipeline != pipeline) {
-		radv_CmdBindPipeline(cmd_buffer_h, VK_PIPELINE_BIND_POINT_GRAPHICS,
-				     pipeline_h);
-	}
+	radv_CmdBindPipeline(cmd_buffer_h, VK_PIPELINE_BIND_POINT_GRAPHICS,
+			     device->meta_state.resolve.pipeline);
 
 	radv_CmdSetViewport(radv_cmd_buffer_to_handle(cmd_buffer), 0, 1, &(VkViewport) {
 		.x = dest_offset->x,
@@ -370,7 +365,8 @@ void radv_CmdResolveImage(
 		return;
 	}
 
-	radv_meta_save_graphics_reset_vport_scissor_novertex(&saved_state, cmd_buffer);
+	radv_meta_save(&saved_state, cmd_buffer,
+		       RADV_META_SAVE_GRAPHICS_PIPELINE);
 
 	assert(src_image->info.samples > 1);
 	if (src_image->info.samples <= 1) {
@@ -578,7 +574,8 @@ radv_cmd_buffer_resolve_subpass(struct radv_cmd_buffer *cmd_buffer)
 		return;
 	}
 
-	radv_meta_save_graphics_reset_vport_scissor_novertex(&saved_state, cmd_buffer);
+	radv_meta_save(&saved_state, cmd_buffer,
+		       RADV_META_SAVE_GRAPHICS_PIPELINE);
 
 	for (uint32_t i = 0; i < subpass->color_count; ++i) {
 		VkAttachmentReference src_att = subpass->color_attachments[i];

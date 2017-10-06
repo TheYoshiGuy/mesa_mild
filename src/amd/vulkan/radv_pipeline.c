@@ -139,7 +139,7 @@ radv_pipeline_compile(struct radv_pipeline *pipeline,
 		return NULL;
 
 	if (!variant) {
-		variant = radv_shader_variant_create(pipeline->device, nir,
+		variant = radv_shader_variant_create(pipeline->device, module, nir,
 						     layout, key, &code,
 						     &code_size);
 	}
@@ -163,7 +163,7 @@ radv_pipeline_compile(struct radv_pipeline *pipeline,
 
 		free(gs_copy_code);
 	}
-	if (!module->nir)
+	if (!module->nir && !pipeline->device->trace_bo)
 		ralloc_free(nir);
 
 	if (variant)
@@ -266,11 +266,10 @@ radv_tess_pipeline_compile(struct radv_pipeline *pipeline,
 	if (tcs_nir == NULL)
 		return;
 
-	tes_nir->info.tess.ccw = !tes_nir->info.tess.ccw;
 	nir_lower_tes_patch_vertices(tes_nir,
 				     tcs_nir->info.tess.tcs_vertices_out);
 
-	tes_variant = radv_shader_variant_create(pipeline->device, tes_nir,
+	tes_variant = radv_shader_variant_create(pipeline->device, tes_module, tes_nir,
 						 layout, &tes_key, &tes_code,
 						 &tes_code_size);
 
@@ -282,14 +281,14 @@ radv_tess_pipeline_compile(struct radv_pipeline *pipeline,
 
 	radv_hash_shader(tcs_sha1, tcs_module, tcs_entrypoint, tcs_spec_info, layout, &tcs_key, 0);
 
-	tcs_variant = radv_shader_variant_create(pipeline->device, tcs_nir,
+	tcs_variant = radv_shader_variant_create(pipeline->device, tcs_module, tcs_nir,
 						 layout, &tcs_key, &tcs_code,
 						 &tcs_code_size);
 
-	if (!tes_module->nir)
+	if (!tes_module->nir && !pipeline->device->trace_bo)
 		ralloc_free(tes_nir);
 
-	if (!tcs_module->nir)
+	if (!tcs_module->nir && !pipeline->device->trace_bo)
 		ralloc_free(tcs_nir);
 
 	if (tes_variant)
@@ -1542,14 +1541,22 @@ calculate_tess_state(struct radv_pipeline *pipeline,
 		break;
 	}
 
+	bool ccw = tes->info.tes.ccw;
+	const VkPipelineTessellationDomainOriginStateCreateInfoKHR *domain_origin_state =
+	              vk_find_struct_const(pCreateInfo->pTessellationState,
+	                                   PIPELINE_TESSELLATION_DOMAIN_ORIGIN_STATE_CREATE_INFO_KHR);
+
+	if (domain_origin_state && domain_origin_state->domainOrigin != VK_TESSELLATION_DOMAIN_ORIGIN_UPPER_LEFT_KHR)
+		ccw = !ccw;
+
 	if (tes->info.tes.point_mode)
 		topology = V_028B6C_OUTPUT_POINT;
 	else if (tes->info.tes.primitive_mode == GL_ISOLINES)
 		topology = V_028B6C_OUTPUT_LINE;
-	else if (tes->info.tes.ccw)
-		topology = V_028B6C_OUTPUT_TRIANGLE_CW;
-	else
+	else if (ccw)
 		topology = V_028B6C_OUTPUT_TRIANGLE_CCW;
+	else
+		topology = V_028B6C_OUTPUT_TRIANGLE_CW;
 
 	if (pipeline->device->has_distributed_tess) {
 		if (pipeline->device->physical_device->rad_info.family == CHIP_FIJI ||

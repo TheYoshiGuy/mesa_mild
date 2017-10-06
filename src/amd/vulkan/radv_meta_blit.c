@@ -409,10 +409,8 @@ meta_emit_blit(struct radv_cmd_buffer *cmd_buffer,
 		unreachable(!"bad VkImageType");
 	}
 
-	if (cmd_buffer->state.pipeline != radv_pipeline_from_handle(pipeline)) {
-		radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer),
-				     VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-	}
+	radv_CmdBindPipeline(radv_cmd_buffer_to_handle(cmd_buffer),
+			     VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
 	radv_meta_push_descriptor_set(cmd_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 			              device->meta_state.blit.pipeline_layout,
@@ -512,7 +510,10 @@ void radv_CmdBlitImage(
 	assert(src_image->info.samples == 1);
 	assert(dest_image->info.samples == 1);
 
-	radv_meta_save_graphics_reset_vport_scissor_novertex(&saved_state, cmd_buffer);
+	radv_meta_save(&saved_state, cmd_buffer,
+		       RADV_META_SAVE_GRAPHICS_PIPELINE |
+		       RADV_META_SAVE_CONSTANTS |
+		       RADV_META_SAVE_DESCRIPTORS);
 
 	for (unsigned r = 0; r < regionCount; r++) {
 		const VkImageSubresourceLayers *src_res = &pRegions[r].srcSubresource;

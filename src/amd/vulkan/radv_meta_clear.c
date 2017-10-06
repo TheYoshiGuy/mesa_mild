@@ -374,10 +374,8 @@ emit_color_clear(struct radv_cmd_buffer *cmd_buffer,
 
 	radv_cmd_buffer_set_subpass(cmd_buffer, &clear_subpass, false);
 
-	if (cmd_buffer->state.pipeline != radv_pipeline_from_handle(pipeline)) {
-		radv_CmdBindPipeline(cmd_buffer_h, VK_PIPELINE_BIND_POINT_GRAPHICS,
-					   pipeline);
-	}
+	radv_CmdBindPipeline(cmd_buffer_h, VK_PIPELINE_BIND_POINT_GRAPHICS,
+			     pipeline);
 
 	radv_CmdSetViewport(radv_cmd_buffer_to_handle(cmd_buffer), 0, 1, &(VkViewport) {
 			.x = clear_rect->rect.offset.x,
@@ -644,10 +642,8 @@ emit_depthstencil_clear(struct radv_cmd_buffer *cmd_buffer,
 							 clear_rect,
 							 clear_value);
 
-	if (cmd_buffer->state.pipeline != radv_pipeline_from_handle(pipeline)) {
-		radv_CmdBindPipeline(cmd_buffer_h, VK_PIPELINE_BIND_POINT_GRAPHICS,
-				     pipeline);
-	}
+	radv_CmdBindPipeline(cmd_buffer_h, VK_PIPELINE_BIND_POINT_GRAPHICS,
+			     pipeline);
 
 	if (depth_view_can_fast_clear(cmd_buffer, iview, aspects,
 	                              subpass->depth_stencil_attachment.layout,
@@ -1149,7 +1145,9 @@ radv_cmd_buffer_clear_subpass(struct radv_cmd_buffer *cmd_buffer)
 	if (!radv_subpass_needs_clear(cmd_buffer))
 		return;
 
-	radv_meta_save_graphics_reset_vport_scissor_novertex(&saved_state, cmd_buffer);
+	radv_meta_save(&saved_state, cmd_buffer,
+		       RADV_META_SAVE_GRAPHICS_PIPELINE |
+		       RADV_META_SAVE_CONSTANTS);
 
 	for (uint32_t i = 0; i < cmd_state->subpass->color_count; ++i) {
 		uint32_t a = cmd_state->subpass->color_attachments[i].attachment;
@@ -1370,11 +1368,6 @@ radv_cmd_clear_image(struct radv_cmd_buffer *cmd_buffer,
 	}
 }
 
-union meta_saved_state {
-	struct radv_meta_saved_state gfx;
-	struct radv_meta_saved_compute_state compute;
-};
-
 void radv_CmdClearColorImage(
 	VkCommandBuffer                             commandBuffer,
 	VkImage                                     image_h,
@@ -1385,22 +1378,25 @@ void radv_CmdClearColorImage(
 {
 	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
 	RADV_FROM_HANDLE(radv_image, image, image_h);
-	union meta_saved_state saved_state;
+	struct radv_meta_saved_state saved_state;
 	bool cs = cmd_buffer->queue_family_index == RADV_QUEUE_COMPUTE;
 
-	if (cs)
-		radv_meta_save_compute(&saved_state.compute, cmd_buffer, 16);
-	else
-		radv_meta_save_graphics_reset_vport_scissor_novertex(&saved_state.gfx, cmd_buffer);
+	if (cs) {
+		radv_meta_save(&saved_state, cmd_buffer,
+			       RADV_META_SAVE_COMPUTE_PIPELINE |
+			       RADV_META_SAVE_CONSTANTS |
+			       RADV_META_SAVE_DESCRIPTORS);
+	} else {
+		radv_meta_save(&saved_state, cmd_buffer,
+			       RADV_META_SAVE_GRAPHICS_PIPELINE |
+			       RADV_META_SAVE_CONSTANTS);
+	}
 
 	radv_cmd_clear_image(cmd_buffer, image, imageLayout,
 			     (const VkClearValue *) pColor,
 			     rangeCount, pRanges, cs);
 
-	if (cs)
-		radv_meta_restore_compute(&saved_state.compute, cmd_buffer);
-	else
-		radv_meta_restore(&saved_state.gfx, cmd_buffer);
+	radv_meta_restore(&saved_state, cmd_buffer);
 }
 
 void radv_CmdClearDepthStencilImage(
@@ -1415,7 +1411,9 @@ void radv_CmdClearDepthStencilImage(
 	RADV_FROM_HANDLE(radv_image, image, image_h);
 	struct radv_meta_saved_state saved_state;
 
-	radv_meta_save_graphics_reset_vport_scissor_novertex(&saved_state, cmd_buffer);
+	radv_meta_save(&saved_state, cmd_buffer,
+		       RADV_META_SAVE_GRAPHICS_PIPELINE |
+		       RADV_META_SAVE_CONSTANTS);
 
 	radv_cmd_clear_image(cmd_buffer, image, imageLayout,
 			     (const VkClearValue *) pDepthStencil,
@@ -1439,7 +1437,9 @@ void radv_CmdClearAttachments(
 	if (!cmd_buffer->state.subpass)
 		return;
 
-	radv_meta_save_graphics_reset_vport_scissor_novertex(&saved_state, cmd_buffer);
+	radv_meta_save(&saved_state, cmd_buffer,
+		       RADV_META_SAVE_GRAPHICS_PIPELINE |
+		       RADV_META_SAVE_CONSTANTS);
 
 	/* FINISHME: We can do better than this dumb loop. It thrashes too much
 	 * state.

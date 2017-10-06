@@ -80,10 +80,10 @@ static void si_blitter_begin(struct pipe_context *ctx, enum si_blitter_op op)
 	if (op & SI_SAVE_TEXTURES) {
 		util_blitter_save_fragment_sampler_states(
 			sctx->blitter, 2,
-			(void**)sctx->samplers[PIPE_SHADER_FRAGMENT].views.sampler_states);
+			(void**)sctx->samplers[PIPE_SHADER_FRAGMENT].sampler_states);
 
 		util_blitter_save_fragment_sampler_views(sctx->blitter, 2,
-			sctx->samplers[PIPE_SHADER_FRAGMENT].views.views);
+			sctx->samplers[PIPE_SHADER_FRAGMENT].views);
 	}
 
 	if (op & SI_DISABLE_RENDER_COND)
@@ -421,7 +421,7 @@ si_decompress_depth(struct si_context *sctx,
 
 static void
 si_decompress_sampler_depth_textures(struct si_context *sctx,
-				     struct si_textures_info *textures)
+				     struct si_samplers *textures)
 {
 	unsigned i;
 	unsigned mask = textures->needs_depth_decompress_mask;
@@ -433,7 +433,7 @@ si_decompress_sampler_depth_textures(struct si_context *sctx,
 
 		i = u_bit_scan(&mask);
 
-		view = textures->views.views[i];
+		view = textures->views[i];
 		assert(view);
 		sview = (struct si_sampler_view*)view;
 
@@ -548,7 +548,7 @@ si_decompress_color_texture(struct si_context *sctx, struct r600_texture *tex,
 
 static void
 si_decompress_sampler_color_textures(struct si_context *sctx,
-				     struct si_textures_info *textures)
+				     struct si_samplers *textures)
 {
 	unsigned i;
 	unsigned mask = textures->needs_color_decompress_mask;
@@ -559,7 +559,7 @@ si_decompress_sampler_color_textures(struct si_context *sctx,
 
 		i = u_bit_scan(&mask);
 
-		view = textures->views.views[i];
+		view = textures->views[i];
 		assert(view);
 
 		tex = (struct r600_texture *)view->texture;
@@ -571,7 +571,7 @@ si_decompress_sampler_color_textures(struct si_context *sctx,
 
 static void
 si_decompress_image_color_textures(struct si_context *sctx,
-				   struct si_images_info *images)
+				   struct si_images *images)
 {
 	unsigned i;
 	unsigned mask = images->needs_color_decompress_mask;
@@ -627,9 +627,9 @@ static void si_check_render_feedback_texture(struct si_context *sctx,
 }
 
 static void si_check_render_feedback_textures(struct si_context *sctx,
-                                              struct si_textures_info *textures)
+                                              struct si_samplers *textures)
 {
-	uint32_t mask = textures->views.enabled_mask;
+	uint32_t mask = textures->enabled_mask;
 
 	while (mask) {
 		const struct pipe_sampler_view *view;
@@ -637,7 +637,7 @@ static void si_check_render_feedback_textures(struct si_context *sctx,
 
 		unsigned i = u_bit_scan(&mask);
 
-		view = textures->views.views[i];
+		view = textures->views[i];
 		if(view->texture->target == PIPE_BUFFER)
 			continue;
 
@@ -652,7 +652,7 @@ static void si_check_render_feedback_textures(struct si_context *sctx,
 }
 
 static void si_check_render_feedback_images(struct si_context *sctx,
-                                            struct si_images_info *images)
+                                            struct si_images *images)
 {
 	uint32_t mask = images->enabled_mask;
 
@@ -903,6 +903,21 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 			sctx->db_stencil_clear = true;
 			si_mark_atom_dirty(sctx, &sctx->db_render_state);
 		}
+
+		/* TODO: Find out what's wrong here. Fast depth clear leads to
+		 * corruption in ARK: Survival Evolved, but that may just be
+		 * a coincidence and the root cause is elsewhere.
+		 *
+		 * The corruption can be fixed by putting the DB metadata flush
+		 * before or after the depth clear. (suprisingly)
+		 *
+		 * https://bugs.freedesktop.org/show_bug.cgi?id=102955 (apitrace)
+		 *
+		 * This hack decreases back-to-back ClearDepth performance.
+		 */
+		if (sctx->screen->clear_db_meta_before_clear)
+			sctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_DB_META |
+					 SI_CONTEXT_PS_PARTIAL_FLUSH;
 	}
 
 	si_blitter_begin(ctx, SI_CLEAR);

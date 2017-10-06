@@ -488,13 +488,12 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_QUERY_SO_OVERFLOW:
 	case PIPE_CAP_MEMOBJ:
 	case PIPE_CAP_LOAD_CONSTBUF:
-		return 1;
-
 	case PIPE_CAP_INT64:
 	case PIPE_CAP_INT64_DIVMOD:
 	case PIPE_CAP_TGSI_CLOCK:
 	case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
 	case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
+	case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
 		return 1;
 
 	case PIPE_CAP_TGSI_VOTE:
@@ -1056,6 +1055,8 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 		driQueryOptionb(config->options, "radeonsi_assume_no_z_fights");
 	sscreen->commutative_blend_add =
 		driQueryOptionb(config->options, "radeonsi_commutative_blend_add");
+	sscreen->clear_db_meta_before_clear =
+		driQueryOptionb(config->options, "radeonsi_clear_db_meta_before_clear");
 	sscreen->has_msaa_sample_loc_bug = (sscreen->b.family >= CHIP_POLARIS10 &&
 					    sscreen->b.family <= CHIP_POLARIS12) ||
 					   sscreen->b.family == CHIP_VEGA10 ||
