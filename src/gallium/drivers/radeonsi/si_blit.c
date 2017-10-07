@@ -54,8 +54,6 @@ static void si_blitter_begin(struct pipe_context *ctx, enum si_blitter_op op)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 
-	util_blitter_save_vertex_buffer_slot(sctx->blitter, sctx->vertex_buffer);
-	util_blitter_save_vertex_elements(sctx->blitter, sctx->vertex_elements);
 	util_blitter_save_vertex_shader(sctx->blitter, sctx->vs_shader.cso);
 	util_blitter_save_tessctrl_shader(sctx->blitter, sctx->tcs_shader.cso);
 	util_blitter_save_tesseval_shader(sctx->blitter, sctx->tes_shader.cso);
@@ -70,7 +68,6 @@ static void si_blitter_begin(struct pipe_context *ctx, enum si_blitter_op op)
 		util_blitter_save_stencil_ref(sctx->blitter, &sctx->stencil_ref.state);
 		util_blitter_save_fragment_shader(sctx->blitter, sctx->ps_shader.cso);
 		util_blitter_save_sample_mask(sctx->blitter, sctx->sample_mask.sample_mask);
-		util_blitter_save_viewport(sctx->blitter, &sctx->viewports.states[0]);
 		util_blitter_save_scissor(sctx->blitter, &sctx->scissors.states[0]);
 	}
 
@@ -95,6 +92,12 @@ static void si_blitter_end(struct pipe_context *ctx)
 	struct si_context *sctx = (struct si_context *)ctx;
 
 	sctx->b.render_cond_force_off = false;
+
+	/* Restore shader pointers because the VS blit shader changed all
+	 * non-global VS user SGPRs. */
+	sctx->shader_pointers_dirty |= SI_VS_SHADER_POINTER_MASK;
+	sctx->vertex_buffer_pointer_dirty = true;
+	si_mark_atom_dirty(sctx, &sctx->shader_pointers.atom);
 }
 
 static unsigned u_max_sample(struct pipe_resource *r)
@@ -771,7 +774,7 @@ static void si_decompress_resident_images(struct si_context *sctx)
 	}
 }
 
-static void si_decompress_textures(struct si_context *sctx, unsigned shader_mask)
+void si_decompress_textures(struct si_context *sctx, unsigned shader_mask)
 {
 	unsigned compressed_colortex_counter, mask;
 
@@ -814,16 +817,6 @@ static void si_decompress_textures(struct si_context *sctx, unsigned shader_mask
 	}
 
 	si_check_render_feedback(sctx);
-}
-
-void si_decompress_graphics_textures(struct si_context *sctx)
-{
-	si_decompress_textures(sctx, u_bit_consecutive(0, SI_NUM_GRAPHICS_SHADERS));
-}
-
-void si_decompress_compute_textures(struct si_context *sctx)
-{
-	si_decompress_textures(sctx, 1 << PIPE_SHADER_COMPUTE);
 }
 
 static void si_clear(struct pipe_context *ctx, unsigned buffers,

@@ -247,6 +247,11 @@ enum {
 #define SI_NUM_DESCS                   (SI_DESCS_FIRST_SHADER + \
                                         SI_NUM_SHADERS * SI_NUM_SHADER_DESCS)
 
+#define SI_VS_SHADER_POINTER_MASK \
+	u_bit_consecutive(SI_DESCS_FIRST_SHADER + \
+			  PIPE_SHADER_VERTEX * SI_NUM_SHADER_DESCS, \
+			  SI_NUM_SHADER_DESCS)
+
 /* This represents descriptors in memory, such as buffer resources,
  * image resources, and sampler states.
  */
@@ -402,11 +407,20 @@ void si_destroy_shader_cache(struct si_screen *sscreen);
 void si_get_active_slot_masks(const struct tgsi_shader_info *info,
 			      uint32_t *const_and_shader_buffers,
 			      uint64_t *samplers_and_images);
+void *si_get_blit_vs(struct si_context *sctx, enum blitter_attrib_type type,
+		     unsigned num_layers);
 
 /* si_state_draw.c */
 void si_init_ia_multi_vgt_param_table(struct si_context *sctx);
 void si_emit_cache_flush(struct si_context *sctx);
 void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo);
+void si_draw_rectangle(struct blitter_context *blitter,
+		       void *vertex_elements_cso,
+		       blitter_get_vs_func get_vs,
+		       int x1, int y1, int x2, int y2,
+		       float depth, unsigned num_instances,
+		       enum blitter_attrib_type type,
+		       const union blitter_attrib *attrib);
 void si_trace_emit(struct si_context *sctx);
 
 

@@ -104,7 +104,7 @@ void si_gfx_write_event_eop(struct r600_common_context *ctx,
 
 	/* Wait for write confirmation before writing data, but don't send
 	 * an interrupt. */
-	if (ctx->chip_class >= SI && data_sel != EOP_DATA_SEL_DISCARD)
+	if (data_sel != EOP_DATA_SEL_DISCARD)
 		sel |= EOP_INT_SEL(EOP_INT_SEL_SEND_DATA_AFTER_WR_CONFIRM);
 
 	if (ctx->chip_class >= GFX9) {
@@ -202,89 +202,6 @@ void si_gfx_wait_fence(struct r600_common_context *ctx,
 	radeon_emit(cs, 4); /* poll interval */
 }
 
-void si_draw_rectangle(struct blitter_context *blitter,
-		       int x1, int y1, int x2, int y2,
-		       float depth, unsigned num_instances,
-		       enum blitter_attrib_type type,
-		       const union blitter_attrib *attrib)
-{
-	struct r600_common_context *rctx =
-		(struct r600_common_context*)util_blitter_get_pipe(blitter);
-	struct pipe_viewport_state viewport;
-	struct pipe_resource *buf = NULL;
-	unsigned offset = 0;
-	float *vb;
-
-	/* Some operations (like color resolve on r6xx) don't work
-	 * with the conventional primitive types.
-	 * One that works is PT_RECTLIST, which we use here. */
-
-	/* setup viewport */
-	viewport.scale[0] = 1.0f;
-	viewport.scale[1] = 1.0f;
-	viewport.scale[2] = 1.0f;
-	viewport.translate[0] = 0.0f;
-	viewport.translate[1] = 0.0f;
-	viewport.translate[2] = 0.0f;
-	rctx->b.set_viewport_states(&rctx->b, 0, 1, &viewport);
-
-	/* Upload vertices. The hw rectangle has only 3 vertices,
-	 * The 4th one is derived from the first 3.
-	 * The vertex specification should match u_blitter's vertex element state. */
-	u_upload_alloc(rctx->b.stream_uploader, 0, sizeof(float) * 24,
-		       rctx->screen->info.tcc_cache_line_size,
-                       &offset, &buf, (void**)&vb);
-	if (!buf)
-		return;
-
-	vb[0] = x1;
-	vb[1] = y1;
-	vb[2] = depth;
-	vb[3] = 1;
-
-	vb[8] = x1;
-	vb[9] = y2;
-	vb[10] = depth;
-	vb[11] = 1;
-
-	vb[16] = x2;
-	vb[17] = y1;
-	vb[18] = depth;
-	vb[19] = 1;
-
-	switch (type) {
-	case UTIL_BLITTER_ATTRIB_COLOR:
-		memcpy(vb+4, attrib->color, sizeof(float)*4);
-		memcpy(vb+12, attrib->color, sizeof(float)*4);
-		memcpy(vb+20, attrib->color, sizeof(float)*4);
-		break;
-	case UTIL_BLITTER_ATTRIB_TEXCOORD_XYZW:
-	case UTIL_BLITTER_ATTRIB_TEXCOORD_XY:
-		vb[6] = vb[14] = vb[22] = attrib->texcoord.z;
-		vb[7] = vb[15] = vb[23] = attrib->texcoord.w;
-		/* fall through */
-		vb[4] = attrib->texcoord.x1;
-		vb[5] = attrib->texcoord.y1;
-		vb[12] = attrib->texcoord.x1;
-		vb[13] = attrib->texcoord.y2;
-		vb[20] = attrib->texcoord.x2;
-		vb[21] = attrib->texcoord.y1;
-		break;
-	default:; /* Nothing to do. */
-	}
-
-	/* draw */
-	struct pipe_vertex_buffer vbuffer = {};
-	vbuffer.buffer.resource = buf;
-	vbuffer.stride = 2 * 4 * sizeof(float); /* vertex size */
-	vbuffer.buffer_offset = offset;
-
-	rctx->b.set_vertex_buffers(&rctx->b, blitter->vb_slot, 1, &vbuffer);
-	util_draw_arrays_instanced(&rctx->b, R600_PRIM_RECTANGLE_LIST, 0, 3,
-				   0, num_instances);
-	pipe_resource_reference(&buf, NULL);
-}
-
 static void r600_dma_emit_wait_idle(struct r600_common_context *rctx)
 {
 	struct radeon_winsys_cs *cs = rctx->dma.cs;
@@ -292,12 +209,8 @@ static void r600_dma_emit_wait_idle(struct r600_common_context *rctx)
 	/* NOP waits for idle on Evergreen and later. */
 	if (rctx->chip_class >= CIK)
 		radeon_emit(cs, 0x00000000); /* NOP */
-	else if (rctx->chip_class >= EVERGREEN)
+	else
 		radeon_emit(cs, 0xf0000000); /* NOP */
-	else {
-		/* TODO: R600-R700 should use the FENCE packet.
-		 * CS checker support is required. */
-	}
 }
 
 void si_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
@@ -898,31 +811,6 @@ static const char *r600_get_marketing_name(struct radeon_winsys *ws)
 static const char *r600_get_family_name(const struct r600_common_screen *rscreen)
 {
 	switch (rscreen->info.family) {
-	case CHIP_R600: return "AMD R600";
-	case CHIP_RV610: return "AMD RV610";
-	case CHIP_RV630: return "AMD RV630";
-	case CHIP_RV670: return "AMD RV670";
-	case CHIP_RV620: return "AMD RV620";
-	case CHIP_RV635: return "AMD RV635";
-	case CHIP_RS780: return "AMD RS780";
-	case CHIP_RS880: return "AMD RS880";
-	case CHIP_RV770: return "AMD RV770";
-	case CHIP_RV730: return "AMD RV730";
-	case CHIP_RV710: return "AMD RV710";
-	case CHIP_RV740: return "AMD RV740";
-	case CHIP_CEDAR: return "AMD CEDAR";
-	case CHIP_REDWOOD: return "AMD REDWOOD";
-	case CHIP_JUNIPER: return "AMD JUNIPER";
-	case CHIP_CYPRESS: return "AMD CYPRESS";
-	case CHIP_HEMLOCK: return "AMD HEMLOCK";
-	case CHIP_PALM: return "AMD PALM";
-	case CHIP_SUMO: return "AMD SUMO";
-	case CHIP_SUMO2: return "AMD SUMO2";
-	case CHIP_BARTS: return "AMD BARTS";
-	case CHIP_TURKS: return "AMD TURKS";
-	case CHIP_CAICOS: return "AMD CAICOS";
-	case CHIP_CAYMAN: return "AMD CAYMAN";
-	case CHIP_ARUBA: return "AMD ARUBA";
 	case CHIP_TAHITI: return "AMD TAHITI";
 	case CHIP_PITCAIRN: return "AMD PITCAIRN";
 	case CHIP_VERDE: return "AMD CAPE VERDE";
@@ -1049,46 +937,6 @@ static int r600_get_video_param(struct pipe_screen *screen,
 const char *si_get_llvm_processor_name(enum radeon_family family)
 {
 	switch (family) {
-	case CHIP_R600:
-	case CHIP_RV630:
-	case CHIP_RV635:
-	case CHIP_RV670:
-		return "r600";
-	case CHIP_RV610:
-	case CHIP_RV620:
-	case CHIP_RS780:
-	case CHIP_RS880:
-		return "rs880";
-	case CHIP_RV710:
-		return "rv710";
-	case CHIP_RV730:
-		return "rv730";
-	case CHIP_RV740:
-	case CHIP_RV770:
-		return "rv770";
-	case CHIP_PALM:
-	case CHIP_CEDAR:
-		return "cedar";
-	case CHIP_SUMO:
-	case CHIP_SUMO2:
-		return "sumo";
-	case CHIP_REDWOOD:
-		return "redwood";
-	case CHIP_JUNIPER:
-		return "juniper";
-	case CHIP_HEMLOCK:
-	case CHIP_CYPRESS:
-		return "cypress";
-	case CHIP_BARTS:
-		return "barts";
-	case CHIP_TURKS:
-		return "turks";
-	case CHIP_CAICOS:
-		return "caicos";
-	case CHIP_CAYMAN:
-        case CHIP_ARUBA:
-		return "cayman";
-
 	case CHIP_TAHITI: return "tahiti";
 	case CHIP_PITCAIRN: return "pitcairn";
 	case CHIP_VERDE: return "verde";
@@ -1148,23 +996,13 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 	case PIPE_COMPUTE_CAP_IR_TARGET: {
 		const char *gpu;
 		const char *triple;
-		if (rscreen->family <= CHIP_ARUBA) {
-			triple = "r600--";
-		} else {
-			if (HAVE_LLVM < 0x0400) {
-				triple = "amdgcn--";
-			} else {
-				triple = "amdgcn-mesa-mesa3d";
-			}
-		}
-		switch(rscreen->family) {
-		/* Clang < 3.6 is missing Hainan in its list of
-		 * GPUs, so we need to use the name of a similar GPU.
-		 */
-		default:
-			gpu = si_get_llvm_processor_name(rscreen->family);
-			break;
-		}
+
+		if (HAVE_LLVM < 0x0400)
+			triple = "amdgcn--";
+		else
+			triple = "amdgcn-mesa-mesa3d";
+
+		gpu = si_get_llvm_processor_name(rscreen->family);
 		if (ret) {
 			sprintf(ret, "%s-%s", gpu, triple);
 		}
@@ -1280,7 +1118,7 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 	case PIPE_COMPUTE_CAP_SUBGROUP_SIZE:
 		if (ret) {
 			uint32_t *subgroup_size = ret;
-			*subgroup_size = r600_wavefront_size(rscreen->family);
+			*subgroup_size = 64;
 		}
 		return sizeof(uint32_t);
 	case PIPE_COMPUTE_CAP_MAX_VARIABLE_THREADS_PER_BLOCK:

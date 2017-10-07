@@ -320,6 +320,11 @@ struct si_context {
 	void				*custom_blend_fmask_decompress;
 	void				*custom_blend_eliminate_fastclear;
 	void				*custom_blend_dcc_decompress;
+	void				*vs_blit_pos;
+	void				*vs_blit_pos_layered;
+	void				*vs_blit_color;
+	void				*vs_blit_color_layered;
+	void				*vs_blit_texcoord;
 	struct si_screen		*screen;
 	LLVMTargetMachineRef		tm; /* only non-threaded compilation */
 	struct si_shader_ctx_state	fixed_func_tcs_shader;
@@ -397,6 +402,8 @@ struct si_context {
 	struct r600_resource		*border_color_buffer;
 	union pipe_color_union		*border_color_map; /* in VRAM (slow access), little endian */
 	unsigned			border_color_count;
+	unsigned			num_vs_blit_sgprs;
+	uint32_t			vs_blit_sh_data[SI_VS_BLIT_SGPRS_POS_TEXCOORD];
 
 	/* Vertex and index buffers. */
 	bool				vertex_buffers_dirty;
@@ -505,8 +512,7 @@ void cik_init_sdma_functions(struct si_context *sctx);
 
 /* si_blit.c */
 void si_init_blit_functions(struct si_context *sctx);
-void si_decompress_graphics_textures(struct si_context *sctx);
-void si_decompress_compute_textures(struct si_context *sctx);
+void si_decompress_textures(struct si_context *sctx, unsigned shader_mask);
 void si_resource_copy_region(struct pipe_context *ctx,
 			     struct pipe_resource *dst,
 			     unsigned dst_level,
@@ -570,7 +576,7 @@ struct pipe_video_buffer *si_video_buffer_create(struct pipe_context *pipe,
 						 const struct pipe_video_buffer *tmpl);
 
 /* si_viewport.c */
-void si_update_vs_writes_viewport_index(struct si_context *ctx);
+void si_update_vs_viewport_state(struct si_context *ctx);
 void si_init_viewport_functions(struct si_context *ctx);
 
 

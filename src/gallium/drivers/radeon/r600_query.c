@@ -766,26 +766,17 @@ static void r600_query_hw_do_emit_start(struct r600_common_context *ctx,
 			emit_sample_streamout(cs, va + 32 * stream, stream);
 		break;
 	case PIPE_QUERY_TIME_ELAPSED:
-		if (ctx->chip_class >= SI) {
-			/* Write the timestamp from the CP not waiting for
-			 * outstanding draws (top-of-pipe).
-			 */
-			radeon_emit(cs, PKT3(PKT3_COPY_DATA, 4, 0));
-			radeon_emit(cs, COPY_DATA_COUNT_SEL |
-					COPY_DATA_SRC_SEL(COPY_DATA_TIMESTAMP) |
-					COPY_DATA_DST_SEL(COPY_DATA_MEM_ASYNC));
-			radeon_emit(cs, 0);
-			radeon_emit(cs, 0);
-			radeon_emit(cs, va);
-			radeon_emit(cs, va >> 32);
-		} else {
-			/* Write the timestamp after the last draw is done.
-			 * (bottom-of-pipe)
-			 */
-			si_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS,
-						 0, EOP_DATA_SEL_TIMESTAMP,
-						 NULL, va, 0, query->b.type);
-		}
+		/* Write the timestamp from the CP not waiting for
+		 * outstanding draws (top-of-pipe).
+		 */
+		radeon_emit(cs, PKT3(PKT3_COPY_DATA, 4, 0));
+		radeon_emit(cs, COPY_DATA_COUNT_SEL |
+				COPY_DATA_SRC_SEL(COPY_DATA_TIMESTAMP) |
+				COPY_DATA_DST_SEL(COPY_DATA_MEM_ASYNC));
+		radeon_emit(cs, 0);
+		radeon_emit(cs, 0);
+		radeon_emit(cs, va);
+		radeon_emit(cs, va >> 32);
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
@@ -1786,11 +1777,8 @@ static void r600_render_condition(struct pipe_context *ctx,
 {
 	struct r600_common_context *rctx = (struct r600_common_context *)ctx;
 	struct r600_query_hw *rquery = (struct r600_query_hw *)query;
-	struct r600_query_buffer *qbuf;
 	struct r600_atom *atom = &rctx->render_cond_atom;
 
-	/* Compute the size of SET_PREDICATION packets. */
-	atom->num_dw = 0;
 	if (query) {
 		bool needs_workaround = false;
 
@@ -1833,16 +1821,6 @@ static void r600_render_condition(struct pipe_context *ctx,
 
 			rctx->render_cond_force_off = old_force_off;
 		}
-
-		if (needs_workaround) {
-			atom->num_dw = 5;
-		} else {
-			for (qbuf = &rquery->buffer; qbuf; qbuf = qbuf->previous)
-				atom->num_dw += (qbuf->results_end / rquery->result_size) * 5;
-
-			if (rquery->b.type == PIPE_QUERY_SO_OVERFLOW_ANY_PREDICATE)
-				atom->num_dw *= R600_MAX_STREAMS;
-		}
 	}
 
 	rctx->render_cond = query;
@@ -1879,8 +1857,6 @@ static unsigned r600_queries_num_cs_dw_for_resuming(struct r600_common_context *
 		 */
 		num_dw += query->num_cs_dw_end;
 	}
-	/* primitives generated query */
-	num_dw += ctx->streamout.enable_atom.num_dw;
 	/* guess for ZPASS enable or PERFECT_ZPASS_COUNT enable updates */
 	num_dw += 13;
 

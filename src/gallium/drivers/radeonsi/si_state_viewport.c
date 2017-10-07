@@ -63,13 +63,6 @@ static void si_get_scissor_from_viewport(struct si_context *ctx,
 	maxx = vp->scale[0] + vp->translate[0];
 	maxy = vp->scale[1] + vp->translate[1];
 
-	/* r600_draw_rectangle sets this. Disable the scissor. */
-	if (minx == -1 && miny == -1 && maxx == 1 && maxy == 1) {
-		scissor->minx = scissor->miny = 0;
-		scissor->maxx = scissor->maxy = SI_MAX_SCISSOR;
-		return;
-	}
-
 	/* Handle inverted viewports. */
 	if (minx > maxx) {
 		tmp = minx;
@@ -335,12 +328,25 @@ static void si_emit_viewports(struct si_context *ctx)
 	ctx->viewports.dirty_mask = 0;
 }
 
+static inline void
+si_viewport_zmin_zmax(const struct pipe_viewport_state *vp, bool halfz,
+		      bool window_space_position, float *zmin, float *zmax)
+{
+	if (window_space_position) {
+		*zmin = 0;
+		*zmax = 1;
+		return;
+	}
+	util_viewport_zmin_zmax(vp, halfz, zmin, zmax);
+}
+
 static void si_emit_depth_ranges(struct si_context *ctx)
 {
 	struct radeon_winsys_cs *cs = ctx->b.gfx.cs;
 	struct pipe_viewport_state *states = ctx->viewports.states;
 	unsigned mask = ctx->viewports.depth_range_dirty_mask;
 	bool clip_halfz = false;
+	bool window_space = ctx->vs_disables_clipping_viewport;
 	float zmin, zmax;
 
 	if (ctx->queued.named.rasterizer)
@@ -351,7 +357,8 @@ static void si_emit_depth_ranges(struct si_context *ctx)
 		if (!(mask & 1))
 			return;
 
-		util_viewport_zmin_zmax(&states[0], clip_halfz, &zmin, &zmax);
+		si_viewport_zmin_zmax(&states[0], clip_halfz, window_space,
+				      &zmin, &zmax);
 
 		radeon_set_context_reg_seq(cs, R_0282D0_PA_SC_VPORT_ZMIN_0, 2);
 		radeon_emit(cs, fui(zmin));
@@ -368,7 +375,8 @@ static void si_emit_depth_ranges(struct si_context *ctx)
 		radeon_set_context_reg_seq(cs, R_0282D0_PA_SC_VPORT_ZMIN_0 +
 					   start * 4 * 2, count * 2);
 		for (i = start; i < start+count; i++) {
-			util_viewport_zmin_zmax(&states[i], clip_halfz, &zmin, &zmax);
+			si_viewport_zmin_zmax(&states[i], clip_halfz, window_space,
+					      &zmin, &zmax);
 			radeon_emit(cs, fui(zmin));
 			radeon_emit(cs, fui(zmax));
 		}
@@ -385,12 +393,16 @@ static void si_emit_viewport_states(struct r600_common_context *rctx,
 }
 
 /**
+ * This reacts to 2 state changes:
+ * - VS.writes_viewport_index
+ * - VS output position in window space (enable/disable)
+ *
  * Normally, we only emit 1 viewport and 1 scissor if no shader is using
  * the VIEWPORT_INDEX output, and emitting the other viewports and scissors
  * is delayed. When a shader with VIEWPORT_INDEX appears, this should be
  * called to emit the rest.
  */
-void si_update_vs_writes_viewport_index(struct si_context *ctx)
+void si_update_vs_viewport_state(struct si_context *ctx)
 {
 	struct tgsi_shader_info *info = si_get_vs_info(ctx);
 	bool vs_window_space;
@@ -405,7 +417,9 @@ void si_update_vs_writes_viewport_index(struct si_context *ctx)
 	if (ctx->vs_disables_clipping_viewport != vs_window_space) {
 		ctx->vs_disables_clipping_viewport = vs_window_space;
 		ctx->scissors.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
+		ctx->viewports.depth_range_dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
 		si_mark_atom_dirty(ctx, &ctx->scissors.atom);
+		si_mark_atom_dirty(ctx, &ctx->viewports.atom);
 	}
 
 	/* Viewport index handling. */
@@ -425,9 +439,6 @@ void si_init_viewport_functions(struct si_context *ctx)
 {
 	ctx->scissors.atom.emit = si_emit_scissors;
 	ctx->viewports.atom.emit = si_emit_viewport_states;
-
-	ctx->scissors.atom.num_dw = (2 + 16 * 2) + 6;
-	ctx->viewports.atom.num_dw = 2 + 16 * 6;
 
 	ctx->b.b.set_scissor_states = si_set_scissor_states;
 	ctx->b.b.set_viewport_states = si_set_viewport_states;

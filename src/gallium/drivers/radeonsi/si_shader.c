@@ -454,11 +454,97 @@ static LLVMValueRef extract_double_to_float(struct si_shader_context *ctx,
 	return LLVMBuildFPTrunc(builder, value, ctx->f32, "");
 }
 
+static LLVMValueRef unpack_sint16(struct si_shader_context *ctx,
+				 LLVMValueRef i32, unsigned index)
+{
+	assert(index <= 1);
+
+	if (index == 1)
+		return LLVMBuildAShr(ctx->ac.builder, i32,
+				     LLVMConstInt(ctx->i32, 16, 0), "");
+
+	return LLVMBuildSExt(ctx->ac.builder,
+			     LLVMBuildTrunc(ctx->ac.builder, i32,
+					    ctx->ac.i16, ""),
+			     ctx->i32, "");
+}
+
 void si_llvm_load_input_vs(
 	struct si_shader_context *ctx,
 	unsigned input_index,
 	LLVMValueRef out[4])
 {
+	unsigned vs_blit_property =
+		ctx->shader->selector->info.properties[TGSI_PROPERTY_VS_BLIT_SGPRS];
+
+	if (vs_blit_property) {
+		LLVMValueRef vertex_id = ctx->abi.vertex_id;
+		LLVMValueRef sel_x1 = LLVMBuildICmp(ctx->ac.builder,
+						    LLVMIntULE, vertex_id,
+						    ctx->i32_1, "");
+		/* Use LLVMIntNE, because we have 3 vertices and only
+		 * the middle one should use y2.
+		 */
+		LLVMValueRef sel_y1 = LLVMBuildICmp(ctx->ac.builder,
+						    LLVMIntNE, vertex_id,
+						    ctx->i32_1, "");
+
+		if (input_index == 0) {
+			/* Position: */
+			LLVMValueRef x1y1 = LLVMGetParam(ctx->main_fn,
+							 ctx->param_vs_blit_inputs);
+			LLVMValueRef x2y2 = LLVMGetParam(ctx->main_fn,
+							 ctx->param_vs_blit_inputs + 1);
+
+			LLVMValueRef x1 = unpack_sint16(ctx, x1y1, 0);
+			LLVMValueRef y1 = unpack_sint16(ctx, x1y1, 1);
+			LLVMValueRef x2 = unpack_sint16(ctx, x2y2, 0);
+			LLVMValueRef y2 = unpack_sint16(ctx, x2y2, 1);
+
+			LLVMValueRef x = LLVMBuildSelect(ctx->ac.builder, sel_x1,
+							 x1, x2, "");
+			LLVMValueRef y = LLVMBuildSelect(ctx->ac.builder, sel_y1,
+							 y1, y2, "");
+
+			out[0] = LLVMBuildSIToFP(ctx->ac.builder, x, ctx->f32, "");
+			out[1] = LLVMBuildSIToFP(ctx->ac.builder, y, ctx->f32, "");
+			out[2] = LLVMGetParam(ctx->main_fn,
+					      ctx->param_vs_blit_inputs + 2);
+			out[3] = ctx->ac.f32_1;
+			return;
+		}
+
+		/* Color or texture coordinates: */
+		assert(input_index == 1);
+
+		if (vs_blit_property == SI_VS_BLIT_SGPRS_POS_COLOR) {
+			for (int i = 0; i < 4; i++) {
+				out[i] = LLVMGetParam(ctx->main_fn,
+						      ctx->param_vs_blit_inputs + 3 + i);
+			}
+		} else {
+			assert(vs_blit_property == SI_VS_BLIT_SGPRS_POS_TEXCOORD);
+			LLVMValueRef x1 = LLVMGetParam(ctx->main_fn,
+						       ctx->param_vs_blit_inputs + 3);
+			LLVMValueRef y1 = LLVMGetParam(ctx->main_fn,
+						       ctx->param_vs_blit_inputs + 4);
+			LLVMValueRef x2 = LLVMGetParam(ctx->main_fn,
+						       ctx->param_vs_blit_inputs + 5);
+			LLVMValueRef y2 = LLVMGetParam(ctx->main_fn,
+						       ctx->param_vs_blit_inputs + 6);
+
+			out[0] = LLVMBuildSelect(ctx->ac.builder, sel_x1,
+						 x1, x2, "");
+			out[1] = LLVMBuildSelect(ctx->ac.builder, sel_y1,
+						 y1, y2, "");
+			out[2] = LLVMGetParam(ctx->main_fn,
+					      ctx->param_vs_blit_inputs + 7);
+			out[3] = LLVMGetParam(ctx->main_fn,
+					      ctx->param_vs_blit_inputs + 8);
+		}
+		return;
+	}
+
 	unsigned chan;
 	unsigned fix_fetch;
 	unsigned num_fetches;
@@ -4187,14 +4273,13 @@ static void declare_per_stage_desc_pointers(struct si_shader_context *ctx,
 	}
 }
 
-static void declare_default_desc_pointers(struct si_shader_context *ctx,
-					  struct si_function_info *fninfo)
+static void declare_global_desc_pointers(struct si_shader_context *ctx,
+					 struct si_function_info *fninfo)
 {
 	ctx->param_rw_buffers = add_arg(fninfo, ARG_SGPR,
 		si_const_array(ctx->v4i32, SI_NUM_RW_BUFFERS));
 	ctx->param_bindless_samplers_and_images = add_arg(fninfo, ARG_SGPR,
 		si_const_array(ctx->v8i32, 0));
-	declare_per_stage_desc_pointers(ctx, fninfo, true);
 }
 
 static void declare_vs_specific_input_sgprs(struct si_shader_context *ctx,
@@ -4257,6 +4342,8 @@ static void create_function(struct si_shader_context *ctx)
 	unsigned num_returns = 0;
 	unsigned num_prolog_vgprs = 0;
 	unsigned type = ctx->type;
+	unsigned vs_blit_property =
+		shader->selector->info.properties[TGSI_PROPERTY_VS_BLIT_SGPRS];
 
 	si_init_function_info(&fninfo);
 
@@ -4272,7 +4359,34 @@ static void create_function(struct si_shader_context *ctx)
 
 	switch (type) {
 	case PIPE_SHADER_VERTEX:
-		declare_default_desc_pointers(ctx, &fninfo);
+		declare_global_desc_pointers(ctx, &fninfo);
+
+		if (vs_blit_property) {
+			ctx->param_vs_blit_inputs = fninfo.num_params;
+			add_arg(&fninfo, ARG_SGPR, ctx->i32); /* i16 x1, y1 */
+			add_arg(&fninfo, ARG_SGPR, ctx->i32); /* i16 x2, y2 */
+			add_arg(&fninfo, ARG_SGPR, ctx->f32); /* depth */
+
+			if (vs_blit_property == SI_VS_BLIT_SGPRS_POS_COLOR) {
+				add_arg(&fninfo, ARG_SGPR, ctx->f32); /* color0 */
+				add_arg(&fninfo, ARG_SGPR, ctx->f32); /* color1 */
+				add_arg(&fninfo, ARG_SGPR, ctx->f32); /* color2 */
+				add_arg(&fninfo, ARG_SGPR, ctx->f32); /* color3 */
+			} else if (vs_blit_property == SI_VS_BLIT_SGPRS_POS_TEXCOORD) {
+				add_arg(&fninfo, ARG_SGPR, ctx->f32); /* texcoord.x1 */
+				add_arg(&fninfo, ARG_SGPR, ctx->f32); /* texcoord.y1 */
+				add_arg(&fninfo, ARG_SGPR, ctx->f32); /* texcoord.x2 */
+				add_arg(&fninfo, ARG_SGPR, ctx->f32); /* texcoord.y2 */
+				add_arg(&fninfo, ARG_SGPR, ctx->f32); /* texcoord.z */
+				add_arg(&fninfo, ARG_SGPR, ctx->f32); /* texcoord.w */
+			}
+
+			/* VGPRs */
+			declare_vs_input_vgprs(ctx, &fninfo, &num_prolog_vgprs);
+			break;
+		}
+
+		declare_per_stage_desc_pointers(ctx, &fninfo, true);
 		declare_vs_specific_input_sgprs(ctx, &fninfo);
 
 		if (shader->key.as_es) {
@@ -4297,7 +4411,8 @@ static void create_function(struct si_shader_context *ctx)
 		break;
 
 	case PIPE_SHADER_TESS_CTRL: /* SI-CI-VI */
-		declare_default_desc_pointers(ctx, &fninfo);
+		declare_global_desc_pointers(ctx, &fninfo);
+		declare_per_stage_desc_pointers(ctx, &fninfo, true);
 		ctx->param_tcs_offchip_layout = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 		ctx->param_tcs_out_lds_offsets = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 		ctx->param_tcs_out_lds_layout = add_arg(&fninfo, ARG_SGPR, ctx->i32);
@@ -4439,7 +4554,8 @@ static void create_function(struct si_shader_context *ctx)
 		break;
 
 	case PIPE_SHADER_TESS_EVAL:
-		declare_default_desc_pointers(ctx, &fninfo);
+		declare_global_desc_pointers(ctx, &fninfo);
+		declare_per_stage_desc_pointers(ctx, &fninfo, true);
 		ctx->param_tcs_offchip_layout = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 		ctx->param_tcs_offchip_addr_base64k = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 
@@ -4459,7 +4575,8 @@ static void create_function(struct si_shader_context *ctx)
 		break;
 
 	case PIPE_SHADER_GEOMETRY:
-		declare_default_desc_pointers(ctx, &fninfo);
+		declare_global_desc_pointers(ctx, &fninfo);
+		declare_per_stage_desc_pointers(ctx, &fninfo, true);
 		ctx->param_gs2vs_offset = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 		ctx->param_gs_wave_id = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 
@@ -4475,7 +4592,8 @@ static void create_function(struct si_shader_context *ctx)
 		break;
 
 	case PIPE_SHADER_FRAGMENT:
-		declare_default_desc_pointers(ctx, &fninfo);
+		declare_global_desc_pointers(ctx, &fninfo);
+		declare_per_stage_desc_pointers(ctx, &fninfo, true);
 		add_arg_checked(&fninfo, ARG_SGPR, ctx->f32, SI_PARAM_ALPHA_REF);
 		add_arg_checked(&fninfo, ARG_SGPR, ctx->i32, SI_PARAM_PRIM_MASK);
 
@@ -4538,7 +4656,8 @@ static void create_function(struct si_shader_context *ctx)
 		break;
 
 	case PIPE_SHADER_COMPUTE:
-		declare_default_desc_pointers(ctx, &fninfo);
+		declare_global_desc_pointers(ctx, &fninfo);
+		declare_per_stage_desc_pointers(ctx, &fninfo, true);
 		if (shader->selector->info.uses_grid_size)
 			ctx->param_grid_size = add_arg(&fninfo, ARG_SGPR, v3i32);
 		if (shader->selector->info.uses_block_size)

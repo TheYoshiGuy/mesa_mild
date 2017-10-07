@@ -480,7 +480,6 @@ struct r600_common_screen {
  * command stream. */
 struct r600_atom {
 	void (*emit)(struct r600_common_context *ctx, struct r600_atom *state);
-	unsigned		num_dw;
 	unsigned short		id;
 };
 
@@ -498,7 +497,6 @@ struct r600_so_target {
 struct r600_streamout {
 	struct r600_atom		begin_atom;
 	bool				begin_emitted;
-	unsigned			num_dw_for_end;
 
 	unsigned			enabled_mask;
 	unsigned			num_targets;
@@ -738,11 +736,6 @@ void si_gfx_write_event_eop(struct r600_common_context *ctx,
 unsigned si_gfx_write_fence_dwords(struct r600_common_screen *screen);
 void si_gfx_wait_fence(struct r600_common_context *ctx,
 		       uint64_t va, uint32_t ref, uint32_t mask);
-void si_draw_rectangle(struct blitter_context *blitter,
-		       int x1, int y1, int x2, int y2,
-		       float depth, unsigned num_instances,
-		       enum blitter_attrib_type type,
-		       const union blitter_attrib *attrib);
 bool si_common_screen_init(struct r600_common_screen *rscreen,
 			   struct radeon_winsys *ws);
 void si_destroy_common_screen(struct r600_common_screen *rscreen);
@@ -925,26 +918,6 @@ static inline unsigned r600_tex_aniso_filter(unsigned filter)
 	if (filter < 16)
 		return 3;
 	return 4;
-}
-
-static inline unsigned r600_wavefront_size(enum radeon_family family)
-{
-	switch (family) {
-	case CHIP_RV610:
-	case CHIP_RS780:
-	case CHIP_RV620:
-	case CHIP_RS880:
-		return 16;
-	case CHIP_RV630:
-	case CHIP_RV635:
-	case CHIP_RV730:
-	case CHIP_RV710:
-	case CHIP_PALM:
-	case CHIP_CEDAR:
-		return 32;
-	default:
-		return 64;
-	}
 }
 
 static inline enum radeon_bo_priority

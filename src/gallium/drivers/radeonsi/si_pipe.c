@@ -84,6 +84,16 @@ static void si_destroy_context(struct pipe_context *context)
 		sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_eliminate_fastclear);
 	if (sctx->custom_blend_dcc_decompress)
 		sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_dcc_decompress);
+	if (sctx->vs_blit_pos)
+		sctx->b.b.delete_vs_state(&sctx->b.b, sctx->vs_blit_pos);
+	if (sctx->vs_blit_pos_layered)
+		sctx->b.b.delete_vs_state(&sctx->b.b, sctx->vs_blit_pos_layered);
+	if (sctx->vs_blit_color)
+		sctx->b.b.delete_vs_state(&sctx->b.b, sctx->vs_blit_color);
+	if (sctx->vs_blit_color_layered)
+		sctx->b.b.delete_vs_state(&sctx->b.b, sctx->vs_blit_color_layered);
+	if (sctx->vs_blit_texcoord)
+		sctx->b.b.delete_vs_state(&sctx->b.b, sctx->vs_blit_texcoord);
 
 	if (sctx->blitter)
 		util_blitter_destroy(sctx->blitter);
@@ -245,6 +255,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	if (sctx->blitter == NULL)
 		goto fail;
 	sctx->blitter->draw_rectangle = si_draw_rectangle;
+	sctx->blitter->skip_viewport_restore = true;
 
 	sctx->sample_mask.sample_mask = 0xffff;
 
