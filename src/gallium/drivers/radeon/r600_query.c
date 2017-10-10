@@ -28,6 +28,11 @@
 #include "util/u_upload_mgr.h"
 #include "os/os_time.h"
 #include "tgsi/tgsi_text.h"
+#include "amd/common/sid.h"
+
+/* TODO: remove this: */
+void si_update_prims_generated_query_state(struct r600_common_context *rctx,
+					   unsigned type, int diff);
 
 #define R600_MAX_STREAMS 4
 
@@ -723,10 +728,10 @@ static unsigned event_type_for_stream(unsigned stream)
 {
 	switch (stream) {
 	default:
-	case 0: return EVENT_TYPE_SAMPLE_STREAMOUTSTATS;
-	case 1: return EVENT_TYPE_SAMPLE_STREAMOUTSTATS1;
-	case 2: return EVENT_TYPE_SAMPLE_STREAMOUTSTATS2;
-	case 3: return EVENT_TYPE_SAMPLE_STREAMOUTSTATS3;
+	case 0: return V_028A90_SAMPLE_STREAMOUTSTATS;
+	case 1: return V_028A90_SAMPLE_STREAMOUTSTATS1;
+	case 2: return V_028A90_SAMPLE_STREAMOUTSTATS2;
+	case 3: return V_028A90_SAMPLE_STREAMOUTSTATS3;
 	}
 }
 
@@ -751,7 +756,7 @@ static void r600_query_hw_do_emit_start(struct r600_common_context *ctx,
 	case PIPE_QUERY_OCCLUSION_PREDICATE:
 	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
-		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_ZPASS_DONE) | EVENT_INDEX(1));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_ZPASS_DONE) | EVENT_INDEX(1));
 		radeon_emit(cs, va);
 		radeon_emit(cs, va >> 32);
 		break;
@@ -780,15 +785,15 @@ static void r600_query_hw_do_emit_start(struct r600_common_context *ctx,
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
-		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_SAMPLE_PIPELINESTAT) | EVENT_INDEX(2));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_SAMPLE_PIPELINESTAT) | EVENT_INDEX(2));
 		radeon_emit(cs, va);
 		radeon_emit(cs, va >> 32);
 		break;
 	default:
 		assert(0);
 	}
-	r600_emit_reloc(ctx, &ctx->gfx, query->buffer.buf, RADEON_USAGE_WRITE,
-			RADEON_PRIO_QUERY);
+	radeon_add_to_buffer_list(ctx, &ctx->gfx, query->buffer.buf, RADEON_USAGE_WRITE,
+				  RADEON_PRIO_QUERY);
 }
 
 static void r600_query_hw_emit_start(struct r600_common_context *ctx,
@@ -838,7 +843,7 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 	case PIPE_QUERY_OCCLUSION_PREDICATE_CONSERVATIVE:
 		va += 8;
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
-		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_ZPASS_DONE) | EVENT_INDEX(1));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_ZPASS_DONE) | EVENT_INDEX(1));
 		radeon_emit(cs, va);
 		radeon_emit(cs, va >> 32);
 
@@ -860,7 +865,7 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 		va += 8;
 		/* fall through */
 	case PIPE_QUERY_TIMESTAMP:
-		si_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS,
+		si_gfx_write_event_eop(ctx, V_028A90_BOTTOM_OF_PIPE_TS,
 					 0, EOP_DATA_SEL_TIMESTAMP, NULL, va,
 					 0, query->b.type);
 		fence_va = va + 8;
@@ -870,7 +875,7 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 
 		va += sample_size;
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
-		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_SAMPLE_PIPELINESTAT) | EVENT_INDEX(2));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_SAMPLE_PIPELINESTAT) | EVENT_INDEX(2));
 		radeon_emit(cs, va);
 		radeon_emit(cs, va >> 32);
 
@@ -880,11 +885,11 @@ static void r600_query_hw_do_emit_stop(struct r600_common_context *ctx,
 	default:
 		assert(0);
 	}
-	r600_emit_reloc(ctx, &ctx->gfx, query->buffer.buf, RADEON_USAGE_WRITE,
-			RADEON_PRIO_QUERY);
+	radeon_add_to_buffer_list(ctx, &ctx->gfx, query->buffer.buf, RADEON_USAGE_WRITE,
+				  RADEON_PRIO_QUERY);
 
 	if (fence_va)
-		si_gfx_write_event_eop(ctx, EVENT_TYPE_BOTTOM_OF_PIPE_TS, 0,
+		si_gfx_write_event_eop(ctx, V_028A90_BOTTOM_OF_PIPE_TS, 0,
 					 EOP_DATA_SEL_VALUE_32BIT,
 					 query->buffer.buf, fence_va, 0x80000000,
 					 query->b.type);
@@ -933,8 +938,8 @@ static void emit_set_predicate(struct r600_common_context *ctx,
 		radeon_emit(cs, va);
 		radeon_emit(cs, op | ((va >> 32) & 0xFF));
 	}
-	r600_emit_reloc(ctx, &ctx->gfx, buf, RADEON_USAGE_READ,
-			RADEON_PRIO_QUERY);
+	radeon_add_to_buffer_list(ctx, &ctx->gfx, buf, RADEON_USAGE_READ,
+				  RADEON_PRIO_QUERY);
 }
 
 static void r600_emit_query_predication(struct r600_common_context *ctx,

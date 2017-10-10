@@ -1483,7 +1483,7 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 		assert(0);
 	}
 
-	if (unlikely(sctx->screen->b.debug_flags & DBG_NO_OPT_VARIANT))
+	if (unlikely(sctx->screen->b.debug_flags & DBG(NO_OPT_VARIANT)))
 		memset(&key->opt, 0, sizeof(key->opt));
 }
 
@@ -1913,7 +1913,7 @@ static void si_init_shader_selector_async(void *job, int thread_index)
 	}
 
 	/* Pre-compilation. */
-	if (sscreen->b.debug_flags & DBG_PRECOMPILE &&
+	if (sscreen->b.debug_flags & DBG(PRECOMPILE) &&
 	    /* GFX9 needs LS or ES for compilation, which we don't have here. */
 	    (sscreen->b.chip_class <= VI ||
 	     (sel->type != PIPE_SHADER_TESS_CTRL &&
@@ -2252,9 +2252,9 @@ static void si_update_streamout_state(struct si_context *sctx)
 	if (!shader_with_so)
 		return;
 
-	sctx->b.streamout.enabled_stream_buffers_mask =
+	sctx->streamout.enabled_stream_buffers_mask =
 		shader_with_so->enabled_streamout_buffer_mask;
-	sctx->b.streamout.stride_in_dw = shader_with_so->so.stride;
+	sctx->streamout.stride_in_dw = shader_with_so->so.stride;
 }
 
 static void si_update_clip_regs(struct si_context *sctx,

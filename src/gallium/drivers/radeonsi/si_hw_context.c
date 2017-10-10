@@ -83,7 +83,7 @@ void si_context_gfx_flush(void *context, unsigned flags,
 	if (si_check_device_reset(&ctx->b))
 		return;
 
-	if (ctx->screen->b.debug_flags & DBG_CHECK_VM)
+	if (ctx->screen->b.debug_flags & DBG(CHECK_VM))
 		flags &= ~RADEON_FLUSH_ASYNC;
 
 	/* If the state tracker is flushing the GFX IB, r600_flush_from_st is
@@ -99,6 +99,12 @@ void si_context_gfx_flush(void *context, unsigned flags,
 	ctx->gfx_flush_in_progress = true;
 
 	si_preflush_suspend_features(&ctx->b);
+
+	ctx->streamout.suspended = false;
+	if (ctx->streamout.begin_emitted) {
+		si_emit_streamout_end(ctx);
+		ctx->streamout.suspended = true;
+	}
 
 	ctx->b.flags |= SI_CONTEXT_CS_PARTIAL_FLUSH |
 			SI_CONTEXT_PS_PARTIAL_FLUSH;
@@ -126,7 +132,7 @@ void si_context_gfx_flush(void *context, unsigned flags,
 	ctx->b.num_gfx_cs_flushes++;
 
 	/* Check VM faults if needed. */
-	if (ctx->screen->b.debug_flags & DBG_CHECK_VM) {
+	if (ctx->screen->b.debug_flags & DBG(CHECK_VM)) {
 		/* Use conservative timeout 800ms, after which we won't wait any
 		 * longer and assume the GPU is hung.
 		 */
@@ -243,7 +249,7 @@ void si_begin_new_cs(struct si_context *ctx)
 		si_mark_atom_dirty(ctx, &ctx->dpbb_state);
 	si_mark_atom_dirty(ctx, &ctx->stencil_ref.atom);
 	si_mark_atom_dirty(ctx, &ctx->spi_map);
-	si_mark_atom_dirty(ctx, &ctx->b.streamout.enable_atom);
+	si_mark_atom_dirty(ctx, &ctx->streamout.enable_atom);
 	si_mark_atom_dirty(ctx, &ctx->b.render_cond_atom);
 	si_all_descriptors_begin_new_cs(ctx);
 	si_all_resident_buffers_begin_new_cs(ctx);
@@ -258,6 +264,11 @@ void si_begin_new_cs(struct si_context *ctx)
 	if (ctx->scratch_buffer) {
 		r600_context_add_resource_size(&ctx->b.b,
 					       &ctx->scratch_buffer->b.b);
+	}
+
+	if (ctx->streamout.suspended) {
+		ctx->streamout.append_bitmask = ctx->streamout.enabled_mask;
+		si_streamout_buffers_dirty(ctx);
 	}
 
 	si_postflush_resume_features(&ctx->b);

@@ -36,6 +36,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include "state_tracker/drm_driver.h"
+#include "amd/common/sid.h"
 
 static void r600_texture_discard_cmask(struct r600_common_screen *rscreen,
 				       struct r600_texture *rtex);
@@ -408,7 +409,7 @@ static void r600_texture_discard_cmask(struct r600_common_screen *rscreen,
 	rtex->cmask.base_address_reg = rtex->resource.gpu_address >> 8;
 	rtex->dirty_level_mask = 0;
 
-	rtex->cb_color_info &= ~SI_S_028C70_FAST_CLEAR(1);
+	rtex->cb_color_info &= ~S_028C70_FAST_CLEAR(1);
 
 	if (rtex->cmask_buffer != &rtex->resource)
 	    r600_resource_reference(&rtex->cmask_buffer, NULL);
@@ -849,7 +850,7 @@ static void r600_texture_allocate_cmask(struct r600_common_screen *rscreen,
 	rtex->cmask.offset = align64(rtex->size, rtex->cmask.alignment);
 	rtex->size = rtex->cmask.offset + rtex->cmask.size;
 
-	rtex->cb_color_info |= SI_S_028C70_FAST_CLEAR(1);
+	rtex->cb_color_info |= S_028C70_FAST_CLEAR(1);
 }
 
 static void r600_texture_alloc_cmask_separate(struct r600_common_screen *rscreen,
@@ -876,7 +877,7 @@ static void r600_texture_alloc_cmask_separate(struct r600_common_screen *rscreen
 	/* update colorbuffer state bits */
 	rtex->cmask.base_address_reg = rtex->cmask_buffer->gpu_address >> 8;
 
-	rtex->cb_color_info |= SI_S_028C70_FAST_CLEAR(1);
+	rtex->cb_color_info |= S_028C70_FAST_CLEAR(1);
 
 	p_atomic_inc(&rscreen->compressed_colortex_counter);
 }
@@ -1184,7 +1185,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 				     R600_RESOURCE_FLAG_FLUSHED_DEPTH))) {
 			rtex->db_compatible = true;
 
-			if (!(rscreen->debug_flags & DBG_NO_HYPERZ))
+			if (!(rscreen->debug_flags & DBG(NO_HYPERZ)))
 				r600_texture_allocate_htile(rscreen, rtex);
 		}
 	} else {
@@ -1205,7 +1206,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 		 * apply_opaque_metadata later.
 		 */
 		if (rtex->surface.dcc_size &&
-		    (buf || !(rscreen->debug_flags & DBG_NO_DCC)) &&
+		    (buf || !(rscreen->debug_flags & DBG(NO_DCC))) &&
 		    !(rtex->surface.flags & RADEON_SURF_SCANOUT)) {
 			/* Reserve space for the DCC buffer. */
 			rtex->dcc_offset = align64(rtex->size, rtex->surface.dcc_alignment);
@@ -1264,7 +1265,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 	rtex->cmask.base_address_reg =
 		(rtex->resource.gpu_address + rtex->cmask.offset) >> 8;
 
-	if (rscreen->debug_flags & DBG_VM) {
+	if (rscreen->debug_flags & DBG(VM)) {
 		fprintf(stderr, "VM start=0x%"PRIX64"  end=0x%"PRIX64" | Texture %ix%ix%i, %i levels, %i samples, %s\n",
 			rtex->resource.gpu_address,
 			rtex->resource.gpu_address + rtex->resource.buf->size,
@@ -1272,7 +1273,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 			base->nr_samples ? base->nr_samples : 1, util_format_short_name(base->format));
 	}
 
-	if (rscreen->debug_flags & DBG_TEX) {
+	if (rscreen->debug_flags & DBG(TEX)) {
 		puts("Texture:");
 		struct u_log_context log;
 		u_log_context_init(&log);
@@ -1316,7 +1317,7 @@ r600_choose_tiling(struct r600_common_screen *rscreen,
 	if (!force_tiling &&
 	    !is_depth_stencil &&
 	    !util_format_is_compressed(templ->format)) {
-		if (rscreen->debug_flags & DBG_NO_TILING)
+		if (rscreen->debug_flags & DBG(NO_TILING))
 			return RADEON_SURF_MODE_LINEAR_ALIGNED;
 
 		/* Tiling doesn't work with the 422 (SUBSAMPLED) formats on R600+. */
@@ -1347,7 +1348,7 @@ r600_choose_tiling(struct r600_common_screen *rscreen,
 
 	/* Make small textures 1D tiled. */
 	if (templ->width0 <= 16 || templ->height0 <= 16 ||
-	    (rscreen->debug_flags & DBG_NO_2D_TILING))
+	    (rscreen->debug_flags & DBG(NO_2D_TILING)))
 		return RADEON_SURF_MODE_1D;
 
 	/* The allocator will switch to 1D if needed. */
@@ -1363,7 +1364,7 @@ struct pipe_resource *si_texture_create(struct pipe_screen *screen,
 	bool tc_compatible_htile =
 		rscreen->chip_class >= VI &&
 		(templ->flags & PIPE_RESOURCE_FLAG_TEXTURING_MORE_LIKELY) &&
-		!(rscreen->debug_flags & DBG_NO_HYPERZ) &&
+		!(rscreen->debug_flags & DBG(NO_HYPERZ)) &&
 		!is_flushed_depth &&
 		templ->nr_samples <= 1 && /* TC-compat HTILE is less efficient with MSAA */
 		util_format_is_depth_or_stencil(templ->format);
@@ -2062,7 +2063,7 @@ unsigned si_translate_colorswap(enum pipe_format format, bool do_endian_swap)
 #define HAS_SWIZZLE(chan,swz) (desc->swizzle[chan] == PIPE_SWIZZLE_##swz)
 
 	if (format == PIPE_FORMAT_R11G11B10_FLOAT) /* isn't plain */
-		return V_0280A0_SWAP_STD;
+		return V_028C70_SWAP_STD;
 
 	if (desc->layout != UTIL_FORMAT_LAYOUT_PLAIN)
 		return ~0U;
@@ -2070,45 +2071,45 @@ unsigned si_translate_colorswap(enum pipe_format format, bool do_endian_swap)
 	switch (desc->nr_channels) {
 	case 1:
 		if (HAS_SWIZZLE(0,X))
-			return V_0280A0_SWAP_STD; /* X___ */
+			return V_028C70_SWAP_STD; /* X___ */
 		else if (HAS_SWIZZLE(3,X))
-			return V_0280A0_SWAP_ALT_REV; /* ___X */
+			return V_028C70_SWAP_ALT_REV; /* ___X */
 		break;
 	case 2:
 		if ((HAS_SWIZZLE(0,X) && HAS_SWIZZLE(1,Y)) ||
 		    (HAS_SWIZZLE(0,X) && HAS_SWIZZLE(1,NONE)) ||
 		    (HAS_SWIZZLE(0,NONE) && HAS_SWIZZLE(1,Y)))
-			return V_0280A0_SWAP_STD; /* XY__ */
+			return V_028C70_SWAP_STD; /* XY__ */
 		else if ((HAS_SWIZZLE(0,Y) && HAS_SWIZZLE(1,X)) ||
 			 (HAS_SWIZZLE(0,Y) && HAS_SWIZZLE(1,NONE)) ||
 		         (HAS_SWIZZLE(0,NONE) && HAS_SWIZZLE(1,X)))
 			/* YX__ */
-			return (do_endian_swap ? V_0280A0_SWAP_STD : V_0280A0_SWAP_STD_REV);
+			return (do_endian_swap ? V_028C70_SWAP_STD : V_028C70_SWAP_STD_REV);
 		else if (HAS_SWIZZLE(0,X) && HAS_SWIZZLE(3,Y))
-			return V_0280A0_SWAP_ALT; /* X__Y */
+			return V_028C70_SWAP_ALT; /* X__Y */
 		else if (HAS_SWIZZLE(0,Y) && HAS_SWIZZLE(3,X))
-			return V_0280A0_SWAP_ALT_REV; /* Y__X */
+			return V_028C70_SWAP_ALT_REV; /* Y__X */
 		break;
 	case 3:
 		if (HAS_SWIZZLE(0,X))
-			return (do_endian_swap ? V_0280A0_SWAP_STD_REV : V_0280A0_SWAP_STD);
+			return (do_endian_swap ? V_028C70_SWAP_STD_REV : V_028C70_SWAP_STD);
 		else if (HAS_SWIZZLE(0,Z))
-			return V_0280A0_SWAP_STD_REV; /* ZYX */
+			return V_028C70_SWAP_STD_REV; /* ZYX */
 		break;
 	case 4:
 		/* check the middle channels, the 1st and 4th channel can be NONE */
 		if (HAS_SWIZZLE(1,Y) && HAS_SWIZZLE(2,Z)) {
-			return V_0280A0_SWAP_STD; /* XYZW */
+			return V_028C70_SWAP_STD; /* XYZW */
 		} else if (HAS_SWIZZLE(1,Z) && HAS_SWIZZLE(2,Y)) {
-			return V_0280A0_SWAP_STD_REV; /* WZYX */
+			return V_028C70_SWAP_STD_REV; /* WZYX */
 		} else if (HAS_SWIZZLE(1,Y) && HAS_SWIZZLE(2,X)) {
-			return V_0280A0_SWAP_ALT; /* ZYXW */
+			return V_028C70_SWAP_ALT; /* ZYXW */
 		} else if (HAS_SWIZZLE(1,Z) && HAS_SWIZZLE(2,W)) {
 			/* YZWX */
 			if (desc->is_array)
-				return V_0280A0_SWAP_ALT_REV;
+				return V_028C70_SWAP_ALT_REV;
 			else
-				return (do_endian_swap ? V_0280A0_SWAP_ALT : V_0280A0_SWAP_ALT_REV);
+				return (do_endian_swap ? V_028C70_SWAP_ALT : V_028C70_SWAP_ALT_REV);
 		}
 		break;
 	}
@@ -2686,7 +2687,7 @@ void si_do_fast_color_clear(struct r600_common_context *rctx,
 		 * displayable surfaces.
 		 */
 		if (rctx->chip_class >= VI &&
-		    !(rctx->screen->debug_flags & DBG_NO_DCC_FB)) {
+		    !(rctx->screen->debug_flags & DBG(NO_DCC_FB))) {
 			vi_separate_dcc_try_enable(rctx, tex);
 
 			/* RB+ isn't supported with a CMASK clear only on Stoney,
@@ -2704,7 +2705,7 @@ void si_do_fast_color_clear(struct r600_common_context *rctx,
 			uint32_t reset_value;
 			bool clear_words_needed;
 
-			if (rctx->screen->debug_flags & DBG_NO_DCC_CLEAR)
+			if (rctx->screen->debug_flags & DBG(NO_DCC_CLEAR))
 				continue;
 
 			if (!vi_get_fast_clear_parameters(fb->cbufs[i]->format,
