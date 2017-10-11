@@ -43,7 +43,6 @@ libvc4_la_SOURCES = $(C_SOURCES)
 
 libvc4_la_LIBADD = \
 	$(SIM_LIB) \
-	$(top_builddir)/src/broadcom/cle/libbroadcom_cle.la \
 	$()
 
 if HAVE_ARM_ASM

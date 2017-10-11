@@ -589,6 +589,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_UMA:
 	case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
 	case PIPE_CAP_POST_DEPTH_COVERAGE:
+	case PIPE_CAP_TILE_RASTER_ORDER:
 		return 0;
 
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
@@ -794,6 +795,7 @@ static const struct nir_shader_compiler_options nir_options = {
 	.lower_fsat = true,
 	.lower_fdiv = true,
 	.lower_sub = true,
+	.lower_ffma = true,
 	.lower_pack_snorm_2x16 = true,
 	.lower_pack_snorm_4x8 = true,
 	.lower_pack_unorm_2x16 = true,
