@@ -1777,10 +1777,15 @@ vec4_visitor::move_uniform_array_access_to_pull_constants()
    /* The vulkan dirver doesn't support pull constants other than UBOs so
     * everything has to be pushed regardless.
     */
-   if (stage_prog_data->pull_param == NULL) {
+   if (!compiler->supports_pull_constants) {
       split_uniform_registers();
       return;
    }
+
+   /* Allocate the pull_params array */
+   assert(stage_prog_data->nr_pull_params == 0);
+   stage_prog_data->pull_param = ralloc_array(mem_ctx, uint32_t,
+                                              this->uniforms * 4);
 
    int pull_constant_loc[this->uniforms];
    memset(pull_constant_loc, -1, sizeof(pull_constant_loc));

@@ -26,19 +26,17 @@
 
 struct lower_intrinsics_state {
    nir_shader *nir;
-   union {
-      struct brw_stage_prog_data *prog_data;
-      struct brw_cs_prog_data *cs_prog_data;
-   };
+   struct brw_cs_prog_data *prog_data;
    nir_function_impl *impl;
    bool progress;
    nir_builder builder;
-   bool cs_thread_id_used;
+   int thread_local_id_index;
 };
 
 static nir_ssa_def *
 read_thread_local_id(struct lower_intrinsics_state *state)
 {
+   struct brw_cs_prog_data *prog_data = state->prog_data;
    nir_builder *b = &state->builder;
    nir_shader *nir = state->nir;
    const unsigned *sizes = nir->info.cs.local_size;
@@ -50,9 +48,13 @@ read_thread_local_id(struct lower_intrinsics_state *state)
    if (group_size <= 8)
       return nir_imm_int(b, 0);
 
-   assert(state->cs_prog_data->thread_local_id_index >= 0);
-   state->cs_thread_id_used = true;
-   const int id_index = state->cs_prog_data->thread_local_id_index;
+   if (state->thread_local_id_index == -1) {
+      state->thread_local_id_index = prog_data->base.nr_params;
+      uint32_t *param = brw_stage_prog_data_add_params(&prog_data->base, 1);
+      *param = BRW_PARAM_BUILTIN_THREAD_LOCAL_ID;
+      nir->num_uniforms += 4;
+   }
+   unsigned id_index = state->thread_local_id_index;
 
    nir_intrinsic_instr *load =
       nir_intrinsic_instr_create(nir, nir_intrinsic_load_uniform);
@@ -84,7 +86,6 @@ lower_cs_intrinsics_convert_block(struct lower_intrinsics_state *state,
       nir_ssa_def *sysval;
       switch (intrinsic->intrinsic) {
       case nir_intrinsic_load_local_invocation_index: {
-         assert(nir->stage == MESA_SHADER_COMPUTE);
          /* We construct the local invocation index from:
           *
           *    gl_LocalInvocationIndex =
@@ -97,7 +98,6 @@ lower_cs_intrinsics_convert_block(struct lower_intrinsics_state *state,
       }
 
       case nir_intrinsic_load_local_invocation_id: {
-         assert(nir->stage == MESA_SHADER_COMPUTE);
          /* We lower gl_LocalInvocationID from gl_LocalInvocationIndex based
           * on this formula:
           *
@@ -156,17 +156,18 @@ lower_cs_intrinsics_convert_impl(struct lower_intrinsics_state *state)
 }
 
 bool
-brw_nir_lower_intrinsics(nir_shader *nir, struct brw_stage_prog_data *prog_data)
+brw_nir_lower_cs_intrinsics(nir_shader *nir,
+                            struct brw_cs_prog_data *prog_data)
 {
-   /* Currently we only lower intrinsics for compute shaders */
-   if (nir->stage != MESA_SHADER_COMPUTE)
-      return false;
+   assert(nir->stage == MESA_SHADER_COMPUTE);
 
    bool progress = false;
    struct lower_intrinsics_state state;
    memset(&state, 0, sizeof(state));
    state.nir = nir;
    state.prog_data = prog_data;
+
+   state.thread_local_id_index = -1;
 
    do {
       state.progress = false;
@@ -178,9 +179,6 @@ brw_nir_lower_intrinsics(nir_shader *nir, struct brw_stage_prog_data *prog_data)
       }
       progress |= state.progress;
    } while (state.progress);
-
-   if (nir->stage == MESA_SHADER_COMPUTE && !state.cs_thread_id_used)
-      state.cs_prog_data->thread_local_id_index = -1;
 
    return progress;
 }

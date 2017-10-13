@@ -304,17 +304,13 @@ apply_pipeline_layout_block(nir_block *block,
 }
 
 static void
-setup_vec4_uniform_value(const union gl_constant_value **params,
-                         const union gl_constant_value *values,
-                         unsigned n)
+setup_vec4_uniform_value(uint32_t *params, uint32_t offset, unsigned n)
 {
-   static const gl_constant_value zero = { 0 };
-
    for (unsigned i = 0; i < n; ++i)
-      params[i] = &values[i];
+      params[i] = ANV_PARAM_PUSH(offset + i * sizeof(uint32_t));
 
    for (unsigned i = n; i < 4; ++i)
-      params[i] = &zero;
+      params[i] = BRW_PARAM_BUILTIN_ZERO;
 }
 
 void
@@ -477,27 +473,29 @@ anv_nir_apply_pipeline_layout(struct anv_pipeline *pipeline,
          }
       }
 
+      uint32_t *param = brw_stage_prog_data_add_params(prog_data,
+                                                       map->image_count *
+                                                       BRW_IMAGE_PARAM_SIZE);
       struct anv_push_constants *null_data = NULL;
-      const gl_constant_value **param =
-         prog_data->param + (shader->num_uniforms / 4);
       const struct brw_image_param *image_param = null_data->images;
       for (uint32_t i = 0; i < map->image_count; i++) {
          setup_vec4_uniform_value(param + BRW_IMAGE_PARAM_SURFACE_IDX_OFFSET,
-            (const union gl_constant_value *)&image_param->surface_idx, 1);
+                                  (uintptr_t)&image_param->surface_idx, 1);
          setup_vec4_uniform_value(param + BRW_IMAGE_PARAM_OFFSET_OFFSET,
-            (const union gl_constant_value *)image_param->offset, 2);
+                                  (uintptr_t)image_param->offset, 2);
          setup_vec4_uniform_value(param + BRW_IMAGE_PARAM_SIZE_OFFSET,
-            (const union gl_constant_value *)image_param->size, 3);
+                                  (uintptr_t)image_param->size, 3);
          setup_vec4_uniform_value(param + BRW_IMAGE_PARAM_STRIDE_OFFSET,
-            (const union gl_constant_value *)image_param->stride, 4);
+                                  (uintptr_t)image_param->stride, 4);
          setup_vec4_uniform_value(param + BRW_IMAGE_PARAM_TILING_OFFSET,
-            (const union gl_constant_value *)image_param->tiling, 3);
+                                  (uintptr_t)image_param->tiling, 3);
          setup_vec4_uniform_value(param + BRW_IMAGE_PARAM_SWIZZLING_OFFSET,
-            (const union gl_constant_value *)image_param->swizzling, 2);
+                                  (uintptr_t)image_param->swizzling, 2);
 
          param += BRW_IMAGE_PARAM_SIZE;
          image_param ++;
       }
+      assert(param == prog_data->param + prog_data->nr_params);
 
       shader->num_uniforms += map->image_count * BRW_IMAGE_PARAM_SIZE * 4;
    }

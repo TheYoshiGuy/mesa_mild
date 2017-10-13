@@ -233,13 +233,25 @@ void brw_emit_sampler_state(struct brw_context *brw,
                             bool non_normalized_coordinates,
                             uint32_t border_color_offset);
 
-/* brw_vs_surface_state.c */
+/* gen6_constant_state.c */
+void
+brw_populate_constant_data(struct brw_context *brw,
+                           const struct gl_program *prog,
+                           const struct brw_stage_state *stage_state,
+                           void *dst,
+                           const uint32_t *param,
+                           unsigned nr_params);
 void
 brw_upload_pull_constants(struct brw_context *brw,
                           GLbitfield64 brw_new_constbuf,
                           const struct gl_program *prog,
                           struct brw_stage_state *stage_state,
                           const struct brw_stage_prog_data *prog_data);
+void
+brw_upload_cs_push_constants(struct brw_context *brw,
+                             const struct gl_program *prog,
+                             const struct brw_cs_prog_data *cs_prog_data,
+                             struct brw_stage_state *stage_state);
 
 /* gen7_vs_state.c */
 void

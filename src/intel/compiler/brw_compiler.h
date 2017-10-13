@@ -28,6 +28,7 @@
 #include "common/gen_device_info.h"
 #include "main/mtypes.h"
 #include "main/macros.h"
+#include "util/ralloc.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,7 +37,6 @@ extern "C" {
 struct ra_regs;
 struct nir_shader;
 struct brw_program;
-union gl_constant_value;
 
 struct brw_compiler {
    const struct gen_device_info *devinfo;
@@ -106,6 +106,12 @@ struct brw_compiler {
     * Base Address?  (If not, it's a normal GPU address.)
     */
    bool constant_buffer_0_is_relative;
+
+   /**
+    * Whether or not the driver supports pull constants.  If not, the compiler
+    * will attempt to push everything.
+    */
+   bool supports_pull_constants;
 };
 
 
@@ -491,6 +497,68 @@ struct brw_ubo_range
    uint8_t length;
 };
 
+/* We reserve the first 2^16 values for builtins */
+#define BRW_PARAM_IS_BUILTIN(param) (((param) & 0xffff0000) == 0)
+
+enum brw_param_builtin {
+   BRW_PARAM_BUILTIN_ZERO,
+
+   BRW_PARAM_BUILTIN_CLIP_PLANE_0_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_0_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_0_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_0_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_1_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_1_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_1_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_1_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_2_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_2_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_2_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_2_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_3_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_3_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_3_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_3_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_4_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_4_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_4_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_4_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_5_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_5_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_5_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_5_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_6_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_6_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_6_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_6_W,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_7_X,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_7_Y,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_7_Z,
+   BRW_PARAM_BUILTIN_CLIP_PLANE_7_W,
+
+   BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_X,
+   BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_Y,
+   BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_Z,
+   BRW_PARAM_BUILTIN_TESS_LEVEL_OUTER_W,
+   BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_X,
+   BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_Y,
+
+   BRW_PARAM_BUILTIN_THREAD_LOCAL_ID,
+};
+
+#define BRW_PARAM_BUILTIN_CLIP_PLANE(idx, comp) \
+   (BRW_PARAM_BUILTIN_CLIP_PLANE_0_X + ((idx) << 2) + (comp))
+
+#define BRW_PARAM_BUILTIN_IS_CLIP_PLANE(param)  \
+   ((param) >= BRW_PARAM_BUILTIN_CLIP_PLANE_0_X && \
+    (param) <= BRW_PARAM_BUILTIN_CLIP_PLANE_7_W)
+
+#define BRW_PARAM_BUILTIN_CLIP_PLANE_IDX(param) \
+   (((param) - BRW_PARAM_BUILTIN_CLIP_PLANE_0_X) >> 2)
+
+#define BRW_PARAM_BUILTIN_CLIP_PLANE_COMP(param) \
+   (((param) - BRW_PARAM_BUILTIN_CLIP_PLANE_0_X) & 0x3)
+
 struct brw_stage_prog_data {
    struct {
       /** size of our binding table. */
@@ -515,7 +583,6 @@ struct brw_stage_prog_data {
 
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;
-   unsigned nr_image_params;
 
    unsigned curb_read_length;
    unsigned total_scratch;
@@ -529,15 +596,27 @@ struct brw_stage_prog_data {
 
    bool use_alt_mode; /**< Use ALT floating point mode?  Otherwise, IEEE. */
 
-   /* Pointers to tracked values (only valid once
-    * _mesa_load_state_parameters has been called at runtime).
+   /* 32-bit identifiers for all push/pull parameters.  These can be anything
+    * the driver wishes them to be; the core of the back-end compiler simply
+    * re-arranges them.  The one restriction is that the bottom 2^16 values
+    * are reserved for builtins defined in the brw_param_builtin enum defined
+    * above.
     */
-   const union gl_constant_value **param;
-   const union gl_constant_value **pull_param;
-
-   /** Image metadata passed to the shader as uniforms. */
-   struct brw_image_param *image_param;
+   uint32_t *param;
+   uint32_t *pull_param;
 };
+
+static inline uint32_t *
+brw_stage_prog_data_add_params(struct brw_stage_prog_data *prog_data,
+                               unsigned nr_new_params)
+{
+   unsigned old_nr_params = prog_data->nr_params;
+   prog_data->nr_params += nr_new_params;
+   prog_data->param = reralloc(ralloc_parent(prog_data->param),
+                               prog_data->param, uint32_t,
+                               prog_data->nr_params);
+   return prog_data->param + old_nr_params;
+}
 
 static inline void
 brw_mark_surface_used(struct brw_stage_prog_data *prog_data,
@@ -661,7 +740,6 @@ struct brw_cs_prog_data {
    unsigned threads;
    bool uses_barrier;
    bool uses_num_work_groups;
-   int thread_local_id_index;
 
    struct {
       struct brw_push_const_block cross_thread;
@@ -1020,7 +1098,6 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
                const struct brw_vs_prog_key *key,
                struct brw_vs_prog_data *prog_data,
                const struct nir_shader *shader,
-               gl_clip_plane *clip_planes,
                bool use_legacy_snorm_formula,
                int shader_time_index,
                unsigned *final_assembly_size,

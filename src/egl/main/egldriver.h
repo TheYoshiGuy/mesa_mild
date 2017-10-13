@@ -70,22 +70,12 @@ extern "C" {
    _EGL_DRIVER_TYPECAST(drvname ## _config, _EGLConfig, obj)
 
 
-typedef _EGLDriver *(*_EGLMain_t)(const char *args);
-
-
 /**
  * Base class for device drivers.
  */
 struct _egl_driver
 {
    const char *Name;  /**< name of this driver */
-
-   /**
-    * Release the driver resource.
-    *
-    * It is called before dlclose().
-    */
-   void (*Unload)(_EGLDriver *drv);
 
    _EGLAPI API;  /**< EGL API dispatch table */
 };
