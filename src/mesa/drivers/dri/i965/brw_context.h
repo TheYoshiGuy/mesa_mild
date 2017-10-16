@@ -465,6 +465,7 @@ struct intel_batchbuffer {
    bool use_batch_first;
    bool needs_sol_reset;
    bool state_base_address_emitted;
+   bool no_wrap;
 
    struct brw_reloc_list batch_relocs;
    struct brw_reloc_list state_relocs;
@@ -695,7 +696,6 @@ struct brw_context
    uint32_t reset_count;
 
    struct intel_batchbuffer batch;
-   bool no_batch_wrap;
 
    struct {
       struct brw_bo *bo;
@@ -1041,14 +1041,11 @@ struct brw_context
    struct {
       struct brw_stage_state base;
 
-      GLuint render_surf;
-
       /**
        * Buffer object used in place of multisampled null render targets on
        * Gen6.  See brw_emit_null_surface_state().
        */
       struct brw_bo *multisampled_null_render_target_bo;
-      uint32_t fast_clear_op;
 
       float offset_clamp;
    } wm;

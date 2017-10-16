@@ -72,14 +72,21 @@ if (with_gles1 or with_gles2) and not with_opengl
 endif
 
 with_dri = false
+with_dri_i915 = false
 with_dri_i965 = false
 with_dri_swrast = false
 _drivers = get_option('dri-drivers')
 if _drivers != ''
   _split = _drivers.split(',')
+  with_dri_i915 = _split.contains('i915')
   with_dri_i965 = _split.contains('i965')
   with_dri_swrast = _split.contains('swrast')
   with_dri = true
+endif
+
+dep_libdrm_intel = []
+if with_dri_i915
+  dep_libdrm_intel = dependency('libdrm_intel', version : '>= 2.4.75')
 endif
 
 if not with_dri
@@ -582,7 +589,7 @@ if with_platform_x11
         dependency('xcb-glx', version : '>= 1.8.1'),
       ]
 
-      dep_xf86vm = dependency('xf86vm', required : false)
+      dep_xf86vm = dependency('xxf86vm', required : false)
     endif
     # TODO: XF86VIDMODE
   endif
