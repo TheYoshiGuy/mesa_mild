@@ -18,44 +18,26 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-inc_common = include_directories(
-  '../include', '.', 'mapi', 'mesa', 'gallium/include', 'gallium/auxiliary')
-inc_mesa = include_directories('mesa')
-inc_mapi = include_directories('mapi')
-inc_src = include_directories('.')
+files_main_test = files('enum_strings.cpp')
+link_main_test = []
 
-libglsl_util = static_library(
-  'glsl_util',
-  files('mesa/main/extensions_table.c', 'mesa/main/imports.c',
-        'mesa/program/prog_parameter.c', 'mesa/program/symbol_table.c',
-        'mesa/program/dummy_errors.c'),
-  include_directories : [inc_common],
-  c_args : [c_vis_args],
-  build_by_default : false,
-)
-
-sha1_h = vcs_tag(
-  input : 'git_sha1.h.in',
-  output : 'git_sha1.h',
-)
-
-subdir('gtest')
-subdir('util')
-subdir('mapi/glapi/gen')
-subdir('mapi')
-# TODO: opengl
-# TODO: osmesa
-subdir('compiler')
-subdir('egl/wayland/wayland-drm')
-subdir('vulkan')
-subdir('amd')
-subdir('intel')
-# TODO: vc4
-subdir('mesa')
-subdir('loader')
-subdir('glx')
-if with_gbm
-  subdir('gbm')
+if with_shared_glapi
+  files_main_test += files(
+    'dispatch_sanity.cpp',
+    'mesa_formats.cpp',
+    'mesa_extensions.cpp',
+    'program_state_string.cpp',
+  )
+  link_main_test += libglapi
+else
+  files_main_test += files('stub.cpp')
 endif
-# TODO: egl
-subdir('gallium')
+
+test('main-test', executable(
+    'main_test',
+    [files_main_test, main_dispatch_h],
+    include_directories : [inc_include, inc_src, inc_mapi, inc_mesa],
+    dependencies : [idep_gtest, dep_clock, dep_dl, dep_thread],
+    link_with : [libmesa_classic, link_main_test],
+  )
+)
