@@ -51,10 +51,15 @@ if with_gallium_drisw_kms
   gallium_dri_link_with += libswkmsdri
 endif
 
+if with_gallium_pl111
+  gallium_dri_c_args += '-DGALLIUM_PL111'
+  gallium_dri_link_with += [libpl111winsys]
+  gallium_dri_drivers += 'pl111_dri.so'
+endif
 if with_gallium_radeonsi
   gallium_dri_c_args += '-DGALLIUM_RADEONSI'
   gallium_dri_link_with += [
-    libradeonsi, libnir, libradeonwinsys, libamdgpuwinsys, libradeon,
+    libradeonsi, libradeonwinsys, libamdgpuwinsys, libradeon,
     libamd_common,
   ]
   gallium_dri_drivers += 'radeonsi_dri.so'
@@ -75,6 +80,24 @@ if with_gallium_softpipe
     gallium_dri_c_args += '-DGALLIUM_LLVMPIPE'
     gallium_dri_link_with += libllvmpipe
   endif
+endif
+if with_gallium_vc4
+  gallium_dri_c_args += '-DGALLIUM_VC4'
+  gallium_dri_link_with += [libvc4, libvc4winsys]
+  gallium_dri_drivers += 'vc4_dri.so'
+endif
+if with_gallium_vc5
+  gallium_dri_c_args += '-DGALLIUM_VC5'
+  gallium_dri_link_with += [libvc5, libvc5winsys, libbroadcom_vc5]
+  gallium_dri_drivers += 'vc5_dri.so'
+endif
+
+if with_gallium_vc4 or with_gallium_vc5
+  gallium_dri_link_with += libbroadcom_cle
+endif
+
+if with_gallium_vc4 or with_gallium_vc5 or with_gallium_radeonsi
+  gallium_dri_link_with += libnir
 endif
 
 libgallium_dri = shared_library(

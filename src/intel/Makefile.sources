@@ -18,7 +18,9 @@ COMMON_FILES = \
 	common/gen_l3_config.c \
 	common/gen_l3_config.h \
 	common/gen_urb_config.c \
-	common/gen_sample_positions.h
+	common/gen_sample_positions.h \
+	common/intel_log.c \
+	common/intel_log.h
 
 COMPILER_FILES = \
 	compiler/brw_cfg.cpp \
@@ -228,6 +230,9 @@ VULKAN_FILES := \
 	vulkan/anv_util.c \
 	vulkan/anv_wsi.c \
 	vulkan/vk_format_info.h
+
+VULKAN_ANDROID_FILES := \
+	vulkan/anv_android.c
 
 VULKAN_WSI_WAYLAND_FILES := \
 	vulkan/anv_wsi_wayland.c

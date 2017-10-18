@@ -50,7 +50,7 @@ compiler_perf_log(void *data, const char *fmt, ...)
    va_start(args, fmt);
 
    if (unlikely(INTEL_DEBUG & DEBUG_PERF))
-      vfprintf(stderr, fmt, args);
+      intel_logd_v(fmt, args);
 
    va_end(args);
 }
@@ -294,11 +294,11 @@ anv_physical_device_init(struct anv_physical_device *device,
    }
 
    if (device->info.is_haswell) {
-      fprintf(stderr, "WARNING: Haswell Vulkan support is incomplete\n");
+      intel_logw("Haswell Vulkan support is incomplete");
    } else if (device->info.gen == 7 && !device->info.is_baytrail) {
-      fprintf(stderr, "WARNING: Ivy Bridge Vulkan support is incomplete\n");
+      intel_logw("Ivy Bridge Vulkan support is incomplete");
    } else if (device->info.gen == 7 && device->info.is_baytrail) {
-      fprintf(stderr, "WARNING: Bay Trail Vulkan support is incomplete\n");
+      intel_logw("Bay Trail Vulkan support is incomplete");
    } else if (device->info.gen >= 8 && device->info.gen <= 9) {
       /* Broadwell, Cherryview, Skylake, Broxton, Kabylake is as fully
        * supported as anything */
@@ -365,8 +365,7 @@ anv_physical_device_init(struct anv_physical_device *device,
        * many platforms, but otherwise, things will just work.
        */
       if (device->subslice_total < 1 || device->eu_total < 1) {
-         fprintf(stderr, "WARNING: Kernel 4.1 required to properly"
-                         " query GPU properties.\n");
+         intel_logw("Kernel 4.1 required to properly query GPU properties");
       }
    } else if (device->info.gen == 7) {
       device->subslice_total = 1 << (device->info.gt - 1);
@@ -1544,10 +1543,42 @@ VkResult anv_AllocateMemory(
              VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR);
 
       result = anv_bo_cache_import(device, &device->bo_cache,
-                                   fd_info->fd, pAllocateInfo->allocationSize,
-                                   &mem->bo);
+                                   fd_info->fd, &mem->bo);
       if (result != VK_SUCCESS)
          goto fail;
+
+      VkDeviceSize aligned_alloc_size =
+         align_u64(pAllocateInfo->allocationSize, 4096);
+
+      /* For security purposes, we reject importing the bo if it's smaller
+       * than the requested allocation size.  This prevents a malicious client
+       * from passing a buffer to a trusted client, lying about the size, and
+       * telling the trusted client to try and texture from an image that goes
+       * out-of-bounds.  This sort of thing could lead to GPU hangs or worse
+       * in the trusted client.  The trusted client can protect itself against
+       * this sort of attack but only if it can trust the buffer size.
+       */
+      if (mem->bo->size < aligned_alloc_size) {
+         result = vk_errorf(device->instace, device,
+                            VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR,
+                            "aligned allocationSize too large for "
+                            "VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR: "
+                            "%"PRIu64"B > %"PRIu64"B",
+                            aligned_alloc_size, mem->bo->size);
+         anv_bo_cache_release(device, &device->bo_cache, mem->bo);
+         goto fail;
+      }
+
+      /* From the Vulkan spec:
+       *
+       *    "Importing memory from a file descriptor transfers ownership of
+       *    the file descriptor from the application to the Vulkan
+       *    implementation. The application must not perform any operations on
+       *    the file descriptor after a successful import."
+       *
+       * If the import fails, we leave the file descriptor open.
+       */
+      close(fd_info->fd);
    } else {
       result = anv_bo_cache_alloc(device, &device->bo_cache,
                                   pAllocateInfo->allocationSize,

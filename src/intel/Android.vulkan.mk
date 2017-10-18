@@ -28,6 +28,7 @@ VK_ENTRYPOINTS_SCRIPT := $(MESA_PYTHON2) $(LOCAL_PATH)/vulkan/anv_entrypoints_ge
 VK_EXTENSIONS_SCRIPT := $(MESA_PYTHON2) $(LOCAL_PATH)/vulkan/anv_extensions.py
 
 VULKAN_COMMON_INCLUDES := \
+	$(MESA_TOP)/include \
 	$(MESA_TOP)/src/mapi \
 	$(MESA_TOP)/src/gallium/auxiliary \
 	$(MESA_TOP)/src/gallium/include \
@@ -36,7 +37,8 @@ VULKAN_COMMON_INCLUDES := \
 	$(MESA_TOP)/src/vulkan/util \
 	$(MESA_TOP)/src/intel \
 	$(MESA_TOP)/include/drm-uapi \
-	$(MESA_TOP)/src/intel/vulkan
+	$(MESA_TOP)/src/intel/vulkan \
+	frameworks/native/vulkan/include
 
 # libmesa_anv_entrypoints with header and dummy.c
 #
@@ -237,13 +239,16 @@ include $(BUILD_STATIC_LIBRARY)
 
 include $(CLEAR_VARS)
 
-LOCAL_MODULE := libvulkan_intel
+LOCAL_MODULE := vulkan.$(TARGET_BOARD_PLATFORM)
 LOCAL_MODULE_CLASS := SHARED_LIBRARIES
+LOCAL_PROPRIETARY_MODULE := true
+LOCAL_MODULE_RELATIVE_PATH := hw
 
 LOCAL_LDFLAGS += -Wl,--build-id=sha1
 
 LOCAL_SRC_FILES := \
-	$(VULKAN_GEM_FILES)
+	$(VULKAN_GEM_FILES) \
+	$(VULKAN_ANDROID_FILES)
 
 LOCAL_C_INCLUDES := \
 	$(VULKAN_COMMON_INCLUDES) \
@@ -268,7 +273,7 @@ LOCAL_WHOLE_STATIC_LIBRARIES := \
 	libmesa_intel_compiler \
 	libmesa_anv_entrypoints
 
-LOCAL_SHARED_LIBRARIES := libdrm libz
+LOCAL_SHARED_LIBRARIES := libdrm libz libsync liblog
 
 include $(MESA_COMMON_MK)
 include $(BUILD_SHARED_LIBRARY)

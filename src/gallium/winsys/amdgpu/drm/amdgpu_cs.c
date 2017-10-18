@@ -616,7 +616,8 @@ static unsigned amdgpu_cs_add_buffer(struct radeon_winsys_cs *rcs,
    return index;
 }
 
-static bool amdgpu_ib_new_buffer(struct amdgpu_winsys *ws, struct amdgpu_ib *ib)
+static bool amdgpu_ib_new_buffer(struct amdgpu_winsys *ws, struct amdgpu_ib *ib,
+                                 enum ring_type ring_type)
 {
    struct pb_buffer *pb;
    uint8_t *mapped;
@@ -646,7 +647,11 @@ static bool amdgpu_ib_new_buffer(struct amdgpu_winsys *ws, struct amdgpu_ib *ib)
    pb = ws->base.buffer_create(&ws->base, buffer_size,
                                ws->info.gart_page_size,
                                RADEON_DOMAIN_GTT,
-                               RADEON_FLAG_NO_INTERPROCESS_SHARING);
+                               RADEON_FLAG_NO_INTERPROCESS_SHARING |
+                               (ring_type == RING_GFX ||
+                                ring_type == RING_COMPUTE ||
+                                ring_type == RING_DMA ?
+                                   RADEON_FLAG_GTT_WC : 0));
    if (!pb)
       return false;
 
@@ -716,7 +721,7 @@ static bool amdgpu_get_new_ib(struct radeon_winsys *ws, struct amdgpu_cs *cs,
    /* Allocate a new buffer for IBs if the current buffer is all used. */
    if (!ib->big_ib_buffer ||
        ib->used_ib_space + ib_size > ib->big_ib_buffer->size) {
-      if (!amdgpu_ib_new_buffer(aws, ib))
+      if (!amdgpu_ib_new_buffer(aws, ib, cs->ring_type))
          return false;
    }
 
@@ -725,6 +730,7 @@ static bool amdgpu_get_new_ib(struct radeon_winsys *ws, struct amdgpu_cs *cs,
    /* ib_bytes is in dwords and the conversion to bytes will be done before
     * the CS ioctl. */
    ib->ptr_ib_size = &info->ib_bytes;
+   ib->ptr_ib_size_inside_ib = false;
 
    amdgpu_cs_add_buffer(&cs->main.base, ib->big_ib_buffer,
                         RADEON_USAGE_READ, 0, RADEON_PRIO_IB1);
@@ -736,9 +742,19 @@ static bool amdgpu_get_new_ib(struct radeon_winsys *ws, struct amdgpu_cs *cs,
    return true;
 }
 
+static void amdgpu_set_ib_size(struct amdgpu_ib *ib)
+{
+   if (ib->ptr_ib_size_inside_ib) {
+      *ib->ptr_ib_size = ib->base.current.cdw |
+                         S_3F2_CHAIN(1) | S_3F2_VALID(1);
+   } else {
+      *ib->ptr_ib_size = ib->base.current.cdw;
+   }
+}
+
 static void amdgpu_ib_finalize(struct amdgpu_ib *ib)
 {
-   *ib->ptr_ib_size |= ib->base.current.cdw;
+   amdgpu_set_ib_size(ib);
    ib->used_ib_space += ib->base.current.cdw * 4;
    ib->max_ib_size = MAX2(ib->max_ib_size, ib->base.prev_dw + ib->base.current.cdw);
 }
@@ -915,7 +931,7 @@ static bool amdgpu_cs_check_space(struct radeon_winsys_cs *rcs, unsigned dw)
       rcs->max_prev = new_max_prev;
    }
 
-   if (!amdgpu_ib_new_buffer(cs->ctx->ws, ib))
+   if (!amdgpu_ib_new_buffer(cs->ctx->ws, ib, cs->ring_type))
       return false;
 
    assert(ib->used_ib_space == 0);
@@ -933,14 +949,14 @@ static bool amdgpu_cs_check_space(struct radeon_winsys_cs *rcs, unsigned dw)
                                            : PKT3_INDIRECT_BUFFER_CONST, 2, 0));
    radeon_emit(rcs, va);
    radeon_emit(rcs, va >> 32);
-   new_ptr_ib_size = &rcs->current.buf[rcs->current.cdw];
-   radeon_emit(rcs, S_3F2_CHAIN(1) | S_3F2_VALID(1));
+   new_ptr_ib_size = &rcs->current.buf[rcs->current.cdw++];
 
    assert((rcs->current.cdw & 7) == 0);
    assert(rcs->current.cdw <= rcs->current.max_dw);
 
-   *ib->ptr_ib_size |= rcs->current.cdw;
+   amdgpu_set_ib_size(ib);
    ib->ptr_ib_size = new_ptr_ib_size;
+   ib->ptr_ib_size_inside_ib = true;
 
    /* Hook up the new chunk */
    rcs->prev[rcs->num_prev].buf = rcs->current.buf;
@@ -1407,6 +1423,7 @@ static int amdgpu_cs_flush(struct radeon_winsys_cs *rcs,
          while (rcs->current.cdw & 7)
             radeon_emit(rcs, 0xffff1000); /* type3 nop packet */
       }
+      ws->gfx_ib_size_counter += (rcs->prev_dw + rcs->current.cdw) * 4;
       break;
    case RING_UVD:
       while (rcs->current.cdw & 15)

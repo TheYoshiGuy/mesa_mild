@@ -46,7 +46,7 @@ option(
 option(
   'gallium-drivers',
   type : 'string',
-  value : 'radeonsi,nouveau,swrast',
+  value : 'pl111,radeonsi,nouveau,swrast,vc4',
   description : 'comma separated list of gallium drivers to build.'
 )
 option(

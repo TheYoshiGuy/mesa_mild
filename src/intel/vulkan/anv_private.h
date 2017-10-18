@@ -69,11 +69,13 @@ struct gen_l3_config;
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_intel.h>
 #include <vulkan/vk_icd.h>
+#include <vulkan/vk_android_native_buffer.h>
 
 #include "anv_entrypoints.h"
 #include "isl/isl.h"
 
 #include "common/gen_debug.h"
+#include "common/intel_log.h"
 #include "wsi_common.h"
 
 /* Allowing different clear colors requires us to perform a depth resolve at
@@ -314,11 +316,9 @@ VkResult __vk_errorf(struct anv_instance *instance, const void *object,
 #define vk_errorf(instance, obj, error, format, ...)\
     __vk_errorf(instance, obj, REPORT_OBJECT_TYPE(obj), error,\
                 __FILE__, __LINE__, format, ## __VA_ARGS__);
-#define anv_debug(format, ...) fprintf(stderr, "debug: " format, ##__VA_ARGS__)
 #else
 #define vk_error(error) error
 #define vk_errorf(instance, obj, error, format, ...) error
-#define anv_debug(format, ...)
 #endif
 
 /**
@@ -337,10 +337,8 @@ VkResult __vk_errorf(struct anv_instance *instance, const void *object,
  *    defined by extensions supported by that component.
  */
 #define anv_debug_ignored_stype(sType) \
-   anv_debug("%s: ignored VkStructureType %u\n", __func__, (sType))
+   intel_logd("%s: ignored VkStructureType %u\n", __func__, (sType))
 
-void __anv_finishme(const char *file, int line, const char *format, ...)
-   anv_printflike(3, 4);
 void __anv_perf_warn(struct anv_instance *instance, const void *object,
                      VkDebugReportObjectTypeEXT type, const char *file,
                      int line, const char *format, ...)
@@ -364,7 +362,8 @@ void anv_debug_report(struct anv_instance *instance,
    do { \
       static bool reported = false; \
       if (!reported) { \
-         __anv_finishme(__FILE__, __LINE__, format, ##__VA_ARGS__); \
+         intel_logw("%s:%d: FINISHME: " format, __FILE__, __LINE__, \
+                    ##__VA_ARGS__); \
          reported = true; \
       } \
    } while (0)
@@ -386,7 +385,7 @@ void anv_debug_report(struct anv_instance *instance,
 #ifdef DEBUG
 #define anv_assert(x) ({ \
    if (unlikely(!(x))) \
-      fprintf(stderr, "%s:%d ASSERT: %s\n", __FILE__, __LINE__, #x); \
+      intel_loge("%s:%d ASSERT: %s", __FILE__, __LINE__, #x); \
 })
 #else
 #define anv_assert(x)
@@ -720,7 +719,7 @@ VkResult anv_bo_cache_alloc(struct anv_device *device,
                             uint64_t size, struct anv_bo **bo);
 VkResult anv_bo_cache_import(struct anv_device *device,
                              struct anv_bo_cache *cache,
-                             int fd, uint64_t size, struct anv_bo **bo);
+                             int fd, struct anv_bo **bo);
 VkResult anv_bo_cache_export(struct anv_device *device,
                              struct anv_bo_cache *cache,
                              struct anv_bo *bo_in, int *fd_out);
@@ -931,6 +930,7 @@ int anv_gem_destroy_context(struct anv_device *device, int context);
 int anv_gem_get_context_param(int fd, int context, uint32_t param,
                               uint64_t *value);
 int anv_gem_get_param(int fd, uint32_t param);
+int anv_gem_get_tiling(struct anv_device *device, uint32_t gem_handle);
 bool anv_gem_get_bit6_swizzle(int fd, uint32_t tiling);
 int anv_gem_get_aperture(int fd, uint64_t *size);
 bool anv_gem_supports_48b_addresses(int fd);
@@ -2422,6 +2422,11 @@ struct anv_image {
        */
       struct anv_bo *bo;
       VkDeviceSize bo_offset;
+
+      /**
+       * When destroying the image, also free the bo.
+       * */
+      bool bo_is_owned;
    } planes[3];
 };
 
@@ -2625,6 +2630,9 @@ struct anv_image_create_info {
    /** An opt-in bitmask which filters an ISL-mapping of the Vulkan tiling. */
    isl_tiling_flags_t isl_tiling_flags;
 
+   /** These flags will be added to any derived from VkImageCreateInfo. */
+   isl_surf_usage_flags_t isl_extra_usage_flags;
+
    uint32_t stride;
 };
 
@@ -2632,6 +2640,14 @@ VkResult anv_image_create(VkDevice _device,
                           const struct anv_image_create_info *info,
                           const VkAllocationCallbacks* alloc,
                           VkImage *pImage);
+
+#ifdef ANDROID
+VkResult anv_image_from_gralloc(VkDevice device_h,
+                                const VkImageCreateInfo *base_info,
+                                const VkNativeBufferANDROID *gralloc_info,
+                                const VkAllocationCallbacks *alloc,
+                                VkImage *pImage);
+#endif
 
 const struct anv_surface *
 anv_image_get_surface_for_aspect_mask(const struct anv_image *image,

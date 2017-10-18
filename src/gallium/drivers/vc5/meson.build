@@ -1,15 +1,15 @@
-# Copyright © 2017 Intel Corporation
-
+# Copyright © 2017 Broadcom
+#
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
 # in the Software without restriction, including without limitation the rights
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-
+#
 # The above copyright notice and this permission notice shall be included in
 # all copies or substantial portions of the Software.
-
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -18,46 +18,48 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-inc_common = include_directories(
-  '../include', '.', 'mapi', 'mesa', 'gallium/include', 'gallium/auxiliary')
-inc_mesa = include_directories('mesa')
-inc_mapi = include_directories('mapi')
-inc_src = include_directories('.')
+files_libvc5 = files(
+  'vc5_blit.c',
+  'vc5_bufmgr.c',
+  'vc5_bufmgr.h',
+  'vc5_cl.c',
+  'vc5_cl.h',
+  'vc5_context.c',
+  'vc5_context.h',
+  'vc5_draw.c',
+  'vc5_emit.c',
+  'vc5_fence.c',
+  'vc5_formats.c',
+  'vc5_job.c',
+  'vc5_program.c',
+  'vc5_query.c',
+  'vc5_rcl.c',
+  'vc5_resource.c',
+  'vc5_resource.h',
+  'vc5_screen.c',
+  'vc5_screen.h',
+  'vc5_simulator.c',
+  'vc5_state.c',
+  'vc5_tiling.c',
+  'vc5_tiling.h',
+  'vc5_uniforms.c',
+)
 
-libglsl_util = static_library(
-  'glsl_util',
-  files('mesa/main/extensions_table.c', 'mesa/main/imports.c',
-        'mesa/program/prog_parameter.c', 'mesa/program/symbol_table.c',
-        'mesa/program/dummy_errors.c'),
-  include_directories : [inc_common],
-  c_args : [c_vis_args],
+v3dv3_c_args = []
+dep_v3dv3 = dependency('v3dv3')
+if dep_v3dv3.found()
+  v3dv3_c_args = '-DUSE_VC5_SIMULATOR'
+endif
+
+libvc5 = static_library(
+  'vc5',
+  [files_libvc5, v3d_xml_pack, nir_opcodes_h, nir_builder_opcodes_h],
+  include_directories : [
+    inc_src, inc_include, inc_gallium, inc_gallium_aux, inc_broadcom,
+    inc_gallium_drivers, inc_drm_uapi,
+  ],
+  c_args : [c_vis_args, v3dv3_c_args],
+  cpp_args : [cpp_vis_args],
+  dependencies : [dep_v3dv3, dep_libdrm, dep_valgrind],
   build_by_default : false,
 )
-
-sha1_h = vcs_tag(
-  input : 'git_sha1.h.in',
-  output : 'git_sha1.h',
-)
-
-subdir('gtest')
-subdir('util')
-subdir('mapi/glapi/gen')
-subdir('mapi')
-# TODO: opengl
-# TODO: osmesa
-subdir('compiler')
-subdir('egl/wayland/wayland-drm')
-subdir('vulkan')
-subdir('amd')
-if with_gallium_vc4
-  subdir('broadcom')
-endif
-subdir('intel')
-subdir('mesa')
-subdir('loader')
-subdir('glx')
-if with_gbm
-  subdir('gbm')
-endif
-# TODO: egl
-subdir('gallium')

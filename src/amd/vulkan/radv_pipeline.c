@@ -99,226 +99,6 @@ static uint32_t get_hash_flags(struct radv_device *device)
 	return hash_flags;
 }
 
-static struct radv_shader_variant *
-radv_pipeline_compile(struct radv_pipeline *pipeline,
-		      struct radv_pipeline_cache *cache,
-		      struct radv_shader_module *module,
-		      const char *entrypoint,
-		      gl_shader_stage stage,
-		      const VkSpecializationInfo *spec_info,
-		      struct radv_pipeline_layout *layout,
-		      const struct ac_shader_variant_key *key)
-{
-	unsigned char sha1[20];
-	unsigned char gs_copy_sha1[20];
-	struct radv_shader_variant *variant;
-	nir_shader *nir;
-	void *code = NULL;
-	unsigned code_size = 0;
-	unsigned hash_flags = get_hash_flags(pipeline->device);
-	if (module->nir)
-		_mesa_sha1_compute(module->nir->info.name,
-				   strlen(module->nir->info.name),
-				   module->sha1);
-
-	radv_hash_shader(sha1, module, entrypoint, spec_info, layout, key, hash_flags);
-	if (stage == MESA_SHADER_GEOMETRY)
-		radv_hash_shader(gs_copy_sha1, module, entrypoint, spec_info,
-				 layout, key, hash_flags | RADV_HASH_SHADER_IS_GEOM_COPY_SHADER);
-
-	variant = radv_create_shader_variant_from_pipeline_cache(pipeline->device,
-								 cache,
-								 sha1);
-
-	if (stage == MESA_SHADER_GEOMETRY) {
-		pipeline->gs_copy_shader =
-			radv_create_shader_variant_from_pipeline_cache(
-				pipeline->device,
-				cache,
-				gs_copy_sha1);
-	}
-
-	if (variant &&
-	    (stage != MESA_SHADER_GEOMETRY || pipeline->gs_copy_shader))
-		return variant;
-
-	nir = radv_shader_compile_to_nir(pipeline->device,
-				         module, entrypoint, stage,
-					 spec_info);
-	if (nir == NULL)
-		return NULL;
-
-	if (!variant) {
-		variant = radv_shader_variant_create(pipeline->device, module, nir,
-						     layout, key, &code,
-						     &code_size);
-	}
-
-	if (stage == MESA_SHADER_GEOMETRY && !pipeline->gs_copy_shader) {
-		void *gs_copy_code = NULL;
-		unsigned gs_copy_code_size = 0;
-		pipeline->gs_copy_shader = radv_create_gs_copy_shader(
-			pipeline->device, nir, &gs_copy_code,
-			&gs_copy_code_size, key->has_multiview_view_index);
-
-		if (pipeline->gs_copy_shader) {
-			pipeline->gs_copy_shader =
-				radv_pipeline_cache_insert_shader(pipeline->device,
-								  cache,
-								  gs_copy_sha1,
-								  pipeline->gs_copy_shader,
-								  gs_copy_code,
-								  gs_copy_code_size);
-		}
-
-		free(gs_copy_code);
-	}
-	if (!module->nir && !pipeline->device->trace_bo)
-		ralloc_free(nir);
-
-	if (variant)
-		variant = radv_pipeline_cache_insert_shader(pipeline->device,
-							    cache, sha1,
-							    variant, code,
-							    code_size);
-
-	if (code)
-		free(code);
-	return variant;
-}
-
-static struct ac_shader_variant_key
-radv_compute_tes_key(bool as_es, bool export_prim_id)
-{
-	struct ac_shader_variant_key key;
-	memset(&key, 0, sizeof(key));
-	key.tes.as_es = as_es;
-	/* export prim id only happens when no geom shader */
-	if (!as_es)
-		key.tes.export_prim_id = export_prim_id;
-	return key;
-}
-
-static struct ac_shader_variant_key
-radv_compute_tcs_key(unsigned primitive_mode, unsigned input_vertices)
-{
-	struct ac_shader_variant_key key;
-	memset(&key, 0, sizeof(key));
-	key.tcs.primitive_mode = primitive_mode;
-	key.tcs.input_vertices = input_vertices;
-	return key;
-}
-
-static void
-radv_tess_pipeline_compile(struct radv_pipeline *pipeline,
-			   struct radv_pipeline_cache *cache,
-			   struct radv_shader_module *tcs_module,
-			   struct radv_shader_module *tes_module,
-			   const char *tcs_entrypoint,
-			   const char *tes_entrypoint,
-			   const VkSpecializationInfo *tcs_spec_info,
-			   const VkSpecializationInfo *tes_spec_info,
-			   struct radv_pipeline_layout *layout,
-			   unsigned input_vertices,
-			   bool has_view_index)
-{
-	unsigned char tcs_sha1[20], tes_sha1[20];
-	struct radv_shader_variant *tes_variant = NULL, *tcs_variant = NULL;
-	nir_shader *tes_nir, *tcs_nir;
-	void *tes_code = NULL, *tcs_code = NULL;
-	unsigned tes_code_size = 0, tcs_code_size = 0;
-	struct ac_shader_variant_key tes_key;
-	struct ac_shader_variant_key tcs_key;
-	unsigned hash_flags = get_hash_flags(pipeline->device);
-
-	tes_key = radv_compute_tes_key(radv_pipeline_has_gs(pipeline),
-				       pipeline->shaders[MESA_SHADER_FRAGMENT]->info.fs.prim_id_input);
-	tes_key.has_multiview_view_index = has_view_index;
-	if (tes_module->nir)
-		_mesa_sha1_compute(tes_module->nir->info.name,
-				   strlen(tes_module->nir->info.name),
-				   tes_module->sha1);
-	radv_hash_shader(tes_sha1, tes_module, tes_entrypoint, tes_spec_info, layout, &tes_key, hash_flags);
-
-	tes_variant = radv_create_shader_variant_from_pipeline_cache(pipeline->device,
-								     cache,
-								     tes_sha1);
-
-	if (tes_variant) {
-		tcs_key = radv_compute_tcs_key(tes_variant->info.tes.primitive_mode, input_vertices);
-
-		if (tcs_module->nir)
-			_mesa_sha1_compute(tcs_module->nir->info.name,
-					   strlen(tcs_module->nir->info.name),
-					   tcs_module->sha1);
-
-		radv_hash_shader(tcs_sha1, tcs_module, tcs_entrypoint, tcs_spec_info, layout, &tcs_key, hash_flags);
-
-		tcs_variant = radv_create_shader_variant_from_pipeline_cache(pipeline->device,
-									     cache,
-									     tcs_sha1);
-	}
-
-	if (tcs_variant && tes_variant) {
-		pipeline->shaders[MESA_SHADER_TESS_CTRL] = tcs_variant;
-		pipeline->shaders[MESA_SHADER_TESS_EVAL] = tes_variant;
-		return;
-	}
-
-	tes_nir = radv_shader_compile_to_nir(pipeline->device,
-					     tes_module, tes_entrypoint, MESA_SHADER_TESS_EVAL,
-					     tes_spec_info);
-	if (tes_nir == NULL)
-		return;
-
-	tcs_nir = radv_shader_compile_to_nir(pipeline->device,
-					     tcs_module, tcs_entrypoint, MESA_SHADER_TESS_CTRL,
-					     tcs_spec_info);
-	if (tcs_nir == NULL)
-		return;
-
-	nir_lower_tes_patch_vertices(tes_nir,
-				     tcs_nir->info.tess.tcs_vertices_out);
-
-	tes_variant = radv_shader_variant_create(pipeline->device, tes_module, tes_nir,
-						 layout, &tes_key, &tes_code,
-						 &tes_code_size);
-
-	tcs_key = radv_compute_tcs_key(tes_nir->info.tess.primitive_mode, input_vertices);
-	if (tcs_module->nir)
-		_mesa_sha1_compute(tcs_module->nir->info.name,
-				   strlen(tcs_module->nir->info.name),
-				   tcs_module->sha1);
-
-	radv_hash_shader(tcs_sha1, tcs_module, tcs_entrypoint, tcs_spec_info, layout, &tcs_key, hash_flags);
-
-	tcs_variant = radv_shader_variant_create(pipeline->device, tcs_module, tcs_nir,
-						 layout, &tcs_key, &tcs_code,
-						 &tcs_code_size);
-
-	if (!tes_module->nir && !pipeline->device->trace_bo)
-		ralloc_free(tes_nir);
-
-	if (!tcs_module->nir && !pipeline->device->trace_bo)
-		ralloc_free(tcs_nir);
-
-	if (tes_variant)
-		tes_variant = radv_pipeline_cache_insert_shader(pipeline->device, cache, tes_sha1, tes_variant,
-								tes_code, tes_code_size);
-
-	if (tcs_variant)
-		tcs_variant = radv_pipeline_cache_insert_shader(pipeline->device, cache, tcs_sha1, tcs_variant,
-								tcs_code, tcs_code_size);
-
-	if (tes_code)
-		free(tes_code);
-	if (tcs_code)
-		free(tcs_code);
-	pipeline->shaders[MESA_SHADER_TESS_CTRL] = tcs_variant;
-	pipeline->shaders[MESA_SHADER_TESS_EVAL] = tes_variant;
-	return;
-}
-
 static VkResult
 radv_pipeline_scratch_init(struct radv_device *device,
                            struct radv_pipeline *pipeline)
@@ -1361,7 +1141,7 @@ radv_pipeline_init_dynamic_state(struct radv_pipeline *pipeline,
 }
 
 static struct ac_shader_variant_key
-radv_compute_vs_key(const VkGraphicsPipelineCreateInfo *pCreateInfo, bool as_es, bool as_ls, bool export_prim_id)
+radv_compute_vs_key(const VkGraphicsPipelineCreateInfo *pCreateInfo, bool as_es, bool as_ls)
 {
 	struct ac_shader_variant_key key;
 	const VkPipelineVertexInputStateCreateInfo *input_state =
@@ -1371,7 +1151,6 @@ radv_compute_vs_key(const VkGraphicsPipelineCreateInfo *pCreateInfo, bool as_es,
 	key.vs.instance_rate_inputs = 0;
 	key.vs.as_es = as_es;
 	key.vs.as_ls = as_ls;
-	key.vs.export_prim_id = export_prim_id;
 
 	for (unsigned i = 0; i < input_state->vertexAttributeDescriptionCount; ++i) {
 		unsigned binding;
@@ -1743,6 +1522,183 @@ static void calculate_ps_inputs(struct radv_pipeline *pipeline)
 	pipeline->graphics.ps_input_cntl_num = ps_offset;
 }
 
+static void
+radv_link_shaders(struct radv_pipeline *pipeline, nir_shader **shaders)
+{
+	nir_shader* ordered_shaders[MESA_SHADER_STAGES];
+	int shader_count = 0;
+
+	if(shaders[MESA_SHADER_FRAGMENT]) {
+		ordered_shaders[shader_count++] = shaders[MESA_SHADER_FRAGMENT];
+	}
+	if(shaders[MESA_SHADER_GEOMETRY]) {
+		ordered_shaders[shader_count++] = shaders[MESA_SHADER_GEOMETRY];
+	}
+	if(shaders[MESA_SHADER_TESS_EVAL]) {
+		ordered_shaders[shader_count++] = shaders[MESA_SHADER_TESS_EVAL];
+	}
+	if(shaders[MESA_SHADER_TESS_CTRL]) {
+		ordered_shaders[shader_count++] = shaders[MESA_SHADER_TESS_CTRL];
+	}
+	if(shaders[MESA_SHADER_VERTEX]) {
+		ordered_shaders[shader_count++] = shaders[MESA_SHADER_VERTEX];
+	}
+
+	for (int i = 1; i < shader_count; ++i)  {
+		nir_remove_dead_variables(ordered_shaders[i],
+					  nir_var_shader_out);
+		nir_remove_dead_variables(ordered_shaders[i - 1],
+					  nir_var_shader_in);
+
+		bool progress = nir_remove_unused_varyings(ordered_shaders[i],
+							   ordered_shaders[i - 1]);
+
+		if (progress) {
+			nir_lower_global_vars_to_local(ordered_shaders[i]);
+			radv_optimize_nir(ordered_shaders[i]);
+			nir_lower_global_vars_to_local(ordered_shaders[i - 1]);
+			radv_optimize_nir(ordered_shaders[i - 1]);
+		}
+	}
+}
+
+static
+void radv_create_shaders(struct radv_pipeline *pipeline,
+                         struct radv_device *device,
+                         struct radv_pipeline_cache *cache,
+                         struct ac_shader_variant_key *keys,
+                         const VkPipelineShaderStageCreateInfo **pStages)
+{
+	struct radv_shader_module fs_m = {0};
+	struct radv_shader_module *modules[MESA_SHADER_STAGES] = { 0, };
+	nir_shader *nir[MESA_SHADER_STAGES] = {0};
+	void *codes[MESA_SHADER_STAGES] = {0};
+	unsigned code_sizes[MESA_SHADER_STAGES] = {0};
+	unsigned char hash[20], gs_copy_hash[20];
+
+	for (unsigned i = 0; i < MESA_SHADER_STAGES; ++i) {
+		if (pStages[i]) {
+			modules[i] = radv_shader_module_from_handle(pStages[i]->module);
+			if (modules[i]->nir)
+				_mesa_sha1_compute(modules[i]->nir->info.name,
+				                   strlen(modules[i]->nir->info.name),
+				                   modules[i]->sha1);
+		}
+	}
+
+	radv_hash_shaders(hash, pStages, pipeline->layout, keys, get_hash_flags(device));
+	memcpy(gs_copy_hash, hash, 20);
+	gs_copy_hash[0] ^= 1;
+
+	if (modules[MESA_SHADER_GEOMETRY]) {
+		struct radv_shader_variant *variants[MESA_SHADER_STAGES] = {0};
+		radv_create_shader_variants_from_pipeline_cache(device, cache, gs_copy_hash, variants);
+		pipeline->gs_copy_shader = variants[MESA_SHADER_GEOMETRY];
+	}
+
+	if (radv_create_shader_variants_from_pipeline_cache(device, cache, hash, pipeline->shaders) &&
+	    (!modules[MESA_SHADER_GEOMETRY] || pipeline->gs_copy_shader))
+		return;
+
+	if (!modules[MESA_SHADER_FRAGMENT]) {
+		nir_builder fs_b;
+		nir_builder_init_simple_shader(&fs_b, NULL, MESA_SHADER_FRAGMENT, NULL);
+		fs_b.shader->info.name = ralloc_strdup(fs_b.shader, "noop_fs");
+		fs_m.nir = fs_b.shader;
+		modules[MESA_SHADER_FRAGMENT] = &fs_m;
+	}
+
+	for (unsigned i = 0; i < MESA_SHADER_STAGES; ++i) {
+		const VkPipelineShaderStageCreateInfo *stage = pStages[i];
+
+		if (!modules[i])
+			continue;
+
+		nir[i] = radv_shader_compile_to_nir(device, modules[i],
+						    stage ? stage->pName : "main", i,
+						    stage ? stage->pSpecializationInfo : NULL);
+		pipeline->active_stages |= mesa_to_vk_shader_stage(i);
+	}
+
+	if (nir[MESA_SHADER_TESS_CTRL]) {
+		/* TODO: This is no longer used as a key we should refactor this */
+		if (keys)
+			keys[MESA_SHADER_TESS_CTRL].tcs.primitive_mode = nir[MESA_SHADER_TESS_EVAL]->info.tess.primitive_mode;
+
+		nir_lower_tes_patch_vertices(nir[MESA_SHADER_TESS_EVAL], nir[MESA_SHADER_TESS_CTRL]->info.tess.tcs_vertices_out);
+	}
+
+	radv_link_shaders(pipeline, nir);
+
+	if (nir[MESA_SHADER_FRAGMENT]) {
+		pipeline->shaders[MESA_SHADER_FRAGMENT] =
+			radv_shader_variant_create(device, modules[MESA_SHADER_FRAGMENT], nir[MESA_SHADER_FRAGMENT],
+						   pipeline->layout, keys ? keys + MESA_SHADER_FRAGMENT : 0,
+						   &codes[MESA_SHADER_FRAGMENT], &code_sizes[MESA_SHADER_FRAGMENT]);
+
+		/* TODO: These are no longer used as keys we should refactor this */
+		if (keys) {
+			keys[MESA_SHADER_VERTEX].vs.export_prim_id =
+				pipeline->shaders[MESA_SHADER_FRAGMENT]->info.fs.prim_id_input;
+			keys[MESA_SHADER_TESS_EVAL].tes.export_prim_id =
+				pipeline->shaders[MESA_SHADER_FRAGMENT]->info.fs.prim_id_input;
+		}
+
+		pipeline->active_stages |= mesa_to_vk_shader_stage(MESA_SHADER_FRAGMENT);
+	}
+
+	for (int i = 0; i < MESA_SHADER_STAGES; ++i) {
+		if(modules[i] && !pipeline->shaders[i]) {
+			pipeline->shaders[i] = radv_shader_variant_create(device, modules[i], nir[i],
+									  pipeline->layout,
+									  keys ? keys + i : 0, &codes[i],
+									  &code_sizes[i]);
+
+		pipeline->active_stages |= mesa_to_vk_shader_stage(i);
+		}
+	}
+
+	if(modules[MESA_SHADER_GEOMETRY]) {
+		void *gs_copy_code = NULL;
+		unsigned gs_copy_code_size = 0;
+		if (!pipeline->gs_copy_shader) {
+			pipeline->gs_copy_shader = radv_create_gs_copy_shader(
+					device, nir[MESA_SHADER_GEOMETRY], &gs_copy_code,
+					&gs_copy_code_size,
+					keys[MESA_SHADER_GEOMETRY].has_multiview_view_index);
+		}
+
+		if (pipeline->gs_copy_shader) {
+			void *code[MESA_SHADER_STAGES] = {0};
+			unsigned code_size[MESA_SHADER_STAGES] = {0};
+			struct radv_shader_variant *variants[MESA_SHADER_STAGES] = {0};
+
+			code[MESA_SHADER_GEOMETRY] = gs_copy_code;
+			code_size[MESA_SHADER_GEOMETRY] = gs_copy_code_size;
+			variants[MESA_SHADER_GEOMETRY] = pipeline->gs_copy_shader;
+
+			radv_pipeline_cache_insert_shaders(device, cache,
+							   gs_copy_hash,
+							   variants,
+							   (const void**)code,
+							   code_size);
+		}
+		free(gs_copy_code);
+	}
+
+	radv_pipeline_cache_insert_shaders(device, cache, hash, pipeline->shaders,
+					   (const void**)codes, code_sizes);
+
+	for (int i = 0; i < MESA_SHADER_STAGES; ++i) {
+		free(codes[i]);
+		if (modules[i] && !modules[i]->nir)
+			ralloc_free(nir[i]);
+	}
+
+	if (fs_m.nir)
+		ralloc_free(fs_m.nir);
+}
+
 static VkResult
 radv_pipeline_init(struct radv_pipeline *pipeline,
 		   struct radv_device *device,
@@ -1751,7 +1707,6 @@ radv_pipeline_init(struct radv_pipeline *pipeline,
 		   const struct radv_graphics_pipeline_create_info *extra,
 		   const VkAllocationCallbacks *alloc)
 {
-	struct radv_shader_module fs_m = {0};
 	VkResult result;
 	bool has_view_index = false;
 
@@ -1766,102 +1721,52 @@ radv_pipeline_init(struct radv_pipeline *pipeline,
 	pipeline->layout = radv_pipeline_layout_from_handle(pCreateInfo->layout);
 
 	radv_pipeline_init_dynamic_state(pipeline, pCreateInfo);
+	radv_pipeline_init_blend_state(pipeline, pCreateInfo, extra);
+
 	const VkPipelineShaderStageCreateInfo *pStages[MESA_SHADER_STAGES] = { 0, };
-	struct radv_shader_module *modules[MESA_SHADER_STAGES] = { 0, };
 	for (uint32_t i = 0; i < pCreateInfo->stageCount; i++) {
 		gl_shader_stage stage = ffs(pCreateInfo->pStages[i].stage) - 1;
 		pStages[stage] = &pCreateInfo->pStages[i];
-		modules[stage] = radv_shader_module_from_handle(pStages[stage]->module);
 	}
 
-	radv_pipeline_init_blend_state(pipeline, pCreateInfo, extra);
+	struct ac_shader_variant_key keys[MESA_SHADER_STAGES];
+	memset(keys, 0, sizeof(keys));
 
-	if (!modules[MESA_SHADER_FRAGMENT]) {
-		nir_builder fs_b;
-		nir_builder_init_simple_shader(&fs_b, NULL, MESA_SHADER_FRAGMENT, NULL);
-		fs_b.shader->info.name = ralloc_strdup(fs_b.shader, "noop_fs");
-		fs_m.nir = fs_b.shader;
-		modules[MESA_SHADER_FRAGMENT] = &fs_m;
-	}
-
-	if (modules[MESA_SHADER_FRAGMENT]) {
-		struct ac_shader_variant_key key = {0};
-		key.fs.col_format = pipeline->graphics.blend.spi_shader_col_format;
-		if (pCreateInfo->pMultisampleState &&
-		    pCreateInfo->pMultisampleState->rasterizationSamples > 1)
-			key.fs.multisample = true;
-
-		if (pipeline->device->physical_device->rad_info.chip_class < VI)
-			radv_pipeline_compute_get_int_clamp(pCreateInfo, &key.fs.is_int8, &key.fs.is_int10);
-
-		const VkPipelineShaderStageCreateInfo *stage = pStages[MESA_SHADER_FRAGMENT];
-
-		pipeline->shaders[MESA_SHADER_FRAGMENT] =
-			 radv_pipeline_compile(pipeline, cache, modules[MESA_SHADER_FRAGMENT],
-					       stage ? stage->pName : "main",
-					       MESA_SHADER_FRAGMENT,
-					       stage ? stage->pSpecializationInfo : NULL,
-					       pipeline->layout, &key);
-		pipeline->active_stages |= mesa_to_vk_shader_stage(MESA_SHADER_FRAGMENT);
-	}
-
-	if (fs_m.nir)
-		ralloc_free(fs_m.nir);
-
-	if (modules[MESA_SHADER_VERTEX]) {
+	if (pStages[MESA_SHADER_VERTEX]) {
 		bool as_es = false;
 		bool as_ls = false;
-		bool export_prim_id = false;
-		if (modules[MESA_SHADER_TESS_CTRL])
+		if (pStages[MESA_SHADER_TESS_CTRL])
 			as_ls = true;
-		else if (modules[MESA_SHADER_GEOMETRY])
+		else if (pStages[MESA_SHADER_GEOMETRY])
 			as_es = true;
-		else if (pipeline->shaders[MESA_SHADER_FRAGMENT]->info.fs.prim_id_input)
-			export_prim_id = true;
-		struct ac_shader_variant_key key = radv_compute_vs_key(pCreateInfo, as_es, as_ls, export_prim_id);
-		key.has_multiview_view_index = has_view_index;
 
-		pipeline->shaders[MESA_SHADER_VERTEX] =
-			 radv_pipeline_compile(pipeline, cache, modules[MESA_SHADER_VERTEX],
-					       pStages[MESA_SHADER_VERTEX]->pName,
-					       MESA_SHADER_VERTEX,
-					       pStages[MESA_SHADER_VERTEX]->pSpecializationInfo,
-					       pipeline->layout, &key);
-
-		pipeline->active_stages |= mesa_to_vk_shader_stage(MESA_SHADER_VERTEX);
+		keys[MESA_SHADER_VERTEX] = radv_compute_vs_key(pCreateInfo, as_es, as_ls);
+		keys[MESA_SHADER_VERTEX].has_multiview_view_index = has_view_index;
 	}
 
-	if (modules[MESA_SHADER_GEOMETRY]) {
-		struct ac_shader_variant_key key = radv_compute_vs_key(pCreateInfo, false, false, false);
-		key.has_multiview_view_index = has_view_index;
-
-		pipeline->shaders[MESA_SHADER_GEOMETRY] =
-			 radv_pipeline_compile(pipeline, cache, modules[MESA_SHADER_GEOMETRY],
-					       pStages[MESA_SHADER_GEOMETRY]->pName,
-					       MESA_SHADER_GEOMETRY,
-					       pStages[MESA_SHADER_GEOMETRY]->pSpecializationInfo,
-					       pipeline->layout, &key);
-
-		pipeline->active_stages |= mesa_to_vk_shader_stage(MESA_SHADER_GEOMETRY);
+	if (pStages[MESA_SHADER_TESS_EVAL]) {
+		keys[MESA_SHADER_TESS_EVAL].has_multiview_view_index = has_view_index;
+		if (pStages[MESA_SHADER_GEOMETRY])
+			keys[MESA_SHADER_TESS_EVAL].tes.as_es = true;
 	}
 
-	if (modules[MESA_SHADER_TESS_EVAL]) {
-		assert(modules[MESA_SHADER_TESS_CTRL]);
+	if (pCreateInfo->pTessellationState)
+		keys[MESA_SHADER_TESS_CTRL].tcs.input_vertices = pCreateInfo->pTessellationState->patchControlPoints;
 
-		radv_tess_pipeline_compile(pipeline,
-					   cache,
-					   modules[MESA_SHADER_TESS_CTRL],
-					   modules[MESA_SHADER_TESS_EVAL],
-					   pStages[MESA_SHADER_TESS_CTRL]->pName,
-					   pStages[MESA_SHADER_TESS_EVAL]->pName,
-					   pStages[MESA_SHADER_TESS_CTRL]->pSpecializationInfo,
-					   pStages[MESA_SHADER_TESS_EVAL]->pSpecializationInfo,
-					   pipeline->layout,
-					   pCreateInfo->pTessellationState->patchControlPoints,
-					   has_view_index);
-		pipeline->active_stages |= mesa_to_vk_shader_stage(MESA_SHADER_TESS_EVAL) |
-			mesa_to_vk_shader_stage(MESA_SHADER_TESS_CTRL);
+	if (pStages[MESA_SHADER_GEOMETRY]) {
+		keys[MESA_SHADER_GEOMETRY] = radv_compute_vs_key(pCreateInfo, false, false);
+		keys[MESA_SHADER_GEOMETRY].has_multiview_view_index = has_view_index;
 	}
+
+	if (pCreateInfo->pMultisampleState &&
+	    pCreateInfo->pMultisampleState->rasterizationSamples > 1)
+		keys[MESA_SHADER_FRAGMENT].fs.multisample = true;
+
+	keys[MESA_SHADER_FRAGMENT].fs.col_format = pipeline->graphics.blend.spi_shader_col_format;
+	if (pipeline->device->physical_device->rad_info.chip_class < VI)
+		radv_pipeline_compute_get_int_clamp(pCreateInfo, &keys[MESA_SHADER_FRAGMENT].fs.is_int8, &keys[MESA_SHADER_FRAGMENT].fs.is_int10);
+
+	radv_create_shaders(pipeline, device, cache, keys, pStages);
 
 	radv_pipeline_init_depth_stencil_state(pipeline, pCreateInfo, extra);
 	radv_pipeline_init_raster_state(pipeline, pCreateInfo);
@@ -2180,7 +2085,7 @@ static VkResult radv_compute_pipeline_create(
 {
 	RADV_FROM_HANDLE(radv_device, device, _device);
 	RADV_FROM_HANDLE(radv_pipeline_cache, cache, _cache);
-	RADV_FROM_HANDLE(radv_shader_module, module, pCreateInfo->stage.module);
+	const VkPipelineShaderStageCreateInfo *pStages[MESA_SHADER_STAGES] = { 0, };
 	struct radv_pipeline *pipeline;
 	VkResult result;
 
@@ -2193,12 +2098,8 @@ static VkResult radv_compute_pipeline_create(
 	pipeline->device = device;
 	pipeline->layout = radv_pipeline_layout_from_handle(pCreateInfo->layout);
 
-	pipeline->shaders[MESA_SHADER_COMPUTE] =
-		 radv_pipeline_compile(pipeline, cache, module,
-				       pCreateInfo->stage.pName,
-				       MESA_SHADER_COMPUTE,
-				       pCreateInfo->stage.pSpecializationInfo,
-				       pipeline->layout, NULL);
+	pStages[MESA_SHADER_COMPUTE] = &pCreateInfo->stage;
+	radv_create_shaders(pipeline, device, cache, NULL, pStages);
 
 
 	pipeline->need_indirect_descriptor_sets |= pipeline->shaders[MESA_SHADER_COMPUTE]->info.need_indirect_descriptor_sets;
