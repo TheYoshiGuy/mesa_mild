@@ -1597,10 +1597,15 @@ void radv_create_shaders(struct radv_pipeline *pipeline,
 	}
 
 	if (radv_create_shader_variants_from_pipeline_cache(device, cache, hash, pipeline->shaders) &&
-	    (!modules[MESA_SHADER_GEOMETRY] || pipeline->gs_copy_shader))
+	    (!modules[MESA_SHADER_GEOMETRY] || pipeline->gs_copy_shader)) {
+		for (unsigned i = 0; i < MESA_SHADER_STAGES; ++i) {
+			if (pipeline->shaders[i])
+				pipeline->active_stages |= mesa_to_vk_shader_stage(i);
+		}
 		return;
+	}
 
-	if (!modules[MESA_SHADER_FRAGMENT]) {
+	if (!modules[MESA_SHADER_FRAGMENT] && !modules[MESA_SHADER_COMPUTE]) {
 		nir_builder fs_b;
 		nir_builder_init_simple_shader(&fs_b, NULL, MESA_SHADER_FRAGMENT, NULL);
 		fs_b.shader->info.name = ralloc_strdup(fs_b.shader, "noop_fs");
@@ -1691,7 +1696,7 @@ void radv_create_shaders(struct radv_pipeline *pipeline,
 
 	for (int i = 0; i < MESA_SHADER_STAGES; ++i) {
 		free(codes[i]);
-		if (modules[i] && !modules[i]->nir)
+		if (modules[i] && !modules[i]->nir && !pipeline->device->trace_bo)
 			ralloc_free(nir[i]);
 	}
 
