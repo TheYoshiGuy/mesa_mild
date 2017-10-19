@@ -344,6 +344,7 @@ brw_merge_inputs(struct brw_context *brw,
 static bool
 intel_disable_rb_aux_buffer(struct brw_context *brw,
                             struct intel_mipmap_tree *tex_mt,
+                            unsigned min_level, unsigned num_levels,
                             const char *usage)
 {
    const struct gl_framebuffer *fb = brw->ctx.DrawBuffer;
@@ -358,7 +359,9 @@ intel_disable_rb_aux_buffer(struct brw_context *brw,
       const struct intel_renderbuffer *irb =
          intel_renderbuffer(fb->_ColorDrawBuffers[i]);
 
-      if (irb && irb->mt->bo == tex_mt->bo) {
+      if (irb && irb->mt->bo == tex_mt->bo &&
+          irb->mt_level >= min_level &&
+          irb->mt_level < min_level + num_levels) {
          found = brw->draw_aux_buffer_disabled[i] = true;
       }
    }
@@ -399,10 +402,27 @@ brw_predraw_resolve_inputs(struct brw_context *brw)
       enum isl_format view_format =
          translate_tex_format(brw, tex_obj->_Format, sampler->sRGBDecode);
 
+      unsigned min_level, min_layer, num_levels, num_layers;
+      if (tex_obj->base.Immutable) {
+         min_level  = tex_obj->base.MinLevel;
+         num_levels = MIN2(tex_obj->base.NumLevels, tex_obj->_MaxLevel + 1);
+         min_layer  = tex_obj->base.MinLayer;
+         num_layers = tex_obj->base.Target != GL_TEXTURE_3D ?
+                      tex_obj->base.NumLayers : INTEL_REMAINING_LAYERS;
+      } else {
+         min_level  = tex_obj->base.BaseLevel;
+         num_levels = tex_obj->_MaxLevel - tex_obj->base.BaseLevel + 1;
+         min_layer  = 0;
+         num_layers = INTEL_REMAINING_LAYERS;
+      }
+
       const bool disable_aux =
-         intel_disable_rb_aux_buffer(brw, tex_obj->mt, "for sampling");
+         intel_disable_rb_aux_buffer(brw, tex_obj->mt, min_level, num_levels,
+                                     "for sampling");
 
       intel_miptree_prepare_texture(brw, tex_obj->mt, view_format,
+                                    min_level, num_levels,
+                                    min_layer, num_layers,
                                     disable_aux);
 
       brw_render_cache_set_check_flush(brw, tex_obj->mt->bo);
@@ -424,7 +444,7 @@ brw_predraw_resolve_inputs(struct brw_context *brw)
             tex_obj = intel_texture_object(u->TexObj);
 
             if (tex_obj && tex_obj->mt) {
-               intel_disable_rb_aux_buffer(brw, tex_obj->mt,
+               intel_disable_rb_aux_buffer(brw, tex_obj->mt, 0, ~0,
                                            "as a shader image");
 
                intel_miptree_prepare_image(brw, tex_obj->mt);
@@ -457,13 +477,20 @@ brw_predraw_resolve_framebuffer(struct brw_context *brw)
        ctx->FragmentProgram._Current->info.outputs_read) {
       const struct gl_framebuffer *fb = ctx->DrawBuffer;
 
+      /* This is only used for non-coherent framebuffer fetch, so we don't
+       * need to worry about CCS_E and can simply pass 'false' below.
+       */
+      assert(brw->screen->devinfo.gen < 9);
+
       for (unsigned i = 0; i < fb->_NumColorDrawBuffers; i++) {
          const struct intel_renderbuffer *irb =
             intel_renderbuffer(fb->_ColorDrawBuffers[i]);
 
          if (irb) {
-            intel_miptree_prepare_fb_fetch(brw, irb->mt, irb->mt_level,
-                                           irb->mt_layer, irb->layer_count);
+            intel_miptree_prepare_texture(brw, irb->mt, irb->mt->surf.format,
+                                          irb->mt_level, 1,
+                                          irb->mt_layer, irb->layer_count,
+                                          false);
          }
       }
    }

@@ -230,13 +230,25 @@ tgsi_util_get_inst_usage_mask(const struct tgsi_full_instruction *inst,
       read_mask = TGSI_WRITEMASK_XYZ;
       break;
 
+   case TGSI_OPCODE_DSEQ:
+   case TGSI_OPCODE_DSNE:
+   case TGSI_OPCODE_DSLT:
+   case TGSI_OPCODE_DSGE:
    case TGSI_OPCODE_DP4:
    case TGSI_OPCODE_PK4B:
    case TGSI_OPCODE_PK4UB:
    case TGSI_OPCODE_D2F:
+   case TGSI_OPCODE_D2I:
+   case TGSI_OPCODE_D2U:
    case TGSI_OPCODE_I2F:
    case TGSI_OPCODE_U2F:
+   case TGSI_OPCODE_U64SEQ:
+   case TGSI_OPCODE_U64SNE:
+   case TGSI_OPCODE_U64SLT:
+   case TGSI_OPCODE_U64SGE:
    case TGSI_OPCODE_U642F:
+   case TGSI_OPCODE_I64SLT:
+   case TGSI_OPCODE_I64SGE:
    case TGSI_OPCODE_I642F:
       read_mask = TGSI_WRITEMASK_XYZW;
       break;
@@ -292,17 +304,17 @@ tgsi_util_get_inst_usage_mask(const struct tgsi_full_instruction *inst,
    case TGSI_OPCODE_TXL2:
    case TGSI_OPCODE_LODQ:
    case TGSI_OPCODE_TG4: {
-      unsigned dim_layer_shadow =
+      unsigned dim_layer =
          tgsi_util_get_texture_coord_dim(inst->Texture.Texture);
-      unsigned dim_layer, dim;
+      unsigned dim_layer_shadow, dim;
 
-      /* Remove shadow. */
+      /* Add shadow. */
       if (tgsi_is_shadow_target(inst->Texture.Texture)) {
-         dim_layer = dim_layer_shadow - 1;
+         dim_layer_shadow = dim_layer + 1;
          if (inst->Texture.Texture == TGSI_TEXTURE_SHADOW1D)
-            dim_layer = 1;
+            dim_layer_shadow = 3;
       } else {
-         dim_layer = dim_layer_shadow;
+         dim_layer_shadow = dim_layer;
       }
 
       /* Remove layer. */
