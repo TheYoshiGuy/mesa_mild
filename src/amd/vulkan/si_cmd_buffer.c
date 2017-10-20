@@ -341,7 +341,7 @@ si_emit_config(struct radv_physical_device *physical_device,
 	radeon_emit(cs, CONTEXT_CONTROL_SHADOW_ENABLE(1));
 
 	if (physical_device->has_clear_state) {
-		radeon_emit(cs, PKT3(PKT3_CLEAR_STATE, 1, 0));
+		radeon_emit(cs, PKT3(PKT3_CLEAR_STATE, 0, 0));
 		radeon_emit(cs, 0);
 	}
 
@@ -527,6 +527,11 @@ si_emit_config(struct radv_physical_device *physical_device,
 	radeon_set_context_reg_seq(cs, R_028A04_PA_SU_POINT_MINMAX, 1);
 	radeon_emit(cs, S_028A04_MIN_SIZE(radv_pack_float_12p4(0)) |
 		    S_028A04_MAX_SIZE(radv_pack_float_12p4(8192/2)));
+
+	if (!physical_device->has_clear_state) {
+		radeon_set_context_reg(cs, R_028004_DB_COUNT_CONTROL,
+				       S_028004_ZPASS_INCREMENT_DISABLE(1));
+	}
 
 	si_emit_compute(physical_device, cs);
 }

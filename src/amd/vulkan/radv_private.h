@@ -669,7 +669,7 @@ enum radv_cmd_dirty_bits {
 	RADV_CMD_DIRTY_DYNAMIC_ALL                       = (1 << 9) - 1,
 	RADV_CMD_DIRTY_PIPELINE                          = 1 << 9,
 	RADV_CMD_DIRTY_INDEX_BUFFER                      = 1 << 10,
-	RADV_CMD_DIRTY_RENDER_TARGETS                    = 1 << 11,
+	RADV_CMD_DIRTY_FRAMEBUFFER                       = 1 << 11,
 };
 typedef uint32_t radv_cmd_dirty_mask_t;
 
@@ -1050,6 +1050,13 @@ struct radv_tessellation_state {
 	uint32_t tf_param;
 };
 
+struct radv_gs_state {
+	uint32_t vgt_gs_onchip_cntl;
+	uint32_t vgt_gs_max_prims_per_subgroup;
+	uint32_t vgt_esgs_ring_itemsize;
+	uint32_t lds_size;
+};
+
 struct radv_vertex_elements_info {
 	uint32_t rsrc_word3[MAX_VERTEX_ATTRIBS];
 	uint32_t format_size[MAX_VERTEX_ATTRIBS];
@@ -1084,6 +1091,7 @@ struct radv_pipeline {
 			struct radv_raster_state raster;
 			struct radv_multisample_state ms;
 			struct radv_tessellation_state tess;
+			struct radv_gs_state gs;
 			uint32_t db_shader_control;
 			uint32_t shader_z_format;
 			unsigned prim;
@@ -1122,7 +1130,7 @@ static inline bool radv_pipeline_has_gs(struct radv_pipeline *pipeline)
 
 static inline bool radv_pipeline_has_tess(struct radv_pipeline *pipeline)
 {
-	return pipeline->shaders[MESA_SHADER_TESS_EVAL] ? true : false;
+	return pipeline->shaders[MESA_SHADER_TESS_CTRL] ? true : false;
 }
 
 struct ac_userdata_info *radv_lookup_user_sgpr(struct radv_pipeline *pipeline,
@@ -1193,15 +1201,6 @@ struct radv_cmask_info {
 	unsigned alignment;
 	unsigned slice_tile_max;
 	unsigned base_address_reg;
-};
-
-struct r600_htile_info {
-	uint64_t offset;
-	uint64_t size;
-	unsigned pitch;
-	unsigned height;
-	unsigned xalign;
-	unsigned yalign;
 };
 
 struct radv_image {
