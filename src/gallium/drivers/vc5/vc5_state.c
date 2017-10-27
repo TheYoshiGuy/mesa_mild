@@ -238,6 +238,7 @@ static void *
 vc5_vertex_state_create(struct pipe_context *pctx, unsigned num_elements,
                         const struct pipe_vertex_element *elements)
 {
+        struct vc5_context *vc5 = vc5_context(pctx);
         struct vc5_vertex_stateobj *so = CALLOC_STRUCT(vc5_vertex_stateobj);
 
         if (!so)
@@ -245,6 +246,91 @@ vc5_vertex_state_create(struct pipe_context *pctx, unsigned num_elements,
 
         memcpy(so->pipe, elements, sizeof(*elements) * num_elements);
         so->num_elements = num_elements;
+
+        for (int i = 0; i < so->num_elements; i++) {
+                const struct pipe_vertex_element *elem = &elements[i];
+                const struct util_format_description *desc =
+                        util_format_description(elem->src_format);
+                uint32_t r_size = desc->channel[0].size;
+
+                struct V3D33_GL_SHADER_STATE_ATTRIBUTE_RECORD attr_unpacked = {
+                        /* vec_size == 0 means 4 */
+                        .vec_size = desc->nr_channels & 3,
+                        .signed_int_type = (desc->channel[0].type ==
+                                            UTIL_FORMAT_TYPE_SIGNED),
+
+                        .normalized_int_type = desc->channel[0].normalized,
+                        .read_as_int_uint = desc->channel[0].pure_integer,
+                        .instance_divisor = elem->instance_divisor,
+                };
+
+                switch (desc->channel[0].type) {
+                case UTIL_FORMAT_TYPE_FLOAT:
+                        if (r_size == 32) {
+                                attr_unpacked.type = ATTRIBUTE_FLOAT;
+                        } else {
+                                assert(r_size == 16);
+                                attr_unpacked.type = ATTRIBUTE_HALF_FLOAT;
+                        }
+                        break;
+
+                case UTIL_FORMAT_TYPE_SIGNED:
+                case UTIL_FORMAT_TYPE_UNSIGNED:
+                        switch (r_size) {
+                        case 32:
+                                attr_unpacked.type = ATTRIBUTE_INT;
+                                break;
+                        case 16:
+                                attr_unpacked.type = ATTRIBUTE_SHORT;
+                                break;
+                        case 10:
+                                attr_unpacked.type = ATTRIBUTE_INT2_10_10_10;
+                                break;
+                        case 8:
+                                attr_unpacked.type = ATTRIBUTE_BYTE;
+                                break;
+                        default:
+                                fprintf(stderr,
+                                        "format %s unsupported\n",
+                                        desc->name);
+                                attr_unpacked.type = ATTRIBUTE_BYTE;
+                                abort();
+                        }
+                        break;
+
+                default:
+                        fprintf(stderr,
+                                "format %s unsupported\n",
+                                desc->name);
+                        abort();
+                }
+
+                const uint32_t size =
+                        cl_packet_length(GL_SHADER_STATE_ATTRIBUTE_RECORD);
+                V3D33_GL_SHADER_STATE_ATTRIBUTE_RECORD_pack(NULL,
+                                                            (uint8_t *)&so->attrs[i * size],
+                                                            &attr_unpacked);
+        }
+
+        /* Set up the default attribute values in case any of the vertex
+         * elements use them.
+         */
+        so->default_attribute_values = vc5_bo_alloc(vc5->screen,
+                                                    VC5_MAX_ATTRIBUTES *
+                                                    4 * sizeof(float),
+                                                    "default attributes");
+        uint32_t *attrs = vc5_bo_map(so->default_attribute_values);
+        for (int i = 0; i < VC5_MAX_ATTRIBUTES; i++) {
+                attrs[i * 4 + 0] = 0;
+                attrs[i * 4 + 1] = 0;
+                attrs[i * 4 + 2] = 0;
+                if (i < so->num_elements &&
+                    util_format_is_pure_integer(so->pipe[i].src_format)) {
+                        attrs[i * 4 + 3] = 1;
+                } else {
+                        attrs[i * 4 + 3] = fui(1.0);
+                }
+        }
 
         return so;
 }

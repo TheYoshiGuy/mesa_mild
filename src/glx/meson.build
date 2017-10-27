@@ -126,7 +126,7 @@ gl_lib_cargs = [
   '-D_REENTRANT', '-DDEFAULT_DRIVER_DIR="@0@"'.format(dri_driver_dir),
 ]
 
-if dep_xf86vm != [] and dep_xf86vm.found()
+if dep_xxf86vm != [] and dep_xxf86vm.found()
   gl_lib_cargs += '-DHAVE_XF86VIDMODE'
 endif
 
@@ -167,28 +167,6 @@ if with_glx == 'dri'
     version : gl_lib_version,
     install : true,
   )
-
-  gl_priv_reqs = [
-    'x11', 'xext', 'xdamage >= 1.1', 'xfixes', 'x11-xcb', 'xcb',
-    'xcb-glx >= 1.8.1', 'libdrm >= 2.4.75',
-  ]
-  if dep_xf86vm.found()
-    gl_priv_reqs += 'xf86vm'
-  endif
-  if with_dri_platform == 'drm'
-    gl_priv_reqs += 'xcb-dri2 >= 1.8'
-  endif
-
-  gl_priv_libs = []
-  if dep_thread.found()
-    gl_priv_libs += ['-lpthread', '-pthread']
-  endif
-  if dep_m.found()
-    gl_priv_libs += '-lm'
-  endif
-  if dep_dl.found()
-    gl_priv_libs += '-ldl'
-  endif
 
   pkg.generate(
     name : 'gl',

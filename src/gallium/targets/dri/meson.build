@@ -69,6 +69,12 @@ if with_gallium_nouveau
   gallium_dri_link_with += [libnouveauwinsys, libnouveau]
   gallium_dri_drivers += 'nouveau_dri.so'
 endif
+if with_gallium_freedreno
+  gallium_dri_c_args += '-DGALLIUM_FREEDRENO'
+  gallium_dri_link_with += [libfreedrenowinsys, libfreedreno]
+  gallium_dri_drivers += 'msm_dri.so'
+  gallium_dri_drivers += 'kgsl_dri.so'
+endif
 if with_gallium_softpipe
   gallium_dri_c_args += '-DGALLIUM_SOFTPIPE'
   gallium_dri_link_with += libsoftpipe
@@ -90,6 +96,16 @@ if with_gallium_vc5
   gallium_dri_c_args += '-DGALLIUM_VC5'
   gallium_dri_link_with += [libvc5, libvc5winsys, libbroadcom_vc5]
   gallium_dri_drivers += 'vc5_dri.so'
+endif
+if with_gallium_etnaviv
+  gallium_dri_c_args += '-DGALLIUM_ETNAVIV'
+  gallium_dri_link_with += [libetnaviv, libetnavivdrm]
+  gallium_dri_drivers += 'etnaviv_dri.so'
+endif
+if with_gallium_imx
+  gallium_dri_c_args += '-DGALLIUM_IMX'
+  gallium_dri_link_with += libimxdrm
+  gallium_dri_drivers += 'imx-drm_dri.so'
 endif
 
 if with_gallium_vc4 or with_gallium_vc5

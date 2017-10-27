@@ -2374,6 +2374,9 @@ link_intrastage_shaders(void *mem_ctx,
    if (ctx->Const.VertexID_is_zero_based)
       lower_vertex_id(linked);
 
+   if (ctx->Const.LowerCsDerivedVariables)
+      lower_cs_derived(linked);
+
 #ifdef DEBUG
    /* Compute the source checksum. */
    linked->SourceChecksum = 0;
@@ -4937,6 +4940,16 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
 
       prev = i;
    }
+
+   /* The cross validation of outputs/inputs above validates explicit locations
+    * but for SSO programs we need to do this also for the inputs in the
+    * first stage and outputs of the last stage included in the program, since
+    * there is no cross validation for these.
+    */
+   if (prog->SeparateShader)
+      validate_sso_explicit_locations(ctx, prog,
+                                      (gl_shader_stage) first,
+                                      (gl_shader_stage) last);
 
    /* Cross-validate uniform blocks between shader stages */
    validate_interstage_uniform_blocks(prog, prog->_LinkedShaders);

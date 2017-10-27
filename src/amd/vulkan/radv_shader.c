@@ -208,7 +208,7 @@ radv_shader_compile_to_nir(struct radv_device *device,
 					   spec_entries, num_spec_entries,
 					   stage, entrypoint_name, &supported_ext, &nir_options);
 		nir = entry_point->shader;
-		assert(nir->stage == stage);
+		assert(nir->info.stage == stage);
 		nir_validate_shader(nir);
 
 		free(spec_entries);
@@ -258,12 +258,15 @@ radv_shader_compile_to_nir(struct radv_device *device,
 	 * indirect indexing is trivial.
 	 */
 	nir_variable_mode indirect_mask = 0;
-	if (nir->stage == MESA_SHADER_GEOMETRY ||
-	    (nir->stage != MESA_SHADER_TESS_CTRL &&
-	     nir->stage != MESA_SHADER_TESS_EVAL &&
+	if (nir->info.stage == MESA_SHADER_GEOMETRY ||
+	    (nir->info.stage != MESA_SHADER_TESS_CTRL &&
+	     nir->info.stage != MESA_SHADER_TESS_EVAL &&
 	     !llvm_has_working_vgpr_indexing)) {
 		indirect_mask |= nir_var_shader_in;
 	}
+	if (!llvm_has_working_vgpr_indexing &&
+	    nir->info.stage != MESA_SHADER_TESS_CTRL)
+		indirect_mask |= nir_var_shader_out;
 
 	/* TODO: We shouldn't need to do this, however LLVM isn't currently
 	 * smart enough to handle indirects without causing excess spilling
@@ -287,9 +290,6 @@ radv_shader_compile_to_nir(struct radv_device *device,
 	nir_lower_global_vars_to_local(nir);
 	nir_remove_dead_variables(nir, nir_var_local);
 	radv_optimize_nir(nir);
-
-	if (device->instance->debug_flags & RADV_DEBUG_DUMP_SHADERS)
-		nir_print_shader(nir, stderr);
 
 	return nir;
 }
@@ -325,7 +325,7 @@ radv_alloc_shader_memory(struct radv_device *device,
 
 	slab->size = 256 * 1024;
 	slab->bo = device->ws->buffer_create(device->ws, slab->size, 256,
-	                                     RADEON_DOMAIN_VRAM, 0);
+	                                     RADEON_DOMAIN_VRAM, RADEON_FLAG_NO_INTERPROCESS_SHARING);
 	slab->ptr = (char*)device->ws->buffer_map(slab->bo);
 	list_inithead(&slab->shaders);
 
@@ -504,7 +504,7 @@ radv_shader_variant_create(struct radv_device *device,
 	options.unsafe_math = !!(device->instance->debug_flags & RADV_DEBUG_UNSAFE_MATH);
 	options.supports_spill = device->llvm_supports_spill;
 
-	return shader_variant_create(device, module, shaders, shader_count, shaders[shader_count - 1]->stage,
+	return shader_variant_create(device, module, shaders, shader_count, shaders[shader_count - 1]->info.stage,
 				     &options, false, code_out, code_size_out);
 }
 

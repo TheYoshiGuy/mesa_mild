@@ -156,6 +156,7 @@ struct fd_context {
 
 	struct fd_device *dev;
 	struct fd_screen *screen;
+	struct fd_pipe *pipe;
 
 	struct util_queue flush_queue;
 
@@ -246,7 +247,7 @@ struct fd_context {
 	 * means we'd always have to recalc tiles ever batch)
 	 */
 	struct fd_gmem_stateobj gmem;
-	struct fd_vsc_pipe      pipe[16];
+	struct fd_vsc_pipe      vsc_pipe[16];
 	struct fd_tile          tile[512];
 
 	/* which state objects need to be re-emit'd: */
@@ -432,7 +433,7 @@ void fd_context_cleanup_common_vbos(struct fd_context *ctx);
 
 struct pipe_context * fd_context_init(struct fd_context *ctx,
 		struct pipe_screen *pscreen, const uint8_t *primtypes,
-		void *priv);
+		void *priv, unsigned flags);
 
 void fd_context_destroy(struct pipe_context *pctx);
 

@@ -55,6 +55,14 @@ if with_glx != 'disabled'
   install_headers('GL/glx.h', 'GL/glext.h', 'GL/glx_mangle.h', subdir : 'GL')
 endif
 
-if with_osmesa
+if with_osmesa != 'none'
   install_headers('GL/osmesa.h', subdir : 'GL')
+endif
+
+if with_egl
+  install_headers(
+    'EGL/eglext.h', 'EGL/egl.h', 'EGL/eglextchromium.h', 'EGL/eglmesaext.h',
+    'EGL/eglplatform.h',
+    subdir : 'EGL',
+  )
 endif

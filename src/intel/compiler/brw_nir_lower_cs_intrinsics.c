@@ -116,6 +116,7 @@ lower_cs_intrinsics_convert_block(struct lower_intrinsics_state *state,
          nir_ssa_def *local_index = nir_load_local_invocation_index(b);
 
          nir_const_value uvec3;
+         memset(&uvec3, 0, sizeof(uvec3));
          uvec3.u32[0] = 1;
          uvec3.u32[1] = size[0];
          uvec3.u32[2] = size[0] * size[1];
@@ -159,7 +160,7 @@ bool
 brw_nir_lower_cs_intrinsics(nir_shader *nir,
                             struct brw_cs_prog_data *prog_data)
 {
-   assert(nir->stage == MESA_SHADER_COMPUTE);
+   assert(nir->info.stage == MESA_SHADER_COMPUTE);
 
    bool progress = false;
    struct lower_intrinsics_state state;

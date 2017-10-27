@@ -123,32 +123,6 @@ vc5_predraw_check_textures(struct pipe_context *pctx,
         }
 }
 
-static struct vc5_cl_reloc
-vc5_get_default_values(struct vc5_context *vc5)
-{
-        struct vc5_job *job = vc5->job;
-
-        /* VC5_DIRTY_VTXSTATE */
-        struct vc5_vertex_stateobj *vtx = vc5->vtx;
-
-        /* Set up the default values for attributes. */
-        vc5_cl_ensure_space(&job->indirect, 4 * 4 * vtx->num_elements, 4);
-        struct vc5_cl_reloc default_values =
-                cl_address(job->indirect.bo, cl_offset(&job->indirect));
-        vc5_bo_reference(default_values.bo);
-
-        struct vc5_cl_out *defaults = cl_start(&job->indirect);
-        for (int i = 0; i < vtx->num_elements; i++) {
-                cl_aligned_f(&defaults, 0.0);
-                cl_aligned_f(&defaults, 0.0);
-                cl_aligned_f(&defaults, 0.0);
-                cl_aligned_f(&defaults, 1.0);
-        }
-        cl_end(&job->indirect, defaults);
-
-        return default_values;
-}
-
 static void
 vc5_emit_gl_shader_state(struct vc5_context *vc5,
                          const struct pipe_draw_info *info)
@@ -172,7 +146,6 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                 vc5_write_uniforms(vc5, vc5->prog.cs,
                                    &vc5->constbuf[PIPE_SHADER_VERTEX],
                                    &vc5->verttex);
-        struct vc5_cl_reloc default_values = vc5_get_default_values(vc5);
 
         uint32_t shader_rec_offset =
                 vc5_cl_ensure_space(&job->indirect,
@@ -236,7 +209,8 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                 shader.instance_id_read_by_vertex_shader =
                         vc5->prog.vs->prog_data.vs->uses_iid;
 
-                shader.address_of_default_attribute_values = default_values;
+                shader.address_of_default_attribute_values =
+                        cl_address(vtx->default_attribute_values, 0);
         }
 
         for (int i = 0; i < vtx->num_elements; i++) {
@@ -244,71 +218,26 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                 struct pipe_vertex_buffer *vb =
                         &vertexbuf->vb[elem->vertex_buffer_index];
                 struct vc5_resource *rsc = vc5_resource(vb->buffer.resource);
-                const struct util_format_description *desc =
-                        util_format_description(elem->src_format);
 
-                uint32_t offset = vb->buffer_offset + elem->src_offset;
-
-                cl_emit(&job->indirect, GL_SHADER_STATE_ATTRIBUTE_RECORD, attr) {
-                        uint32_t r_size = desc->channel[0].size;
-
-                        /* vec_size == 0 means 4 */
-                        attr.vec_size = desc->nr_channels & 3;
-
-                        switch (desc->channel[0].type) {
-                        case UTIL_FORMAT_TYPE_FLOAT:
-                                if (r_size == 32) {
-                                        attr.type = ATTRIBUTE_FLOAT;
-                                } else {
-                                        assert(r_size == 16);
-                                        attr.type = ATTRIBUTE_HALF_FLOAT;
-                                }
-                                break;
-
-                        case UTIL_FORMAT_TYPE_SIGNED:
-                        case UTIL_FORMAT_TYPE_UNSIGNED:
-                                switch (r_size) {
-                                case 32:
-                                        attr.type = ATTRIBUTE_INT;
-                                        break;
-                                case 16:
-                                        attr.type = ATTRIBUTE_SHORT;
-                                        break;
-                                case 10:
-                                        attr.type = ATTRIBUTE_INT2_10_10_10;
-                                        break;
-                                case 8:
-                                        attr.type = ATTRIBUTE_BYTE;
-                                        break;
-                                default:
-                                        fprintf(stderr,
-                                                "format %s unsupported\n",
-                                                desc->name);
-                                        attr.type = ATTRIBUTE_BYTE;
-                                        abort();
-                                }
-                                break;
-
-                        default:
-                                fprintf(stderr,
-                                        "format %s unsupported\n",
-                                        desc->name);
-                                abort();
-                        }
-
-                        attr.signed_int_type =
-                                desc->channel[0].type == UTIL_FORMAT_TYPE_SIGNED;
-
-                        attr.normalized_int_type = desc->channel[0].normalized;
-                        attr.read_as_int_uint = desc->channel[0].pure_integer;
-                        attr.address = cl_address(rsc->bo, offset);
-                        attr.stride = vb->stride;
-                        attr.instance_divisor = elem->instance_divisor;
-                        attr.number_of_values_read_by_coordinate_shader =
-                                vc5->prog.cs->prog_data.vs->vattr_sizes[i];
-                        attr.number_of_values_read_by_vertex_shader =
-                                vc5->prog.vs->prog_data.vs->vattr_sizes[i];
-                }
+                struct V3D33_GL_SHADER_STATE_ATTRIBUTE_RECORD attr_unpacked = {
+                        .stride = vb->stride,
+                        .address = cl_address(rsc->bo,
+                                              vb->buffer_offset +
+                                              elem->src_offset),
+                        .number_of_values_read_by_coordinate_shader =
+                                vc5->prog.cs->prog_data.vs->vattr_sizes[i],
+                        .number_of_values_read_by_vertex_shader =
+                                vc5->prog.vs->prog_data.vs->vattr_sizes[i],
+                };
+                const uint32_t size =
+                        cl_packet_length(GL_SHADER_STATE_ATTRIBUTE_RECORD);
+                uint8_t attr_packed[size];
+                V3D33_GL_SHADER_STATE_ATTRIBUTE_RECORD_pack(&job->indirect,
+                                                            attr_packed,
+                                                            &attr_unpacked);
+                for (int j = 0; j < size; j++)
+                        attr_packed[j] |= vtx->attrs[i * size + j];
+                cl_emit_prepacked(&job->indirect, &attr_packed);
         }
 
         cl_emit(&job->bcl, GL_SHADER_STATE, state) {
@@ -319,7 +248,6 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
         vc5_bo_unreference(&cs_uniforms.bo);
         vc5_bo_unreference(&vs_uniforms.bo);
         vc5_bo_unreference(&fs_uniforms.bo);
-        vc5_bo_unreference(&default_values.bo);
 
         job->shader_rec_count++;
 }

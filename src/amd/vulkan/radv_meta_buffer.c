@@ -4,6 +4,12 @@
 #include "sid.h"
 #include "radv_cs.h"
 
+/*
+ * This is the point we switch from using CP to compute shader
+ * for certain buffer operations.
+ */
+#define RADV_BUFFER_OPS_CS_THRESHOLD 4096
+
 static nir_shader *
 build_buffer_fill_shader(struct radv_device *dev)
 {
@@ -398,21 +404,28 @@ static void copy_buffer_shader(struct radv_cmd_buffer *cmd_buffer,
 }
 
 
-void radv_fill_buffer(struct radv_cmd_buffer *cmd_buffer,
+uint32_t radv_fill_buffer(struct radv_cmd_buffer *cmd_buffer,
 		      struct radeon_winsys_bo *bo,
 		      uint64_t offset, uint64_t size, uint32_t value)
 {
+	uint32_t flush_bits = 0;
+
 	assert(!(offset & 3));
 	assert(!(size & 3));
 
-	if (size >= 4096)
+	if (size >= RADV_BUFFER_OPS_CS_THRESHOLD) {
 		fill_buffer_shader(cmd_buffer, bo, offset, size, value);
-	else if (size) {
+		flush_bits = RADV_CMD_FLAG_CS_PARTIAL_FLUSH |
+			     RADV_CMD_FLAG_INV_VMEM_L1 |
+			     RADV_CMD_FLAG_WRITEBACK_GLOBAL_L2;
+	} else if (size) {
 		uint64_t va = radv_buffer_get_va(bo);
 		va += offset;
 		cmd_buffer->device->ws->cs_add_buffer(cmd_buffer->cs, bo, 8);
 		si_cp_dma_clear_buffer(cmd_buffer, va, size, value);
 	}
+
+	return flush_bits;
 }
 
 static
@@ -422,7 +435,7 @@ void radv_copy_buffer(struct radv_cmd_buffer *cmd_buffer,
 		      uint64_t src_offset, uint64_t dst_offset,
 		      uint64_t size)
 {
-	if (size >= 4096 && !(size & 3) && !(src_offset & 3) && !(dst_offset & 3))
+	if (size >= RADV_BUFFER_OPS_CS_THRESHOLD && !(size & 3) && !(src_offset & 3) && !(dst_offset & 3))
 		copy_buffer_shader(cmd_buffer, src_bo, dst_bo,
 				   src_offset, dst_offset, size);
 	else if (size) {
@@ -496,7 +509,7 @@ void radv_CmdUpdateBuffer(
 	if (!dataSize)
 		return;
 
-	if (dataSize < 4096) {
+	if (dataSize < RADV_BUFFER_OPS_CS_THRESHOLD) {
 		si_emit_cache_flush(cmd_buffer);
 
 		cmd_buffer->device->ws->cs_add_buffer(cmd_buffer->cs, dst_buffer->bo, 8);

@@ -83,6 +83,15 @@ void anv_DestroyShaderModule(
 
 #define SPIR_V_MAGIC_NUMBER 0x07230203
 
+static const uint64_t stage_to_debug[] = {
+   [MESA_SHADER_VERTEX] = DEBUG_VS,
+   [MESA_SHADER_TESS_CTRL] = DEBUG_TCS,
+   [MESA_SHADER_TESS_EVAL] = DEBUG_TES,
+   [MESA_SHADER_GEOMETRY] = DEBUG_GS,
+   [MESA_SHADER_FRAGMENT] = DEBUG_WM,
+   [MESA_SHADER_COMPUTE] = DEBUG_CS,
+};
+
 /* Eventually, this will become part of anv_CreateShader.  Unfortunately,
  * we can't do that yet because we don't have the ability to copy nir.
  */
@@ -138,11 +147,17 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
                    spec_entries, num_spec_entries,
                    stage, entrypoint_name, &supported_ext, nir_options);
    nir_shader *nir = entry_point->shader;
-   assert(nir->stage == stage);
+   assert(nir->info.stage == stage);
    nir_validate_shader(nir);
    ralloc_steal(mem_ctx, nir);
 
    free(spec_entries);
+
+   if (unlikely(INTEL_DEBUG & stage_to_debug[stage])) {
+      fprintf(stderr, "NIR (from SPIR-V) for %s shader:\n",
+              gl_shader_stage_name(stage));
+      nir_print_shader(nir, stderr);
+   }
 
    /* We have to lower away local constant initializers right before we
     * inline functions.  That way they get properly initialized at the top
@@ -173,14 +188,11 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
    NIR_PASS_V(nir, nir_propagate_invariant);
    NIR_PASS_V(nir, nir_lower_io_to_temporaries,
               entry_point->impl, true, false);
-   NIR_PASS_V(nir, nir_lower_system_values);
 
    /* Vulkan uses the separate-shader linking model */
    nir->info.separate_shader = true;
 
    nir = brw_preprocess_nir(compiler, nir);
-
-   NIR_PASS_V(nir, nir_lower_clip_cull_distance_arrays);
 
    if (stage == MESA_SHADER_FRAGMENT)
       NIR_PASS_V(nir, anv_nir_lower_input_attachments);

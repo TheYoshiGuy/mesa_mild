@@ -21,7 +21,7 @@
 option(
   'platforms',
   type : 'string',
-  value : 'x11,wayland,drm',
+  value : 'x11,wayland,drm,surfaceless',
   description : 'comma separated list of window systems to support. wayland, x11, surfaceless, drm, etc.'
 )
 option(
@@ -34,7 +34,7 @@ option(
 option(
   'dri-drivers',
   type : 'string',
-  value : 'i915,i965',
+  value : 'i915,i965,r100,r200,nouveau',
   description : 'comma separated list of dri drivers to build.'
 )
 option(
@@ -46,7 +46,7 @@ option(
 option(
   'gallium-drivers',
   type : 'string',
-  value : 'pl111,radeonsi,nouveau,swrast,vc4',
+  value : 'pl111,radeonsi,nouveau,freedreno,swrast,vc4,etnaviv,imx',
   description : 'comma separated list of gallium drivers to build.'
 )
 option(
@@ -112,6 +112,13 @@ option(
   description : 'Build support for GLX platform'
 )
 option(
+  'egl',
+  type : 'combo',
+  value : 'auto',
+  choices : ['auto', 'yes', 'no'],
+  description : 'Build support for EGL platform'
+)
+option(
   'glvnd',
   type : 'boolean',
   value : false,
@@ -136,6 +143,12 @@ option(
   description : 'Build with valgrind support if possible'
 )
 option(
+  'libunwind',
+  type : 'boolean',
+  value : true,
+  description : 'Use libunwind for stack-traces if possible'
+)
+option(
   'build-tests',
   type : 'boolean',
   value : false,
@@ -146,4 +159,24 @@ option(
   type : 'boolean',
   value : false,
   description : 'Enable floating point textures and renderbuffers. This option may be patent encumbered, please read docs/patents.txt and consult with your lawyer before turning this on.'
+)
+option(
+  'selinux',
+  type : 'boolean',
+  value : false,
+  description : 'Build an SELinux-aware Mesa'
+)
+option(
+  'osmesa',
+  type : 'combo',
+  value : 'none',
+  choices : ['none', 'classic', 'gallium'],
+  description : 'Build OSmesa.'
+)
+option(
+  'osmesa-bits',
+  type : 'combo',
+  value : '8',
+  choices : ['8', '16', '32'],
+  description : 'Number of channel bits for OSMesa.'
 )

@@ -47,7 +47,8 @@ cat(struct string *dest, const struct string src)
 static bool
 contains(const struct string haystack, const struct string needle)
 {
-   return memmem(haystack.str, haystack.len, needle.str, needle.len) != NULL;
+   return haystack.str && memmem(haystack.str, haystack.len,
+                                 needle.str, needle.len) != NULL;
 }
 #define CONTAINS(haystack, needle) \
    contains(haystack, (struct string){needle, strlen(needle)})
@@ -1256,7 +1257,7 @@ special_requirements_for_handling_double_precision_data_types(
 
 bool
 brw_validate_instructions(const struct gen_device_info *devinfo,
-                          void *assembly, int start_offset, int end_offset,
+                          const void *assembly, int start_offset, int end_offset,
                           struct annotation_info *annotation)
 {
    bool valid = true;

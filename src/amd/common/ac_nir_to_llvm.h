@@ -55,6 +55,7 @@ struct ac_tcs_variant_key {
 	struct ac_vs_variant_key vs_key;
 	unsigned primitive_mode;
 	unsigned input_vertices;
+	uint32_t tes_reads_tess_factors:1;
 };
 
 struct ac_fs_variant_key {
@@ -79,6 +80,7 @@ struct ac_nir_compiler_options {
 	struct ac_shader_variant_key key;
 	bool unsafe_math;
 	bool supports_spill;
+	bool clamp_shadow_reference;
 	enum radeon_family family;
 	enum chip_class chip_class;
 };

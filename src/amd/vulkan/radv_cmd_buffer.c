@@ -79,10 +79,13 @@ const struct radv_dynamic_state default_dynamic_state = {
 };
 
 static void
-radv_dynamic_state_copy(struct radv_dynamic_state *dest,
-			const struct radv_dynamic_state *src,
-			uint32_t copy_mask)
+radv_bind_dynamic_state(struct radv_cmd_buffer *cmd_buffer,
+			const struct radv_dynamic_state *src)
 {
+	struct radv_dynamic_state *dest = &cmd_buffer->state.dynamic;
+	uint32_t copy_mask = src->mask;
+	uint32_t dest_mask = 0;
+
 	/* Make sure to copy the number of viewports/scissors because they can
 	 * only be specified at pipeline creation time.
 	 */
@@ -90,35 +93,82 @@ radv_dynamic_state_copy(struct radv_dynamic_state *dest,
 	dest->scissor.count = src->scissor.count;
 
 	if (copy_mask & (1 << VK_DYNAMIC_STATE_VIEWPORT)) {
-		typed_memcpy(dest->viewport.viewports, src->viewport.viewports,
-			     src->viewport.count);
+		if (memcmp(&dest->viewport.viewports, &src->viewport.viewports,
+			   src->viewport.count * sizeof(VkViewport))) {
+			typed_memcpy(dest->viewport.viewports,
+				     src->viewport.viewports,
+				     src->viewport.count);
+			dest_mask |= 1 << VK_DYNAMIC_STATE_VIEWPORT;
+		}
 	}
 
 	if (copy_mask & (1 << VK_DYNAMIC_STATE_SCISSOR)) {
-		typed_memcpy(dest->scissor.scissors, src->scissor.scissors,
-			     src->scissor.count);
+		if (memcmp(&dest->scissor.scissors, &src->scissor.scissors,
+			   src->scissor.count * sizeof(VkRect2D))) {
+			typed_memcpy(dest->scissor.scissors,
+				     src->scissor.scissors, src->scissor.count);
+			dest_mask |= 1 << VK_DYNAMIC_STATE_SCISSOR;
+		}
 	}
 
-	if (copy_mask & (1 << VK_DYNAMIC_STATE_LINE_WIDTH))
-		dest->line_width = src->line_width;
+	if (copy_mask & (1 << VK_DYNAMIC_STATE_LINE_WIDTH)) {
+		if (dest->line_width != src->line_width) {
+			dest->line_width = src->line_width;
+			dest_mask |= 1 << VK_DYNAMIC_STATE_LINE_WIDTH;
+		}
+	}
 
-	if (copy_mask & (1 << VK_DYNAMIC_STATE_DEPTH_BIAS))
-		dest->depth_bias = src->depth_bias;
+	if (copy_mask & (1 << VK_DYNAMIC_STATE_DEPTH_BIAS)) {
+		if (memcmp(&dest->depth_bias, &src->depth_bias,
+			   sizeof(src->depth_bias))) {
+			dest->depth_bias = src->depth_bias;
+			dest_mask |= 1 << VK_DYNAMIC_STATE_DEPTH_BIAS;
+		}
+	}
 
-	if (copy_mask & (1 << VK_DYNAMIC_STATE_BLEND_CONSTANTS))
-		typed_memcpy(dest->blend_constants, src->blend_constants, 4);
+	if (copy_mask & (1 << VK_DYNAMIC_STATE_BLEND_CONSTANTS)) {
+		if (memcmp(&dest->blend_constants, &src->blend_constants,
+			   sizeof(src->blend_constants))) {
+			typed_memcpy(dest->blend_constants,
+				     src->blend_constants, 4);
+			dest_mask |= 1 << VK_DYNAMIC_STATE_BLEND_CONSTANTS;
+		}
+	}
 
-	if (copy_mask & (1 << VK_DYNAMIC_STATE_DEPTH_BOUNDS))
-		dest->depth_bounds = src->depth_bounds;
+	if (copy_mask & (1 << VK_DYNAMIC_STATE_DEPTH_BOUNDS)) {
+		if (memcmp(&dest->depth_bounds, &src->depth_bounds,
+			   sizeof(src->depth_bounds))) {
+			dest->depth_bounds = src->depth_bounds;
+			dest_mask |= 1 << VK_DYNAMIC_STATE_DEPTH_BOUNDS;
+		}
+	}
 
-	if (copy_mask & (1 << VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK))
-		dest->stencil_compare_mask = src->stencil_compare_mask;
+	if (copy_mask & (1 << VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK)) {
+		if (memcmp(&dest->stencil_compare_mask,
+			   &src->stencil_compare_mask,
+			   sizeof(src->stencil_compare_mask))) {
+			dest->stencil_compare_mask = src->stencil_compare_mask;
+			dest_mask |= 1 << VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK;
+		}
+	}
 
-	if (copy_mask & (1 << VK_DYNAMIC_STATE_STENCIL_WRITE_MASK))
-		dest->stencil_write_mask = src->stencil_write_mask;
+	if (copy_mask & (1 << VK_DYNAMIC_STATE_STENCIL_WRITE_MASK)) {
+		if (memcmp(&dest->stencil_write_mask, &src->stencil_write_mask,
+			   sizeof(src->stencil_write_mask))) {
+			dest->stencil_write_mask = src->stencil_write_mask;
+			dest_mask |= 1 << VK_DYNAMIC_STATE_STENCIL_WRITE_MASK;
+		}
+	}
 
-	if (copy_mask & (1 << VK_DYNAMIC_STATE_STENCIL_REFERENCE))
-		dest->stencil_reference = src->stencil_reference;
+	if (copy_mask & (1 << VK_DYNAMIC_STATE_STENCIL_REFERENCE)) {
+		if (memcmp(&dest->stencil_reference, &src->stencil_reference,
+			   sizeof(src->stencil_reference))) {
+			dest->stencil_reference = src->stencil_reference;
+			dest_mask |= 1 << VK_DYNAMIC_STATE_STENCIL_REFERENCE;
+		}
+	}
+
+	cmd_buffer->state.dirty |= dest_mask;
 }
 
 bool radv_cmd_buffer_uses_mec(struct radv_cmd_buffer *cmd_buffer)
@@ -263,7 +313,8 @@ radv_cmd_buffer_resize_upload_buf(struct radv_cmd_buffer *cmd_buffer,
 	bo = device->ws->buffer_create(device->ws,
 				       new_size, 4096,
 				       RADEON_DOMAIN_GTT,
-				       RADEON_FLAG_CPU_ACCESS);
+				       RADEON_FLAG_CPU_ACCESS|
+				       RADEON_FLAG_NO_INTERPROCESS_SHARING);
 
 	if (!bo) {
 		cmd_buffer->record_result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
@@ -551,7 +602,7 @@ radv_update_multisample_state(struct radv_cmd_buffer *cmd_buffer,
 	radv_cayman_emit_msaa_sample_locs(cmd_buffer->cs, num_samples);
 
 	/* GFX9: Flush DFSM when the AA mode changes. */
-	if (cmd_buffer->device->physical_device->rad_info.chip_class >= GFX9) {
+	if (cmd_buffer->device->dfsm_allowed) {
 		radeon_emit(cmd_buffer->cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cmd_buffer->cs, EVENT_TYPE(V_028A90_FLUSH_DFSM) | EVENT_INDEX(0));
 	}
@@ -602,12 +653,39 @@ radv_emit_graphics_raster_state(struct radv_cmd_buffer *cmd_buffer,
 			       raster->pa_su_sc_mode_cntl);
 }
 
-static inline void
-radv_emit_prefetch(struct radv_cmd_buffer *cmd_buffer, uint64_t va,
-		   unsigned size)
+static void
+radv_emit_shader_prefetch(struct radv_cmd_buffer *cmd_buffer,
+			  struct radv_shader_variant *shader)
 {
+	struct radeon_winsys *ws = cmd_buffer->device->ws;
+	struct radeon_winsys_cs *cs = cmd_buffer->cs;
+	uint64_t va;
+
+	if (!shader)
+		return;
+
+	va = radv_buffer_get_va(shader->bo) + shader->bo_offset;
+
+	ws->cs_add_buffer(cs, shader->bo, 8);
 	if (cmd_buffer->device->physical_device->rad_info.chip_class >= CIK)
-		si_cp_dma_prefetch(cmd_buffer, va, size);
+		si_cp_dma_prefetch(cmd_buffer, va, shader->code_size);
+}
+
+static void
+radv_emit_shaders_prefetch(struct radv_cmd_buffer *cmd_buffer,
+			   struct radv_pipeline *pipeline)
+{
+	radv_emit_shader_prefetch(cmd_buffer,
+				  pipeline->shaders[MESA_SHADER_VERTEX]);
+	radv_emit_shader_prefetch(cmd_buffer,
+				  pipeline->shaders[MESA_SHADER_TESS_CTRL]);
+	radv_emit_shader_prefetch(cmd_buffer,
+				  pipeline->shaders[MESA_SHADER_TESS_EVAL]);
+	radv_emit_shader_prefetch(cmd_buffer,
+				  pipeline->shaders[MESA_SHADER_GEOMETRY]);
+	radv_emit_shader_prefetch(cmd_buffer, pipeline->gs_copy_shader);
+	radv_emit_shader_prefetch(cmd_buffer,
+				  pipeline->shaders[MESA_SHADER_FRAGMENT]);
 }
 
 static void
@@ -616,12 +694,8 @@ radv_emit_hw_vs(struct radv_cmd_buffer *cmd_buffer,
 		struct radv_shader_variant *shader,
 		struct ac_vs_output_info *outinfo)
 {
-	struct radeon_winsys *ws = cmd_buffer->device->ws;
 	uint64_t va = radv_buffer_get_va(shader->bo) + shader->bo_offset;
 	unsigned export_count;
-
-	ws->cs_add_buffer(cmd_buffer->cs, shader->bo, 8);
-	radv_emit_prefetch(cmd_buffer, va, shader->code_size);
 
 	export_count = MAX2(1, outinfo->param_exports);
 	radeon_set_context_reg(cmd_buffer->cs, R_0286C4_SPI_VS_OUT_CONFIG,
@@ -666,11 +740,7 @@ radv_emit_hw_es(struct radv_cmd_buffer *cmd_buffer,
 		struct radv_shader_variant *shader,
 		struct ac_es_output_info *outinfo)
 {
-	struct radeon_winsys *ws = cmd_buffer->device->ws;
 	uint64_t va = radv_buffer_get_va(shader->bo) + shader->bo_offset;
-
-	ws->cs_add_buffer(cmd_buffer->cs, shader->bo, 8);
-	radv_emit_prefetch(cmd_buffer, va, shader->code_size);
 
 	radeon_set_context_reg(cmd_buffer->cs, R_028AAC_VGT_ESGS_RING_ITEMSIZE,
 			       outinfo->esgs_itemsize / 4);
@@ -685,12 +755,8 @@ static void
 radv_emit_hw_ls(struct radv_cmd_buffer *cmd_buffer,
 		struct radv_shader_variant *shader)
 {
-	struct radeon_winsys *ws = cmd_buffer->device->ws;
 	uint64_t va = radv_buffer_get_va(shader->bo) + shader->bo_offset;
 	uint32_t rsrc2 = shader->rsrc2;
-
-	ws->cs_add_buffer(cmd_buffer->cs, shader->bo, 8);
-	radv_emit_prefetch(cmd_buffer, va, shader->code_size);
 
 	radeon_set_sh_reg_seq(cmd_buffer->cs, R_00B520_SPI_SHADER_PGM_LO_LS, 2);
 	radeon_emit(cmd_buffer->cs, va >> 8);
@@ -710,11 +776,7 @@ static void
 radv_emit_hw_hs(struct radv_cmd_buffer *cmd_buffer,
 		struct radv_shader_variant *shader)
 {
-	struct radeon_winsys *ws = cmd_buffer->device->ws;
 	uint64_t va = radv_buffer_get_va(shader->bo) + shader->bo_offset;
-
-	ws->cs_add_buffer(cmd_buffer->cs, shader->bo, 8);
-	radv_emit_prefetch(cmd_buffer, va, shader->code_size);
 
 	if (cmd_buffer->device->physical_device->rad_info.chip_class >= GFX9) {
 		radeon_set_sh_reg_seq(cmd_buffer->cs, R_00B410_SPI_SHADER_PGM_LO_LS, 2);
@@ -827,7 +889,6 @@ static void
 radv_emit_geometry_shader(struct radv_cmd_buffer *cmd_buffer,
 			  struct radv_pipeline *pipeline)
 {
-	struct radeon_winsys *ws = cmd_buffer->device->ws;
 	struct radv_shader_variant *gs;
 	uint64_t va;
 
@@ -861,8 +922,6 @@ radv_emit_geometry_shader(struct radv_cmd_buffer *cmd_buffer,
 			       S_028B90_ENABLE(gs_num_invocations > 0));
 
 	va = radv_buffer_get_va(gs->bo) + gs->bo_offset;
-	ws->cs_add_buffer(cmd_buffer->cs, gs->bo, 8);
-	radv_emit_prefetch(cmd_buffer, va, gs->code_size);
 
 	if (cmd_buffer->device->physical_device->rad_info.chip_class >= GFX9) {
 		radeon_set_sh_reg_seq(cmd_buffer->cs, R_00B210_SPI_SHADER_PGM_LO_ES, 2);
@@ -908,7 +967,6 @@ static void
 radv_emit_fragment_shader(struct radv_cmd_buffer *cmd_buffer,
 			  struct radv_pipeline *pipeline)
 {
-	struct radeon_winsys *ws = cmd_buffer->device->ws;
 	struct radv_shader_variant *ps;
 	uint64_t va;
 	unsigned spi_baryc_cntl = S_0286E0_FRONT_FACE_ALL_BITS(1);
@@ -917,8 +975,6 @@ radv_emit_fragment_shader(struct radv_cmd_buffer *cmd_buffer,
 
 	ps = pipeline->shaders[MESA_SHADER_FRAGMENT];
 	va = radv_buffer_get_va(ps->bo) + ps->bo_offset;
-	ws->cs_add_buffer(cmd_buffer->cs, ps->bo, 8);
-	radv_emit_prefetch(cmd_buffer, va, ps->code_size);
 
 	radeon_set_sh_reg_seq(cmd_buffer->cs, R_00B020_SPI_SHADER_PGM_LO_PS, 4);
 	radeon_emit(cmd_buffer->cs, va >> 8);
@@ -951,7 +1007,7 @@ radv_emit_fragment_shader(struct radv_cmd_buffer *cmd_buffer,
 	radeon_set_context_reg(cmd_buffer->cs, R_028238_CB_TARGET_MASK, blend->cb_target_mask);
 	radeon_set_context_reg(cmd_buffer->cs, R_02823C_CB_SHADER_MASK, blend->cb_shader_mask);
 
-	if (cmd_buffer->device->physical_device->rad_info.chip_class >= GFX9) {
+	if (cmd_buffer->device->dfsm_allowed) {
 		/* optimise this? */
 		radeon_emit(cmd_buffer->cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cmd_buffer->cs, EVENT_TYPE(V_028A90_FLUSH_DFSM) | EVENT_INDEX(0));
@@ -1438,7 +1494,7 @@ radv_emit_framebuffer_state(struct radv_cmd_buffer *cmd_buffer)
 			       S_028208_BR_X(framebuffer->width) |
 			       S_028208_BR_Y(framebuffer->height));
 
-	if (cmd_buffer->device->physical_device->rad_info.chip_class >= GFX9) {
+	if (cmd_buffer->device->dfsm_allowed) {
 		radeon_emit(cmd_buffer->cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cmd_buffer->cs, EVENT_TYPE(V_028A90_BREAK_BATCH) | EVENT_INDEX(0));
 	}
@@ -1518,8 +1574,7 @@ radv_cmd_buffer_flush_dynamic_state(struct radv_cmd_buffer *cmd_buffer)
 				       RADV_CMD_DIRTY_DYNAMIC_STENCIL_COMPARE_MASK))
 		radv_emit_stencil(cmd_buffer);
 
-	if (cmd_buffer->state.dirty & (RADV_CMD_DIRTY_PIPELINE |
-				       RADV_CMD_DIRTY_DYNAMIC_DEPTH_BOUNDS))
+	if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_DYNAMIC_DEPTH_BOUNDS)
 		radv_emit_depth_bounds(cmd_buffer);
 
 	if (cmd_buffer->state.dirty & (RADV_CMD_DIRTY_PIPELINE |
@@ -1714,11 +1769,11 @@ radv_flush_constants(struct radv_cmd_buffer *cmd_buffer,
 }
 
 static bool
-radv_cmd_buffer_update_vertex_descriptors(struct radv_cmd_buffer *cmd_buffer)
+radv_cmd_buffer_update_vertex_descriptors(struct radv_cmd_buffer *cmd_buffer, bool pipeline_is_dirty)
 {
 	struct radv_device *device = cmd_buffer->device;
 
-	if ((cmd_buffer->state.pipeline != cmd_buffer->state.emitted_pipeline || cmd_buffer->state.vb_dirty) &&
+	if ((pipeline_is_dirty || cmd_buffer->state.vb_dirty) &&
 	    cmd_buffer->state.pipeline->vertex_elements.count &&
 	    radv_get_vertex_shader(cmd_buffer->state.pipeline)->info.info.vs.has_vertex_buffers) {
 		struct radv_vertex_elements_info *velems = &cmd_buffer->state.pipeline->vertex_elements;
@@ -1761,6 +1816,19 @@ radv_cmd_buffer_update_vertex_descriptors(struct radv_cmd_buffer *cmd_buffer)
 					   AC_UD_VS_VERTEX_BUFFERS, va);
 	}
 	cmd_buffer->state.vb_dirty = false;
+
+	return true;
+}
+
+static bool
+radv_upload_graphics_shader_descriptors(struct radv_cmd_buffer *cmd_buffer, bool pipeline_is_dirty)
+{
+	if (!radv_cmd_buffer_update_vertex_descriptors(cmd_buffer, pipeline_is_dirty))
+		return false;
+
+	radv_flush_descriptors(cmd_buffer, VK_SHADER_STAGE_ALL_GRAPHICS);
+	radv_flush_constants(cmd_buffer, cmd_buffer->state.pipeline,
+			     VK_SHADER_STAGE_ALL_GRAPHICS);
 
 	return true;
 }
@@ -2429,7 +2497,6 @@ VkResult radv_EndCommandBuffer(
 static void
 radv_emit_compute_pipeline(struct radv_cmd_buffer *cmd_buffer)
 {
-	struct radeon_winsys *ws = cmd_buffer->device->ws;
 	struct radv_shader_variant *compute_shader;
 	struct radv_pipeline *pipeline = cmd_buffer->state.compute_pipeline;
 	uint64_t va;
@@ -2442,8 +2509,7 @@ radv_emit_compute_pipeline(struct radv_cmd_buffer *cmd_buffer)
 	compute_shader = pipeline->shaders[MESA_SHADER_COMPUTE];
 	va = radv_buffer_get_va(compute_shader->bo) + compute_shader->bo_offset;
 
-	ws->cs_add_buffer(cmd_buffer->cs, compute_shader->bo, 8);
-	radv_emit_prefetch(cmd_buffer, va, compute_shader->code_size);
+	radv_emit_shader_prefetch(cmd_buffer, compute_shader);
 
 	MAYBE_UNUSED unsigned cdw_max = radeon_check_space(cmd_buffer->device->ws,
 							   cmd_buffer->cs, 16);
@@ -2515,11 +2581,7 @@ void radv_CmdBindPipeline(
 		cmd_buffer->state.dirty |= RADV_CMD_DIRTY_PIPELINE;
 		cmd_buffer->push_constant_stages |= pipeline->active_stages;
 
-		/* Apply the dynamic state from the pipeline */
-		cmd_buffer->state.dirty |= pipeline->dynamic_state_mask;
-		radv_dynamic_state_copy(&cmd_buffer->state.dynamic,
-					&pipeline->dynamic_state,
-					pipeline->dynamic_state_mask);
+		radv_bind_dynamic_state(cmd_buffer, &pipeline->dynamic_state);
 
 		if (pipeline->graphics.esgs_ring_size > cmd_buffer->esgs_ring_size_needed)
 			cmd_buffer->esgs_ring_size_needed = pipeline->graphics.esgs_ring_size;
@@ -2938,7 +3000,7 @@ radv_cs_emit_indirect_draw_packet(struct radv_cmd_buffer *cmd_buffer,
 	struct radeon_winsys_cs *cs = cmd_buffer->cs;
 	unsigned di_src_sel = indexed ? V_0287F0_DI_SRC_SEL_DMA
 	                              : V_0287F0_DI_SRC_SEL_AUTO_INDEX;
-	bool draw_id_enable = cmd_buffer->state.pipeline->shaders[MESA_SHADER_VERTEX]->info.info.vs.needs_draw_id;
+	bool draw_id_enable = radv_get_vertex_shader(cmd_buffer->state.pipeline)->info.info.vs.needs_draw_id;
 	uint32_t base_reg = cmd_buffer->state.pipeline->graphics.vtx_base_sgpr;
 	assert(base_reg);
 
@@ -3109,16 +3171,9 @@ radv_emit_draw_packets(struct radv_cmd_buffer *cmd_buffer,
 }
 
 static void
-radv_draw(struct radv_cmd_buffer *cmd_buffer,
-	  const struct radv_draw_info *info)
+radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer,
+			      const struct radv_draw_info *info)
 {
-	MAYBE_UNUSED unsigned cdw_max =
-		radeon_check_space(cmd_buffer->device->ws,
-				   cmd_buffer->cs, 4096);
-
-	if (!radv_cmd_buffer_update_vertex_descriptors(cmd_buffer))
-		return;
-
 	if (cmd_buffer->state.dirty & RADV_CMD_DIRTY_PIPELINE)
 		radv_emit_graphics_pipeline(cmd_buffer);
 
@@ -3137,19 +3192,75 @@ radv_draw(struct radv_cmd_buffer *cmd_buffer,
 			cmd_buffer->state.dirty |= RADV_CMD_DIRTY_INDEX_BUFFER;
 	}
 
+	radv_cmd_buffer_flush_dynamic_state(cmd_buffer);
+
 	radv_emit_draw_registers(cmd_buffer, info->indexed,
 				 info->instance_count > 1, info->indirect,
 				 info->indirect ? 0 : info->count);
+}
 
-	radv_cmd_buffer_flush_dynamic_state(cmd_buffer);
+static void
+radv_draw(struct radv_cmd_buffer *cmd_buffer,
+	  const struct radv_draw_info *info)
+{
+	bool pipeline_is_dirty =
+		(cmd_buffer->state.dirty & RADV_CMD_DIRTY_PIPELINE) &&
+		cmd_buffer->state.pipeline &&
+		cmd_buffer->state.pipeline != cmd_buffer->state.emitted_pipeline;
 
-	radv_flush_descriptors(cmd_buffer, VK_SHADER_STAGE_ALL_GRAPHICS);
-	radv_flush_constants(cmd_buffer, cmd_buffer->state.pipeline,
-			     VK_SHADER_STAGE_ALL_GRAPHICS);
+	MAYBE_UNUSED unsigned cdw_max =
+		radeon_check_space(cmd_buffer->device->ws,
+				   cmd_buffer->cs, 4096);
 
-	si_emit_cache_flush(cmd_buffer);
+	/* Use optimal packet order based on whether we need to sync the
+	 * pipeline.
+	 */
+	if (cmd_buffer->state.flush_bits & (RADV_CMD_FLAG_FLUSH_AND_INV_CB |
+					    RADV_CMD_FLAG_FLUSH_AND_INV_DB |
+					    RADV_CMD_FLAG_PS_PARTIAL_FLUSH |
+					    RADV_CMD_FLAG_CS_PARTIAL_FLUSH)) {
+		/* If we have to wait for idle, set all states first, so that
+		 * all SET packets are processed in parallel with previous draw
+		 * calls. Then upload descriptors, set shader pointers, and
+		 * draw, and prefetch at the end. This ensures that the time
+		 * the CUs are idle is very short. (there are only SET_SH
+		 * packets between the wait and the draw)
+		 */
+		radv_emit_all_graphics_states(cmd_buffer, info);
+		si_emit_cache_flush(cmd_buffer);
+		/* <-- CUs are idle here --> */
 
-	radv_emit_draw_packets(cmd_buffer, info);
+		if (!radv_upload_graphics_shader_descriptors(cmd_buffer, pipeline_is_dirty))
+			return;
+
+		radv_emit_draw_packets(cmd_buffer, info);
+		/* <-- CUs are busy here --> */
+
+		/* Start prefetches after the draw has been started. Both will
+		 * run in parallel, but starting the draw first is more
+		 * important.
+		 */
+		if (pipeline_is_dirty) {
+			radv_emit_shaders_prefetch(cmd_buffer,
+						   cmd_buffer->state.pipeline);
+		}
+	} else {
+		/* If we don't wait for idle, start prefetches first, then set
+		 * states, and draw at the end.
+		 */
+		si_emit_cache_flush(cmd_buffer);
+
+		if (pipeline_is_dirty) {
+			radv_emit_shaders_prefetch(cmd_buffer,
+						   cmd_buffer->state.pipeline);
+		}
+
+		if (!radv_upload_graphics_shader_descriptors(cmd_buffer, pipeline_is_dirty))
+			return;
+
+		radv_emit_all_graphics_states(cmd_buffer, info);
+		radv_emit_draw_packets(cmd_buffer, info);
+	}
 
 	assert(cmd_buffer->cs->cdw <= cdw_max);
 	radv_cmd_buffer_after_draw(cmd_buffer);
@@ -3530,16 +3641,15 @@ static void radv_initialize_htile(struct radv_cmd_buffer *cmd_buffer,
 	uint64_t size = image->surface.htile_slice_size * layer_count;
 	uint64_t offset = image->offset + image->htile_offset +
 	                  image->surface.htile_slice_size * range->baseArrayLayer;
+	struct radv_cmd_state *state = &cmd_buffer->state;
 
-	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB |
-	                                RADV_CMD_FLAG_FLUSH_AND_INV_DB_META;
+	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB |
+			     RADV_CMD_FLAG_FLUSH_AND_INV_DB_META;
 
-	radv_fill_buffer(cmd_buffer, image->bo, offset, size, clear_word);
+	state->flush_bits |= radv_fill_buffer(cmd_buffer, image->bo, offset,
+					      size, clear_word);
 
-	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB_META |
-	                                RADV_CMD_FLAG_CS_PARTIAL_FLUSH |
-	                                RADV_CMD_FLAG_INV_VMEM_L1 |
-	                                RADV_CMD_FLAG_WRITEBACK_GLOBAL_L2;
+	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_DB_META;
 }
 
 static void radv_handle_depth_image_transition(struct radv_cmd_buffer *cmd_buffer,
@@ -3585,16 +3695,16 @@ static void radv_handle_depth_image_transition(struct radv_cmd_buffer *cmd_buffe
 void radv_initialise_cmask(struct radv_cmd_buffer *cmd_buffer,
 			   struct radv_image *image, uint32_t value)
 {
-	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-	                                RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
+	struct radv_cmd_state *state = &cmd_buffer->state;
 
-	radv_fill_buffer(cmd_buffer, image->bo, image->offset + image->cmask.offset,
-			 image->cmask.size, value);
+	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
+			    RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
 
-	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB_META |
-	                                RADV_CMD_FLAG_CS_PARTIAL_FLUSH |
-	                                RADV_CMD_FLAG_INV_VMEM_L1 |
-	                                RADV_CMD_FLAG_WRITEBACK_GLOBAL_L2;
+	state->flush_bits |= radv_fill_buffer(cmd_buffer, image->bo,
+					      image->offset + image->cmask.offset,
+					      image->cmask.size, value);
+
+	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
 }
 
 static void radv_handle_cmask_image_transition(struct radv_cmd_buffer *cmd_buffer,
@@ -3619,18 +3729,17 @@ static void radv_handle_cmask_image_transition(struct radv_cmd_buffer *cmd_buffe
 void radv_initialize_dcc(struct radv_cmd_buffer *cmd_buffer,
 			 struct radv_image *image, uint32_t value)
 {
+	struct radv_cmd_state *state = &cmd_buffer->state;
 
-	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-	                                RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
+	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
+			     RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
 
-	radv_fill_buffer(cmd_buffer, image->bo, image->offset + image->dcc_offset,
-			 image->surface.dcc_size, value);
+	state->flush_bits |= radv_fill_buffer(cmd_buffer, image->bo,
+					      image->offset + image->dcc_offset,
+					      image->surface.dcc_size, value);
 
-	cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
-	                                RADV_CMD_FLAG_FLUSH_AND_INV_CB_META |
-	                                RADV_CMD_FLAG_CS_PARTIAL_FLUSH |
-	                                RADV_CMD_FLAG_INV_VMEM_L1 |
-	                                RADV_CMD_FLAG_WRITEBACK_GLOBAL_L2;
+	state->flush_bits |= RADV_CMD_FLAG_FLUSH_AND_INV_CB |
+			     RADV_CMD_FLAG_FLUSH_AND_INV_CB_META;
 }
 
 static void radv_handle_dcc_image_transition(struct radv_cmd_buffer *cmd_buffer,

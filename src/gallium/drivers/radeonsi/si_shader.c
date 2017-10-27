@@ -1099,12 +1099,12 @@ static LLVMValueRef lds_load(struct lp_build_tgsi_context *bld_base,
 	dw_addr = lp_build_add(&bld_base->uint_bld, dw_addr,
 			    LLVMConstInt(ctx->i32, swizzle, 0));
 
-	value = ac_build_load(&ctx->ac, ctx->lds, dw_addr);
+	value = ac_lds_load(&ctx->ac, dw_addr);
 	if (tgsi_type_is_64bit(type)) {
 		LLVMValueRef value2;
 		dw_addr = lp_build_add(&bld_base->uint_bld, dw_addr,
 				       ctx->i32_1);
-		value2 = ac_build_load(&ctx->ac, ctx->lds, dw_addr);
+		value2 = ac_lds_load(&ctx->ac, dw_addr);
 		return si_llvm_emit_fetch_64bit(bld_base, type, value, value2);
 	}
 
@@ -1127,9 +1127,7 @@ static void lds_store(struct lp_build_tgsi_context *bld_base,
 	dw_addr = lp_build_add(&bld_base->uint_bld, dw_addr,
 			    LLVMConstInt(ctx->i32, dw_offset_imm, 0));
 
-	value = ac_to_integer(&ctx->ac, value);
-	ac_build_indexed_store(&ctx->ac, ctx->lds,
-			       dw_addr, value);
+	ac_lds_store(&ctx->ac, dw_addr, value);
 }
 
 static LLVMValueRef desc_from_addr_base64k(struct si_shader_context *ctx,
@@ -2015,14 +2013,21 @@ static LLVMValueRef fetch_constant(
 		 * code reducing SIMD wave occupancy from 8 to 2 in many cases.
 		 *
 		 * Using s_buffer_load_dword (x1) seems to be the best option right now.
+		 *
+		 * LLVM 5.0 on SI doesn't insert a required s_nop between SALU setting
+		 * a descriptor and s_buffer_load_dword using it, so we can't expand
+		 * the pointer into a full descriptor like below. We have to use
+		 * s_load_dword instead. The only case when LLVM 5.0 would select
+		 * s_buffer_load_dword (that we have to prevent) is when we use use
+		 * a literal offset where we don't need bounds checking.
 		 */
-#if 0 /* keep this codepath disabled */
-		if (!reg->Register.Indirect) {
+		if (ctx->screen->b.chip_class == SI &&
+                    HAVE_LLVM < 0x0600 &&
+                    !reg->Register.Indirect) {
 			addr = LLVMBuildLShr(ctx->ac.builder, addr, LLVMConstInt(ctx->i32, 2, 0), "");
 			LLVMValueRef result = ac_build_load_invariant(&ctx->ac, ptr, addr);
 			return bitcast(bld_base, type, result);
 		}
-#endif
 
 		/* Do the bounds checking with a descriptor, because
 		 * doing computation and manual bounds checking of 64-bit
@@ -2272,22 +2277,24 @@ static void si_alpha_test(struct lp_build_tgsi_context *bld_base,
 	struct si_shader_context *ctx = si_shader_context(bld_base);
 
 	if (ctx->shader->key.part.ps.epilog.alpha_func != PIPE_FUNC_NEVER) {
+		static LLVMRealPredicate cond_map[PIPE_FUNC_ALWAYS + 1] = {
+			[PIPE_FUNC_LESS] = LLVMRealOLT,
+			[PIPE_FUNC_EQUAL] = LLVMRealOEQ,
+			[PIPE_FUNC_LEQUAL] = LLVMRealOLE,
+			[PIPE_FUNC_GREATER] = LLVMRealOGT,
+			[PIPE_FUNC_NOTEQUAL] = LLVMRealONE,
+			[PIPE_FUNC_GEQUAL] = LLVMRealOGE,
+		};
+		LLVMRealPredicate cond = cond_map[ctx->shader->key.part.ps.epilog.alpha_func];
+		assert(cond);
+
 		LLVMValueRef alpha_ref = LLVMGetParam(ctx->main_fn,
 				SI_PARAM_ALPHA_REF);
-
 		LLVMValueRef alpha_pass =
-			lp_build_cmp(&bld_base->base,
-				     ctx->shader->key.part.ps.epilog.alpha_func,
-				     alpha, alpha_ref);
-		LLVMValueRef arg =
-			lp_build_select(&bld_base->base,
-					alpha_pass,
-					LLVMConstReal(ctx->f32, 1.0f),
-					LLVMConstReal(ctx->f32, -1.0f));
-
-		ac_build_kill(&ctx->ac, arg);
+			LLVMBuildFCmp(ctx->ac.builder, cond, alpha, alpha_ref, "");
+		ac_build_kill_if_false(&ctx->ac, alpha_pass);
 	} else {
-		ac_build_kill(&ctx->ac, NULL);
+		ac_build_kill_if_false(&ctx->ac, LLVMConstInt(ctx->i1, 0, 0));
 	}
 }
 
@@ -3573,7 +3580,7 @@ static void si_llvm_return_fs_outputs(struct ac_shader_abi *abi,
 	LLVMValueRef ret;
 
 	if (ctx->postponed_kill)
-		ac_build_kill(&ctx->ac, LLVMBuildLoad(builder, ctx->postponed_kill, ""));
+		ac_build_kill_if_false(&ctx->ac, LLVMBuildLoad(builder, ctx->postponed_kill, ""));
 
 	/* Read the output values. */
 	for (i = 0; i < info->num_outputs; i++) {
@@ -4056,7 +4063,7 @@ static void si_llvm_emit_vertex(
 	LLVMValueRef soffset = LLVMGetParam(ctx->main_fn,
 					    ctx->param_gs2vs_offset);
 	LLVMValueRef gs_next_vertex;
-	LLVMValueRef can_emit, kill;
+	LLVMValueRef can_emit;
 	unsigned chan, offset;
 	int i;
 	unsigned stream;
@@ -4082,11 +4089,7 @@ static void si_llvm_emit_vertex(
 
 	bool use_kill = !info->writes_memory;
 	if (use_kill) {
-		kill = lp_build_select(&bld_base->base, can_emit,
-				       LLVMConstReal(ctx->f32, 1.0f),
-				       LLVMConstReal(ctx->f32, -1.0f));
-
-		ac_build_kill(&ctx->ac, kill);
+		ac_build_kill_if_false(&ctx->ac, can_emit);
 	} else {
 		lp_build_if(&if_state, &ctx->gallivm, can_emit);
 	}
@@ -4254,14 +4257,6 @@ static void declare_streamout_params(struct si_shader_context *ctx,
 
 		ctx->param_streamout_offset[i] = add_arg(fninfo, ARG_SGPR, ctx->ac.i32);
 	}
-}
-
-static void declare_lds_as_pointer(struct si_shader_context *ctx)
-{
-	unsigned lds_size = ctx->screen->b.chip_class >= CIK ? 65536 : 32768;
-	ctx->lds = LLVMBuildIntToPtr(ctx->ac.builder, ctx->i32_0,
-		LLVMPointerType(LLVMArrayType(ctx->i32, lds_size / 4), LOCAL_ADDR_SPACE),
-		"lds");
 }
 
 static unsigned si_get_max_workgroup_size(const struct si_shader *shader)
@@ -4754,7 +4749,7 @@ static void create_function(struct si_shader_context *ctx)
 	    (ctx->screen->b.chip_class >= GFX9 &&
 	     (shader->key.as_es ||
 	      ctx->type == PIPE_SHADER_GEOMETRY)))
-		declare_lds_as_pointer(ctx);
+		ac_declare_lds_as_pointer(&ctx->ac);
 }
 
 /**
@@ -4881,11 +4876,7 @@ static void si_llvm_emit_polygon_stipple(struct si_shader_context *ctx,
 	row = ac_to_integer(&ctx->ac, row);
 	bit = LLVMBuildLShr(builder, row, address[0], "");
 	bit = LLVMBuildTrunc(builder, bit, ctx->i1, "");
-
-	/* The intrinsic kills the thread if arg < 0. */
-	bit = LLVMBuildSelect(builder, bit, LLVMConstReal(ctx->f32, 0),
-			      LLVMConstReal(ctx->f32, -1), "");
-	ac_build_kill(&ctx->ac, bit);
+	ac_build_kill_if_false(&ctx->ac, bit);
 }
 
 void si_shader_binary_read_config(struct ac_shader_binary *binary,
@@ -5852,10 +5843,11 @@ static bool si_compile_tgsi_main(struct si_shader_context *ctx,
 		}
 	}
 
-	if (ctx->type == PIPE_SHADER_FRAGMENT && sel->info.uses_kill &&
-	    ctx->screen->b.debug_flags & DBG(FS_CORRECT_DERIVS_AFTER_KILL)) {
-		/* This is initialized to 0.0 = not kill. */
-		ctx->postponed_kill = lp_build_alloca(&ctx->gallivm, ctx->f32, "");
+	if (sel->force_correct_derivs_after_kill) {
+		ctx->postponed_kill = lp_build_alloca_undef(&ctx->gallivm, ctx->i1, "");
+		/* true = don't kill. */
+		LLVMBuildStore(ctx->ac.builder, LLVMConstInt(ctx->i1, 1, 0),
+			       ctx->postponed_kill);
 	}
 
 	if (sel->tokens) {
@@ -7081,7 +7073,7 @@ static void si_build_tcs_epilog_function(struct si_shader_context *ctx,
 	/* Create the function. */
 	si_create_function(ctx, "tcs_epilog", NULL, 0, &fninfo,
 			   ctx->screen->b.chip_class >= CIK ? 128 : 64);
-	declare_lds_as_pointer(ctx);
+	ac_declare_lds_as_pointer(&ctx->ac);
 	func = ctx->main_fn;
 
 	LLVMValueRef invoc0_tess_factors[6];
