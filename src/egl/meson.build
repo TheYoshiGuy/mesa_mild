@@ -129,7 +129,10 @@ if with_platform_wayland
     'wayland/wayland-egl', 'wayland/wayland-drm',
   )
 endif
-# TODO: android
+if with_platform_android
+  deps_for_egl += dep_android
+  files_egl += files('drivers/dri2/platform_android.c')
+endif
 
 # TODO: glvnd
 
@@ -180,6 +183,16 @@ pkg.generate(
 )
 
 if with_tests
-  test('egl-symbols-check', find_program('egl-symbols-check'))
-  test('egl-entrypoint-check', find_program('egl-entrypoint-check'))
+  if with_glvnd
+    # TODO: add glvnd symbol check
+  else
+    test('egl-symbols-check',
+      find_program('egl-symbols-check'),
+      args : libegl
+    )
+  endif
+  test('egl-entrypoint-check',
+    find_program('egl-entrypoint-check'),
+    env : [ 'srcdir=' + meson.current_source_dir() ]
+  )
 endif

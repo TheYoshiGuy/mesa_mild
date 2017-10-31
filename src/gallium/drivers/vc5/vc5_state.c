@@ -388,6 +388,25 @@ vc5_set_framebuffer_state(struct pipe_context *pctx,
         cso->width = framebuffer->width;
         cso->height = framebuffer->height;
 
+        vc5->swap_color_rb = 0;
+        vc5->blend_dst_alpha_one = 0;
+        for (int i = 0; i < vc5->framebuffer.nr_cbufs; i++) {
+                struct pipe_surface *cbuf = vc5->framebuffer.cbufs[i];
+                const struct util_format_description *desc =
+                        util_format_description(cbuf->format);
+
+                /* For BGRA8 formats (DRI window system default format), we
+                 * need to swap R and B, since the HW's format is RGBA8.
+                 */
+                if (desc->swizzle[0] == PIPE_SWIZZLE_Z &&
+                    cbuf->format != PIPE_FORMAT_B5G6R5_UNORM) {
+                        vc5->swap_color_rb |= 1 << i;
+                }
+
+                if (desc->swizzle[3] == PIPE_SWIZZLE_1)
+                        vc5->blend_dst_alpha_one |= 1 << i;
+        }
+
         vc5->dirty |= VC5_DIRTY_FRAMEBUFFER;
 }
 
@@ -562,19 +581,58 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
         so->base.reference.count = 1;
         so->base.context = pctx;
 
+        int msaa_scale = prsc->nr_samples > 1 ? 2 : 1;
+
         struct V3D33_TEXTURE_SHADER_STATE state_unpacked = {
                 cl_packet_header(TEXTURE_SHADER_STATE),
 
-                .image_width = prsc->width0,
-                .image_height = prsc->height0,
+                .image_width = prsc->width0 * msaa_scale,
+                .image_height = prsc->height0 * msaa_scale,
                 .image_depth = prsc->depth0,
 
-                .texture_type = rsc->tex_format,
                 .srgb = util_format_is_srgb(cso->format),
 
                 .base_level = cso->u.tex.first_level,
                 .array_stride_64_byte_aligned = rsc->cube_map_stride / 64,
         };
+
+        if (prsc->nr_samples > 1) {
+                /* Using texture views to reinterpret formats on our MSAA
+                 * textures won't work, because we don't lay out the bits in
+                 * memory as it's expected -- for example, RGBA8 and RGB10_A2
+                 * are compatible in the ARB_texture_view spec, but in HW we
+                 * lay them out as 32bpp RGBA8 and 64bpp RGBA16F.  Just assert
+                 * for now to catch failures.
+                 */
+                assert(util_format_linear(cso->format) ==
+                       util_format_linear(prsc->format));
+                uint32_t output_image_format = vc5_get_rt_format(cso->format);
+                uint32_t internal_type;
+                uint32_t internal_bpp;
+                vc5_get_internal_type_bpp_for_output_format(output_image_format,
+                                                            &internal_type,
+                                                            &internal_bpp);
+
+                switch (internal_type) {
+                case INTERNAL_TYPE_8:
+                        state_unpacked.texture_type = TEXTURE_DATA_FORMAT_RGBA8;
+                        break;
+                case INTERNAL_TYPE_16F:
+                        state_unpacked.texture_type = TEXTURE_DATA_FORMAT_RGBA16F;
+                        break;
+                default:
+                        unreachable("Bad MSAA texture type");
+                }
+
+                /* sRGB was stored in the tile buffer as linear and would have
+                 * been encoded to sRGB on resolved tile buffer store.  Note
+                 * that this means we would need shader code if we wanted to
+                 * read an MSAA sRGB texture without sRGB decode.
+                 */
+                state_unpacked.srgb = false;
+        } else {
+                state_unpacked.texture_type = vc5_get_tex_format(cso->format);
+        }
 
         /* Note: Contrary to the docs, the swizzle still applies even
          * if the return size is 32.  It's just that you probably want

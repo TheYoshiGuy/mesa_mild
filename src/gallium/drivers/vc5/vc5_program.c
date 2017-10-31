@@ -304,8 +304,12 @@ vc5_setup_shared_key(struct vc5_context *vc5, struct v3d_key *key,
                 } else if (sampler){
                         key->tex[i].compare_mode = sampler_state->compare_mode;
                         key->tex[i].compare_func = sampler_state->compare_func;
-                        key->tex[i].wrap_s = sampler_state->wrap_s;
-                        key->tex[i].wrap_t = sampler_state->wrap_t;
+                        key->tex[i].clamp_s =
+                                sampler_state->wrap_s == PIPE_TEX_WRAP_CLAMP;
+                        key->tex[i].clamp_t =
+                                sampler_state->wrap_t == PIPE_TEX_WRAP_CLAMP;
+                        key->tex[i].clamp_r =
+                                sampler_state->wrap_r == PIPE_TEX_WRAP_CLAMP;
                 }
         }
 
@@ -361,14 +365,13 @@ vc5_update_compiled_fs(struct vc5_context *vc5, uint8_t prim_mode)
          * there are means that the buffer count needs to be in the key.
          */
         key->nr_cbufs = vc5->framebuffer.nr_cbufs;
+        key->swap_color_rb = vc5->swap_color_rb;
 
         for (int i = 0; i < key->nr_cbufs; i++) {
                 struct pipe_surface *cbuf = vc5->framebuffer.cbufs[i];
                 const struct util_format_description *desc =
                         util_format_description(cbuf->format);
 
-                if (desc->swizzle[0] == PIPE_SWIZZLE_Z)
-                        key->swap_color_rb |= 1 << i;
                 if (desc->channel[0].type == UTIL_FORMAT_TYPE_FLOAT &&
                     desc->channel[0].size == 32) {
                         key->f32_color_rb |= 1 << i;

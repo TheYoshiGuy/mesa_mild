@@ -3117,9 +3117,8 @@ genX(upload_push_constant_packets)(struct brw_context *brw)
       }
 
       stage_state->push_constants_dirty = false;
+      brw->ctx.NewDriverState |= GEN_GEN >= 9 ? BRW_NEW_SURFACES : 0;
    }
-
-   brw->ctx.NewDriverState |= GEN_GEN >= 9 ? BRW_NEW_SURFACES : 0;
 }
 
 const struct brw_tracked_state genX(push_constant_packets) = {
@@ -4237,7 +4236,7 @@ genX(upload_cs_state)(struct brw_context *brw)
    const struct GENX(INTERFACE_DESCRIPTOR_DATA) idd = {
       .KernelStartPointer = brw->cs.base.prog_offset,
       .SamplerStatePointer = stage_state->sampler_offset,
-      .SamplerCount = DIV_ROUND_UP(stage_state->sampler_count, 4) >> 2,
+      .SamplerCount = DIV_ROUND_UP(CLAMP(stage_state->sampler_count, 0, 16), 4),
       .BindingTablePointer = stage_state->bind_bo_offset,
       .ConstantURBEntryReadLength = cs_prog_data->push.per_thread.regs,
       .NumberofThreadsinGPGPUThreadGroup = cs_prog_data->threads,

@@ -147,10 +147,12 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                                    &vc5->constbuf[PIPE_SHADER_VERTEX],
                                    &vc5->verttex);
 
+        /* See GFXH-930 workaround below */
+        uint32_t num_elements_to_emit = MAX2(vtx->num_elements, 1);
         uint32_t shader_rec_offset =
                 vc5_cl_ensure_space(&job->indirect,
                                     cl_packet_length(GL_SHADER_STATE_RECORD) +
-                                    vtx->num_elements *
+                                    num_elements_to_emit *
                                     cl_packet_length(GL_SHADER_STATE_ATTRIBUTE_RECORD),
                                     32);
 
@@ -187,9 +189,9 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                 shader.coordinate_shader_has_separate_input_and_output_vpm_blocks = true;
                 shader.vertex_shader_has_separate_input_and_output_vpm_blocks = true;
                 shader.coordinate_shader_input_vpm_segment_size =
-                        vc5->prog.cs->prog_data.vs->vpm_input_size;
+                        MAX2(vc5->prog.cs->prog_data.vs->vpm_input_size, 1);
                 shader.vertex_shader_input_vpm_segment_size =
-                        vc5->prog.vs->prog_data.vs->vpm_input_size;
+                        MAX2(vc5->prog.vs->prog_data.vs->vpm_input_size, 1);
 
                 shader.coordinate_shader_output_vpm_segment_size =
                         vc5->prog.cs->prog_data.vs->vpm_output_size;
@@ -240,9 +242,27 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                 cl_emit_prepacked(&job->indirect, &attr_packed);
         }
 
+        if (vtx->num_elements == 0) {
+                /* GFXH-930: At least one attribute must be enabled and read
+                 * by CS and VS.  If we have no attributes being consumed by
+                 * the shader, set up a dummy to be loaded into the VPM.
+                 */
+                cl_emit(&job->indirect, GL_SHADER_STATE_ATTRIBUTE_RECORD, attr) {
+                        /* Valid address of data whose value will be unused. */
+                        attr.address = cl_address(job->indirect.bo, 0);
+
+                        attr.type = ATTRIBUTE_FLOAT;
+                        attr.stride = 0;
+                        attr.vec_size = 1;
+
+                        attr.number_of_values_read_by_coordinate_shader = 1;
+                        attr.number_of_values_read_by_vertex_shader = 1;
+                }
+        }
+
         cl_emit(&job->bcl, GL_SHADER_STATE, state) {
                 state.address = cl_address(job->indirect.bo, shader_rec_offset);
-                state.number_of_attribute_arrays = vtx->num_elements;
+                state.number_of_attribute_arrays = num_elements_to_emit;
         }
 
         vc5_bo_unreference(&cs_uniforms.bo);
@@ -465,15 +485,54 @@ vc5_clear(struct pipe_context *pctx, unsigned buffers,
                 if (!(buffers & bit))
                         continue;
 
-                struct pipe_surface *cbuf = vc5->framebuffer.cbufs[i];
-                struct vc5_resource *rsc =
-                        vc5_resource(cbuf->texture);
+                struct pipe_surface *psurf = vc5->framebuffer.cbufs[i];
+                struct vc5_surface *surf = vc5_surface(psurf);
+                struct vc5_resource *rsc = vc5_resource(psurf->texture);
 
                 union util_color uc;
-                util_pack_color(color->f, cbuf->format, &uc);
+                uint32_t internal_size = 4 << surf->internal_bpp;
 
-                memcpy(job->clear_color[i], uc.ui,
-                       util_format_get_blocksize(cbuf->format));
+                switch (surf->internal_type) {
+                case INTERNAL_TYPE_8:
+                        if (surf->format == PIPE_FORMAT_B4G4R4A4_UNORM ||
+                            surf->format == PIPE_FORMAT_B4G4R4A4_UNORM) {
+                                /* Our actual hardware layout is ABGR4444, but
+                                 * we apply a swizzle when texturing to flip
+                                 * things back around.
+                                 */
+                                util_pack_color(color->f, PIPE_FORMAT_A8R8G8B8_UNORM,
+                                                &uc);
+                        } else {
+                                util_pack_color(color->f, PIPE_FORMAT_R8G8B8A8_UNORM,
+                                                &uc);
+                        }
+                        memcpy(job->clear_color[i], uc.ui, internal_size);
+                        break;
+                case INTERNAL_TYPE_8I:
+                case INTERNAL_TYPE_8UI:
+                        job->clear_color[i][0] = ((uc.ui[0] & 0xff) |
+                                                  (uc.ui[1] & 0xff) << 8 |
+                                                  (uc.ui[2] & 0xff) << 16 |
+                                                  (uc.ui[3] & 0xff) << 24);
+                        break;
+                case INTERNAL_TYPE_16F:
+                        util_pack_color(color->f, PIPE_FORMAT_R16G16B16A16_FLOAT,
+                                        &uc);
+                        memcpy(job->clear_color[i], uc.ui, internal_size);
+                        break;
+                case INTERNAL_TYPE_16I:
+                case INTERNAL_TYPE_16UI:
+                        job->clear_color[i][0] = ((uc.ui[0] & 0xffff) |
+                                                  uc.ui[1] << 16);
+                        job->clear_color[i][1] = ((uc.ui[2] & 0xffff) |
+                                                  uc.ui[3] << 16);
+                        break;
+                case INTERNAL_TYPE_32F:
+                case INTERNAL_TYPE_32I:
+                case INTERNAL_TYPE_32UI:
+                        memcpy(job->clear_color[i], color->ui, internal_size);
+                        break;
+                }
 
                 rsc->initialized_buffers |= bit;
         }

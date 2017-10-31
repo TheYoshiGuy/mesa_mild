@@ -28,7 +28,7 @@
 #include "broadcom/compiler/v3d_compiler.h"
 
 static uint8_t
-vc5_factor(enum pipe_blendfactor factor)
+vc5_factor(enum pipe_blendfactor factor, bool dst_alpha_one)
 {
         /* We may get a bad blendfactor when blending is disabled. */
         if (factor == 0)
@@ -52,9 +52,13 @@ vc5_factor(enum pipe_blendfactor factor)
         case PIPE_BLENDFACTOR_INV_SRC_ALPHA:
                 return V3D_BLEND_FACTOR_INV_SRC_ALPHA;
         case PIPE_BLENDFACTOR_DST_ALPHA:
-                return V3D_BLEND_FACTOR_DST_ALPHA;
+                return (dst_alpha_one ?
+                        V3D_BLEND_FACTOR_ONE :
+                        V3D_BLEND_FACTOR_DST_ALPHA);
         case PIPE_BLENDFACTOR_INV_DST_ALPHA:
-                return V3D_BLEND_FACTOR_INV_DST_ALPHA;
+                return (dst_alpha_one ?
+                        V3D_BLEND_FACTOR_ZERO :
+                        V3D_BLEND_FACTOR_INV_DST_ALPHA);
         case PIPE_BLENDFACTOR_CONST_COLOR:
                 return V3D_BLEND_FACTOR_CONST_COLOR;
         case PIPE_BLENDFACTOR_INV_CONST_COLOR:
@@ -215,7 +219,6 @@ vc5_emit_state(struct pipe_context *pctx)
                 cl_emit(&job->bcl, CLIP_WINDOW, clip) {
                         clip.clip_window_left_pixel_coordinate = minx;
                         clip.clip_window_bottom_pixel_coordinate = miny;
-                        clip.clip_window_height_in_pixels = maxy - miny;
                         clip.clip_window_width_in_pixels = maxx - minx;
                         clip.clip_window_height_in_pixels = maxy - miny;
                 }
@@ -265,6 +268,9 @@ vc5_emit_state(struct pipe_context *pctx)
                         } else {
                                 config.depth_test_function = PIPE_FUNC_ALWAYS;
                         }
+
+                        config.stencil_enable =
+                                vc5->zsa->base.stencil[0].enabled;
                 }
 
         }
@@ -325,15 +331,19 @@ vc5_emit_state(struct pipe_context *pctx)
 
                         config.colour_blend_mode = rtblend->rgb_func;
                         config.colour_blend_dst_factor =
-                                vc5_factor(rtblend->rgb_dst_factor);
+                                vc5_factor(rtblend->rgb_dst_factor,
+                                           vc5->blend_dst_alpha_one);
                         config.colour_blend_src_factor =
-                                vc5_factor(rtblend->rgb_src_factor);
+                                vc5_factor(rtblend->rgb_src_factor,
+                                           vc5->blend_dst_alpha_one);
 
                         config.alpha_blend_mode = rtblend->alpha_func;
                         config.alpha_blend_dst_factor =
-                                vc5_factor(rtblend->alpha_dst_factor);
+                                vc5_factor(rtblend->alpha_dst_factor,
+                                           vc5->blend_dst_alpha_one);
                         config.alpha_blend_src_factor =
-                                vc5_factor(rtblend->alpha_src_factor);
+                                vc5_factor(rtblend->alpha_src_factor,
+                                           vc5->blend_dst_alpha_one);
                 }
 
                 cl_emit(&job->bcl, COLOUR_WRITE_MASKS, mask) {
@@ -358,10 +368,13 @@ vc5_emit_state(struct pipe_context *pctx)
 
         if (vc5->dirty & VC5_DIRTY_BLEND_COLOR) {
                 cl_emit(&job->bcl, BLEND_CONSTANT_COLOUR, colour) {
-                        /* XXX: format-dependent swizzling */
-                        colour.red_f16 = vc5->blend_color.hf[2];
+                        colour.red_f16 = (vc5->swap_color_rb ?
+                                          vc5->blend_color.hf[2] :
+                                          vc5->blend_color.hf[0]);
                         colour.green_f16 = vc5->blend_color.hf[1];
-                        colour.blue_f16 = vc5->blend_color.hf[0];
+                        colour.blue_f16 = (vc5->swap_color_rb ?
+                                           vc5->blend_color.hf[0] :
+                                           vc5->blend_color.hf[2]);
                         colour.alpha_f16 = vc5->blend_color.hf[3];
                 }
         }

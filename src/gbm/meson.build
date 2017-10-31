@@ -34,7 +34,7 @@ deps_gbm = []
 
 if with_dri2
   files_gbm += files('backends/dri/gbm_dri.c', 'backends/dri/gbm_driint.h')
-  deps_gbm += [dep_libdrm, dep_thread]
+  deps_gbm += dep_libdrm # TODO: pthread-stubs
   args_gbm += '-DDEFAULT_DRIVER_DIR="@0@"'.format(dri_driver_dir)
 endif
 if with_platform_wayland
@@ -50,7 +50,7 @@ libgbm = shared_library(
   include_directories : [
     include_directories('main'), inc_include, inc_src, inc_loader,
     include_directories('../egl/wayland/wayland-drm')],
-  c_args : args_gbm,
+  c_args : [c_vis_args, args_gbm],
   link_args : [ld_args_gc_sections],
   link_with : [links_gbm, libloader, libmesa_util, libxmlconfig],
   dependencies : [deps_gbm, dep_dl],
@@ -70,6 +70,8 @@ pkg.generate(
 )
 
 if with_tests
-  gbm_symbols_check = find_program('gbm-symbols-check')
-  test('gbm-symbols-check', gbm_symbols_check)
+  test('gbm-symbols-check',
+    find_program('gbm-symbols-check'),
+    args : libgbm
+  )
 endif
