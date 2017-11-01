@@ -819,6 +819,10 @@ brw_process_driconf_options(struct brw_context *brw)
 
    brw->dual_color_blend_by_location =
       driQueryOptionb(options, "dual_color_blend_by_location");
+
+   ctx->Const.dri_config_options_sha1 = ralloc_array(brw, unsigned char, 20);
+   driComputeOptionsSha1(&brw->screen->optionCache,
+                         ctx->Const.dri_config_options_sha1);
 }
 
 GLboolean
@@ -1035,6 +1039,8 @@ brwCreateContext(gl_api api,
 
    vbo_use_buffer_objects(ctx);
    vbo_always_unmap_buffers(ctx);
+
+   brw_disk_cache_init(brw);
 
    return true;
 }

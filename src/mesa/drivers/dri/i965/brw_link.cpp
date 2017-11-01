@@ -27,6 +27,7 @@
 #include "compiler/glsl/ir.h"
 #include "compiler/glsl/ir_optimization.h"
 #include "compiler/glsl/program.h"
+#include "compiler/nir/nir_serialize.h"
 #include "program/program.h"
 #include "main/mtypes.h"
 #include "main/shaderapi.h"
@@ -224,6 +225,9 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
    unsigned int stage;
    struct shader_info *infos[MESA_SHADER_STAGES] = { 0, };
 
+   if (shProg->data->LinkStatus == linking_skipped)
+      return GL_TRUE;
+
    for (stage = 0; stage < ARRAY_SIZE(shProg->_LinkedShaders); stage++) {
       struct gl_linked_shader *shader = shProg->_LinkedShaders[stage];
       if (!shader)
@@ -322,6 +326,15 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 
       NIR_PASS_V(prog->nir, nir_lower_samplers, shProg);
       NIR_PASS_V(prog->nir, nir_lower_atomics, shProg);
+
+      if (brw->ctx.Cache) {
+         struct blob writer;
+         blob_init(&writer);
+         nir_serialize(&writer, prog->nir);
+         prog->driver_cache_blob = ralloc_size(NULL, writer.size);
+         memcpy(prog->driver_cache_blob, writer.data, writer.size);
+         prog->driver_cache_blob_size = writer.size;
+      }
 
       infos[stage] = &prog->nir->info;
 

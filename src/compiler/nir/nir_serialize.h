@@ -1,5 +1,5 @@
 /*
- * Copyright © 2014 Intel Corporation
+ * Copyright © 2017 Connor Abbott
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -17,26 +17,27 @@
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
  * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
  */
 
+#ifndef _NIR_SERIALIZE_H
+#define _NIR_SERIALIZE_H
 
-#ifndef BRW_CS_H
-#define BRW_CS_H
+#include "nir.h"
+#include "compiler/blob.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void
-brw_upload_cs_prog(struct brw_context *brw);
-
-void
-brw_cs_populate_key(struct brw_context *brw, struct brw_cs_prog_key *key);
+void nir_serialize(struct blob *blob, const nir_shader *nir);
+nir_shader *nir_deserialize(void *mem_ctx,
+                            const struct nir_shader_compiler_options *options,
+                            struct blob_reader *blob);
 
 #ifdef __cplusplus
-}
+} /* extern "C" */
 #endif
 
-#endif /* BRW_CS_H */
+#endif

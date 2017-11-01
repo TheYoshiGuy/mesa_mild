@@ -402,6 +402,16 @@ struct brw_cs_prog_key {
    struct brw_sampler_prog_key_data tex;
 };
 
+/* brw_any_prog_key is any of the keys that map to an API stage */
+union brw_any_prog_key {
+   struct brw_vs_prog_key vs;
+   struct brw_tcs_prog_key tcs;
+   struct brw_tes_prog_key tes;
+   struct brw_gs_prog_key gs;
+   struct brw_wm_prog_key wm;
+   struct brw_cs_prog_key cs;
+};
+
 /*
  * Image metadata structure as laid out in the shader parameter
  * buffer.  Entries have to be 16B-aligned for the vec4 back-end to be
@@ -586,6 +596,8 @@ struct brw_stage_prog_data {
    unsigned curb_read_length;
    unsigned total_scratch;
    unsigned total_shared;
+
+   unsigned program_size;
 
    /**
     * Register where the thread expects to find input data from the URB
@@ -1062,6 +1074,18 @@ struct brw_clip_prog_data {
    uint32_t total_grf;
 };
 
+/* brw_any_prog_data is prog_data for any stage that maps to an API stage */
+union brw_any_prog_data {
+   struct brw_stage_prog_data base;
+   struct brw_vue_prog_data vue;
+   struct brw_vs_prog_data vs;
+   struct brw_tcs_prog_data tcs;
+   struct brw_tes_prog_data tes;
+   struct brw_gs_prog_data gs;
+   struct brw_wm_prog_data wm;
+   struct brw_cs_prog_data cs;
+};
+
 #define DEFINE_PROG_DATA_DOWNCAST(stage)                       \
 static inline struct brw_##stage##_prog_data *                 \
 brw_##stage##_prog_data(struct brw_stage_prog_data *prog_data) \
@@ -1085,6 +1109,12 @@ DEFINE_PROG_DATA_DOWNCAST(sf)
 struct brw_compiler *
 brw_compiler_create(void *mem_ctx, const struct gen_device_info *devinfo);
 
+unsigned
+brw_prog_data_size(gl_shader_stage stage);
+
+unsigned
+brw_prog_key_size(gl_shader_stage stage);
+
 /**
  * Compile a vertex shader.
  *
@@ -1098,7 +1128,6 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
                const struct nir_shader *shader,
                bool use_legacy_snorm_formula,
                int shader_time_index,
-               unsigned *final_assembly_size,
                char **error_str);
 
 /**
@@ -1114,7 +1143,6 @@ brw_compile_tcs(const struct brw_compiler *compiler,
                 struct brw_tcs_prog_data *prog_data,
                 const struct nir_shader *nir,
                 int shader_time_index,
-                unsigned *final_assembly_size,
                 char **error_str);
 
 /**
@@ -1131,7 +1159,6 @@ brw_compile_tes(const struct brw_compiler *compiler, void *log_data,
                 const struct nir_shader *shader,
                 struct gl_program *prog,
                 int shader_time_index,
-                unsigned *final_assembly_size,
                 char **error_str);
 
 /**
@@ -1147,7 +1174,6 @@ brw_compile_gs(const struct brw_compiler *compiler, void *log_data,
                const struct nir_shader *shader,
                struct gl_program *prog,
                int shader_time_index,
-               unsigned *final_assembly_size,
                char **error_str);
 
 /**
@@ -1198,7 +1224,6 @@ brw_compile_fs(const struct brw_compiler *compiler, void *log_data,
                int shader_time_index16,
                bool allow_spilling,
                bool use_rep_send, struct brw_vue_map *vue_map,
-               unsigned *final_assembly_size,
                char **error_str);
 
 /**
@@ -1213,7 +1238,6 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
                struct brw_cs_prog_data *prog_data,
                const struct nir_shader *shader,
                int shader_time_index,
-               unsigned *final_assembly_size,
                char **error_str);
 
 static inline uint32_t

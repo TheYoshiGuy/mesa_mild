@@ -141,7 +141,6 @@ brw_codegen_wm_prog(struct brw_context *brw,
    void *mem_ctx = ralloc_context(NULL);
    struct brw_wm_prog_data prog_data;
    const GLuint *program;
-   GLuint program_size;
    bool start_busy = false;
    double start_time = 0;
 
@@ -185,7 +184,7 @@ brw_codegen_wm_prog(struct brw_context *brw,
                             key, &prog_data, fp->program.nir,
                             &fp->program, st_index8, st_index16,
                             true, false, vue_map,
-                            &program_size, &error_str);
+                            &error_str);
 
    if (program == NULL) {
       if (!fp->program.is_arb_asm) {
@@ -210,9 +209,7 @@ brw_codegen_wm_prog(struct brw_context *brw,
       }
    }
 
-   brw_alloc_stage_scratch(brw, &brw->wm.base,
-                           prog_data.base.total_scratch,
-                           devinfo->max_wm_threads);
+   brw_alloc_stage_scratch(brw, &brw->wm.base, prog_data.base.total_scratch);
 
    if (unlikely((INTEL_DEBUG & DEBUG_WM) && fp->program.is_arb_asm))
       fprintf(stderr, "\n");
@@ -222,7 +219,7 @@ brw_codegen_wm_prog(struct brw_context *brw,
    ralloc_steal(NULL, prog_data.base.pull_param);
    brw_upload_cache(&brw->cache, BRW_CACHE_FS_PROG,
                     key, sizeof(struct brw_wm_prog_key),
-                    program, program_size,
+                    program, prog_data.base.program_size,
                     &prog_data, sizeof(prog_data),
                     &brw->wm.base.prog_offset, &brw->wm.base.prog_data);
 
@@ -339,7 +336,7 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
          }
 
          /* gather4 for RG32* is broken in multiple ways on Gen7. */
-         if (devinfo->gen == 7 && prog->nir->info.uses_texture_gather) {
+         if (devinfo->gen == 7 && prog->info.uses_texture_gather) {
             switch (img->InternalFormat) {
             case GL_RG32I:
             case GL_RG32UI: {
@@ -377,7 +374,7 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
          /* Gen6's gather4 is broken for UINT/SINT; we treat them as
           * UNORM/FLOAT instead and fix it in the shader.
           */
-         if (devinfo->gen == 6 && prog->nir->info.uses_texture_gather) {
+         if (devinfo->gen == 6 && prog->info.uses_texture_gather) {
             key->gen6_gather_wa[s] = gen6_gather_workaround(img->InternalFormat);
          }
 
@@ -598,15 +595,21 @@ brw_upload_wm_prog(struct brw_context *brw)
 
    brw_wm_populate_key(brw, &key);
 
-   if (!brw_search_cache(&brw->cache, BRW_CACHE_FS_PROG,
-                         &key, sizeof(key),
-                         &brw->wm.base.prog_offset,
-                         &brw->wm.base.prog_data)) {
-      bool success = brw_codegen_wm_prog(brw, fp, &key,
-                                         &brw->vue_map_geom_out);
-      (void) success;
-      assert(success);
-   }
+   if (brw_search_cache(&brw->cache, BRW_CACHE_FS_PROG,
+                        &key, sizeof(key),
+                        &brw->wm.base.prog_offset,
+                        &brw->wm.base.prog_data))
+      return;
+
+   if (brw_disk_cache_upload_program(brw, MESA_SHADER_FRAGMENT))
+      return;
+
+   fp = (struct brw_program *) brw->programs[MESA_SHADER_FRAGMENT];
+   fp->id = key.program_string_id;
+
+   MAYBE_UNUSED bool success = brw_codegen_wm_prog(brw, fp, &key,
+                                                   &brw->vue_map_geom_out);
+   assert(success);
 }
 
 bool
