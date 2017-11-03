@@ -26,10 +26,6 @@
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
  */
-/*
- * Authors:
- *      Marek Olšák <maraeo@gmail.com>
- */
 
 #include "amdgpu_cs.h"
 #include "amdgpu_public.h"
@@ -92,6 +88,9 @@ static void do_winsys_deinit(struct amdgpu_winsys *ws)
 static void amdgpu_winsys_destroy(struct radeon_winsys *rws)
 {
    struct amdgpu_winsys *ws = (struct amdgpu_winsys*)rws;
+
+   if (ws->reserve_vmid)
+      amdgpu_vm_unreserve_vmid(ws->dev, 0);
 
    if (util_queue_is_initialized(&ws->cs_queue))
       util_queue_destroy(&ws->cs_queue);
@@ -342,6 +341,14 @@ amdgpu_winsys_create(int fd, const struct pipe_screen_config *config,
    }
 
    util_hash_table_set(dev_tab, dev, ws);
+
+   if (ws->reserve_vmid) {
+	   r = amdgpu_vm_reserve_vmid(dev, 0);
+	   if (r) {
+		fprintf(stderr, "amdgpu: amdgpu_vm_reserve_vmid failed. (%i)\n", r);
+		goto fail_cache;
+	   }
+   }
 
    /* We must unlock the mutex once the winsys is fully initialized, so that
     * other threads attempting to create the winsys from the same fd will

@@ -25,10 +25,6 @@
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
  */
-/*
- * Authors:
- *      Marek Olšák <maraeo@gmail.com>
- */
 
 #include "amdgpu_cs.h"
 #include "os/os_time.h"
@@ -254,14 +250,6 @@ static struct radeon_winsys_ctx *amdgpu_ctx_create(struct radeon_winsys *ws)
    if (r) {
       fprintf(stderr, "amdgpu: amdgpu_cs_ctx_create failed. (%i)\n", r);
       goto error_create;
-   }
-
-   if (ctx->ws->reserve_vmid) {
-	   r = amdgpu_vm_reserve_vmid(ctx->ctx, 0);
-	   if (r) {
-		fprintf(stderr, "amdgpu: amdgpu_vm_reserve_vmid failed. (%i)\n", r);
-		goto error_create;
-	   }
    }
 
    alloc_buffer.alloc_size = ctx->ws->info.gart_page_size;

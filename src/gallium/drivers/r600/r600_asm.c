@@ -1969,6 +1969,15 @@ static int print_src(struct r600_bytecode_alu *alu, unsigned idx)
 			o += fprintf(stderr, "LDS_OQ_B_POP");
 			need_chan = 1;
 			break;
+		case EG_V_SQ_ALU_SRC_SE_ID:
+			o += fprintf(stderr, "SE_ID");
+			break;
+		case EG_V_SQ_ALU_SRC_SIMD_ID:
+			o += fprintf(stderr, "SIMD_ID");
+			break;
+		case EG_V_SQ_ALU_SRC_HW_WAVE_ID:
+			o += fprintf(stderr, "HW_WAVE_ID");
+			break;
 		case V_SQ_ALU_SRC_PS:
 			o += fprintf(stderr, "PS");
 			break;
@@ -2116,6 +2125,8 @@ void r600_bytecode_disasm(struct r600_bytecode *bc)
 				print_indent(o, 67);
 
 				fprintf(stderr, " ES:%X ", cf->output.elem_size);
+				if (cf->mark)
+					fprintf(stderr, "MARK ");
 				if (!cf->barrier)
 					fprintf(stderr, "NO_BARRIER ");
 				if (cf->end_of_program)
@@ -2129,6 +2140,15 @@ void r600_bytecode_disasm(struct r600_bytecode *bc)
 						bc->bytecode[id], bc->bytecode[id + 1], cfop->name);
 				o += print_indent(o, 43);
 				o += fprintf(stderr, "%s ", exp_type[cf->output.type]);
+
+				if (r600_isa_cf(cf->op)->flags & CF_RAT) {
+					o += fprintf(stderr, "RAT%d", cf->rat.id);
+					if (cf->rat.index_mode) {
+						o += fprintf(stderr, "[IDX%d]", cf->rat.index_mode - 1);
+					}
+					o += fprintf(stderr, " INST: %d ", cf->rat.inst);
+				}
+
 				if (cf->output.burst_count > 1) {
 					o += fprintf(stderr, "%d-%d ", cf->output.array_base,
 							cf->output.array_base + cf->output.burst_count - 1);
@@ -2156,6 +2176,8 @@ void r600_bytecode_disasm(struct r600_bytecode *bc)
 				fprintf(stderr, " ES:%i ", cf->output.elem_size);
 				if (cf->output.array_size != 0xFFF)
 					fprintf(stderr, "AS:%i ", cf->output.array_size);
+				if (cf->mark)
+					fprintf(stderr, "MARK ");
 				if (!cf->barrier)
 					fprintf(stderr, "NO_BARRIER ");
 				if (cf->end_of_program)
