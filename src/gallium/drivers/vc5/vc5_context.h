@@ -77,6 +77,7 @@ void vc5_job_add_bo(struct vc5_job *job, struct vc5_bo *bo);
 #define VC5_DIRTY_COMPILED_FS   (1 << 25)
 #define VC5_DIRTY_FS_INPUTS     (1 << 26)
 #define VC5_DIRTY_STREAMOUT     (1 << 27)
+#define VC5_DIRTY_OQ            (1 << 28)
 
 #define VC5_MAX_FS_INPUTS 64
 
@@ -204,6 +205,9 @@ struct vc5_job {
          */
         struct set *bos;
 
+        /** Sum of the sizes of the BOs referenced by the job. */
+        uint32_t referenced_size;
+
         struct set *write_prscs;
 
         /* Size of the submit.bo_handles array. */
@@ -261,6 +265,13 @@ struct vc5_job {
          * DRM_IOCTL_VC5_SUBMIT_CL.
          */
         bool needs_flush;
+
+        /**
+         * Set if there is a nonzero address for OCCLUSION_QUERY_COUNTER.  If
+         * so, we need to disable it and flush before ending the CL, to keep
+         * the next tile from starting with it enabled.
+         */
+        bool oq_enabled;
 
         bool uses_early_z;
 
@@ -353,12 +364,18 @@ struct vc5_context {
          */
         uint8_t blend_dst_alpha_one;
 
+        bool active_queries;
+
+        uint32_t tf_prims_generated;
+        uint32_t prims_generated;
+
         struct pipe_poly_stipple stipple;
         struct pipe_clip_state clip;
         struct pipe_viewport_state viewport;
         struct vc5_constbuf_stateobj constbuf[PIPE_SHADER_TYPES];
         struct vc5_vertexbuf_stateobj vertexbuf;
         struct vc5_streamout_stateobj streamout;
+        struct vc5_bo *current_oq;
         /** @} */
 };
 
@@ -394,6 +411,9 @@ struct vc5_depth_stencil_alpha_state {
          * Index 2 is the writemask config if it's not a common mask value.
          */
         uint32_t stencil_uniforms[3];
+
+        uint8_t stencil_front[6];
+        uint8_t stencil_back[6];
 };
 
 #define perf_debug(...) do {                            \

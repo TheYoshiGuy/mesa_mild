@@ -2467,7 +2467,7 @@ static LLVMValueRef visit_load_ubo_buffer(struct ac_nir_context *ctx,
 	}
 
 
-	ret = ac_build_gather_values(&ctx->ac, results, instr->num_components);
+	ret = ac_build_gather_values(&ctx->ac, results, num_components);
 	return LLVMBuildBitCast(ctx->ac.builder, ret,
 	                        get_def_type(ctx, &instr->dest.ssa), "");
 }
@@ -3654,6 +3654,31 @@ static void emit_waitcnt(struct nir_to_llvm_context *ctx,
 			   ctx->ac.voidt, args, 1, 0);
 }
 
+static void emit_membar(struct nir_to_llvm_context *ctx,
+			const nir_intrinsic_instr *instr)
+{
+	unsigned waitcnt = NOOP_WAITCNT;
+
+	switch (instr->intrinsic) {
+	case nir_intrinsic_memory_barrier:
+	case nir_intrinsic_group_memory_barrier:
+		waitcnt &= VM_CNT & LGKM_CNT;
+		break;
+	case nir_intrinsic_memory_barrier_atomic_counter:
+	case nir_intrinsic_memory_barrier_buffer:
+	case nir_intrinsic_memory_barrier_image:
+		waitcnt &= VM_CNT;
+		break;
+	case nir_intrinsic_memory_barrier_shared:
+		waitcnt &= LGKM_CNT;
+		break;
+	default:
+		break;
+	}
+	if (waitcnt != NOOP_WAITCNT)
+		emit_waitcnt(ctx, waitcnt);
+}
+
 static void emit_barrier(struct nir_to_llvm_context *ctx)
 {
 	/* SI only (thanks to a hw bug workaround):
@@ -4144,7 +4169,12 @@ static void visit_intrinsic(struct ac_nir_context *ctx,
 		emit_discard_if(ctx, instr);
 		break;
 	case nir_intrinsic_memory_barrier:
-		emit_waitcnt(ctx->nctx, VM_CNT);
+	case nir_intrinsic_group_memory_barrier:
+	case nir_intrinsic_memory_barrier_atomic_counter:
+	case nir_intrinsic_memory_barrier_buffer:
+	case nir_intrinsic_memory_barrier_image:
+	case nir_intrinsic_memory_barrier_shared:
+		emit_membar(ctx->nctx, instr);
 		break;
 	case nir_intrinsic_barrier:
 		emit_barrier(ctx->nctx);

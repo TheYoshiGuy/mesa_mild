@@ -21,20 +21,17 @@
  * IN THE SOFTWARE.
  */
 
-#include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <limits.h>
 #include <assert.h>
-#include <linux/futex.h>
 #include <linux/memfd.h>
-#include <sys/time.h>
 #include <sys/mman.h>
-#include <sys/syscall.h>
 
 #include "anv_private.h"
 
 #include "util/hash_table.h"
+#include "util/simple_mtx.h"
 
 #ifdef HAVE_VALGRIND
 #define VG_NOACCESS_READ(__ptr) ({                       \
@@ -111,25 +108,6 @@ struct anv_mmap_cleanup {
 };
 
 #define ANV_MMAP_CLEANUP_INIT ((struct anv_mmap_cleanup){0})
-
-static inline long
-sys_futex(void *addr1, int op, int val1,
-          struct timespec *timeout, void *addr2, int val3)
-{
-   return syscall(SYS_futex, addr1, op, val1, timeout, addr2, val3);
-}
-
-static inline int
-futex_wake(uint32_t *addr, int count)
-{
-   return sys_futex(addr, FUTEX_WAKE, count, NULL, NULL, 0);
-}
-
-static inline int
-futex_wait(uint32_t *addr, int32_t value)
-{
-   return sys_futex(addr, FUTEX_WAIT, value, NULL, NULL, 0);
-}
 
 static inline int
 memfd_create(const char *name, unsigned int flags)
@@ -587,7 +565,7 @@ anv_block_pool_alloc_new(struct anv_block_pool *pool,
             futex_wake(&pool_state->end, INT_MAX);
          return state.next;
       } else {
-         futex_wait(&pool_state->end, state.end);
+         futex_wait(&pool_state->end, state.end, NULL);
          continue;
       }
    }
@@ -684,7 +662,7 @@ anv_fixed_size_state_pool_alloc_new(struct anv_fixed_size_state_pool *pool,
          futex_wake(&pool->block.end, INT_MAX);
       return offset;
    } else {
-      futex_wait(&pool->block.end, block.end);
+      futex_wait(&pool->block.end, block.end, NULL);
       goto restart;
    }
 }

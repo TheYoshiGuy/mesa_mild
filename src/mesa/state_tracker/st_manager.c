@@ -45,9 +45,11 @@
 #include "st_debug.h"
 #include "st_extensions.h"
 #include "st_format.h"
+#include "st_cb_bitmap.h"
 #include "st_cb_fbo.h"
 #include "st_cb_flush.h"
 #include "st_manager.h"
+#include "st_sampler_view.h"
 
 #include "state_tracker/st_gl_api.h"
 
@@ -630,10 +632,13 @@ st_context_flush(struct st_context_iface *stctxi, unsigned flags,
    struct st_context *st = (struct st_context *) stctxi;
    unsigned pipe_flags = 0;
 
-   if (flags & ST_FLUSH_END_OF_FRAME) {
+   if (flags & ST_FLUSH_END_OF_FRAME)
       pipe_flags |= PIPE_FLUSH_END_OF_FRAME;
-   }
+   if (flags & ST_FLUSH_FENCE_FD)
+      pipe_flags |= PIPE_FLUSH_FENCE_FD;
 
+   FLUSH_VERTICES(st->ctx, 0);
+   FLUSH_CURRENT(st->ctx, 0);
    st_flush(st, fence, pipe_flags);
 
    if ((flags & ST_FLUSH_WAIT) && fence && *fence) {
@@ -734,6 +739,8 @@ st_context_teximage(struct st_context_iface *stctxi,
       width = height = depth = 0;
    }
 
+   pipe_resource_reference(&stObj->pt, tex);
+   st_texture_release_all_sampler_views(st, stObj);
    pipe_resource_reference(&stImage->pt, tex);
    stObj->surface_format = pipe_format;
 
@@ -881,6 +888,9 @@ st_api_create_context(struct st_api *stapi, struct st_manager *smapi,
       st->ctx->Const.ResetStrategy = GL_LOSE_CONTEXT_ON_RESET_ARB;
       st_install_device_reset_callback(st);
    }
+
+   if (attribs->flags & ST_CONTEXT_FLAG_RELEASE_NONE)
+       st->ctx->Const.ContextReleaseBehavior = GL_NONE;
 
    /* need to perform version check */
    if (attribs->major > 1 || attribs->minor > 0) {
@@ -1168,7 +1178,7 @@ get_version(struct pipe_screen *screen,
    _mesa_init_extensions(&extensions);
 
    st_init_limits(screen, &consts, &extensions);
-   st_init_extensions(screen, &consts, &extensions, options);
+   st_init_extensions(screen, &consts, &extensions, options, api);
 
    return _mesa_get_version(&extensions, &consts, api);
 }

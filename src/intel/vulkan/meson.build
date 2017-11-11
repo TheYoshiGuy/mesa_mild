@@ -38,7 +38,7 @@ anv_extensions_c = custom_target(
 intel_icd = custom_target(
   'intel_icd',
   input : 'anv_icd.py',
-  output : 'intel_icd.@0@.json'.format(target_machine.cpu()),
+  output : 'intel_icd.@0@.json'.format(host_machine.cpu()),
   command : [prog_python2, '@INPUT@',
              '--lib-path', join_paths(get_option('prefix'), get_option('libdir')),
              '--out', '@OUTPUT@'],
@@ -46,6 +46,18 @@ intel_icd = custom_target(
   build_by_default : true,
   install_dir : with_vulkan_icd_dir,
   install : true,
+)
+
+dev_icd = custom_target(
+  'dev_icd',
+  input : 'anv_icd.py',
+  output : 'dev_icd.@0@.json'.format(host_machine.cpu()),
+  command : [prog_python2, '@INPUT@',
+             '--lib-path', meson.current_build_dir(),
+             '--out', '@OUTPUT@'],
+  depend_files : files('anv_extensions.py'),
+  build_by_default : true,
+  install : false,
 )
 
 # TODO: workaround for anv_entrypoints combining the .h and .c files in it's

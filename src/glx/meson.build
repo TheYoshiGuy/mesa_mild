@@ -112,7 +112,7 @@ if not with_glvnd
   gl_lib_version = '1.2.0'
 else
   gl_lib_name = 'GLX_mesa'
-  gl_lib_version = '0'
+  gl_lib_version = '0.0.0'
   files_libglx += files(
     'g_glxglvnddispatchfuncs.c',
     'g_glxglvnddispatchindices.h',
@@ -166,17 +166,6 @@ if with_glx == 'dri'
                     dep_xcb_dri2, dep_xcb_dri3],
     version : gl_lib_version,
     install : true,
-  )
-
-  pkg.generate(
-    name : 'gl',
-    filebase : 'gl',
-    description : 'Mesa OpenGL Library',
-    version : meson.project_version(),
-    libraries : libgl,
-    libraries_private : gl_priv_libs,
-    requires_private : gl_priv_reqs,
-    variables : ['glx_tls=yes'],
   )
 endif
 

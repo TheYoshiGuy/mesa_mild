@@ -39,7 +39,6 @@
 #include <xf86drm.h>
 #include <amdgpu.h>
 #include <amdgpu_drm.h>
-#include "amdgpu_id.h"
 #include "winsys/amdgpu/radv_amdgpu_winsys_public.h"
 #include "ac_llvm_util.h"
 #include "vk_format.h"
@@ -1564,22 +1563,22 @@ radv_get_preamble_cs(struct radv_queue *queue,
 		dest_cs[i] = cs;
 
 		if (scratch_bo)
-			queue->device->ws->cs_add_buffer(cs, scratch_bo, 8);
+			radv_cs_add_buffer(queue->device->ws, cs, scratch_bo, 8);
 
 		if (esgs_ring_bo)
-			queue->device->ws->cs_add_buffer(cs, esgs_ring_bo, 8);
+			radv_cs_add_buffer(queue->device->ws, cs, esgs_ring_bo, 8);
 
 		if (gsvs_ring_bo)
-			queue->device->ws->cs_add_buffer(cs, gsvs_ring_bo, 8);
+			radv_cs_add_buffer(queue->device->ws, cs, gsvs_ring_bo, 8);
 
 		if (tess_factor_ring_bo)
-			queue->device->ws->cs_add_buffer(cs, tess_factor_ring_bo, 8);
+			radv_cs_add_buffer(queue->device->ws, cs, tess_factor_ring_bo, 8);
 
 		if (tess_offchip_ring_bo)
-			queue->device->ws->cs_add_buffer(cs, tess_offchip_ring_bo, 8);
+			radv_cs_add_buffer(queue->device->ws, cs, tess_offchip_ring_bo, 8);
 
 		if (descriptor_bo)
-			queue->device->ws->cs_add_buffer(cs, descriptor_bo, 8);
+			radv_cs_add_buffer(queue->device->ws, cs, descriptor_bo, 8);
 
 		if (descriptor_bo != queue->descriptor_bo) {
 			uint32_t *map = (uint32_t*)queue->device->ws->buffer_map(descriptor_bo);
@@ -1678,7 +1677,7 @@ radv_get_preamble_cs(struct radv_queue *queue,
 			uint32_t rsrc1 = S_008F04_BASE_ADDRESS_HI(scratch_va >> 32) |
 			                 S_008F04_SWIZZLE_ENABLE(1);
 
-			queue->device->ws->cs_add_buffer(cs, compute_scratch_bo, 8);
+			radv_cs_add_buffer(queue->device->ws, cs, compute_scratch_bo, 8);
 
 			radeon_set_sh_reg_seq(cs, R_00B900_COMPUTE_USER_DATA_0, 2);
 			radeon_emit(cs, scratch_va);

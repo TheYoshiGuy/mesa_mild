@@ -552,7 +552,7 @@ enum brw_param_builtin {
    BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_X,
    BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_Y,
 
-   BRW_PARAM_BUILTIN_THREAD_LOCAL_ID,
+   BRW_PARAM_BUILTIN_SUBGROUP_ID,
 };
 
 #define BRW_PARAM_BUILTIN_CLIP_PLANE(idx, comp) \
@@ -745,7 +745,6 @@ struct brw_push_const_block {
 struct brw_cs_prog_data {
    struct brw_stage_prog_data base;
 
-   GLuint dispatch_grf_start_reg_16;
    unsigned local_size[3];
    unsigned simd_size;
    unsigned threads;

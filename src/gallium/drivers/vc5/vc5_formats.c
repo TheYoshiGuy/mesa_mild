@@ -182,7 +182,7 @@ static const struct vc5_format vc5_format_table[] = {
         FORMAT(R9G9B9E5_FLOAT,    NO,           RGB9_E5,     SWIZ_XYZW, 16, 0),
 
         FORMAT(S8_UINT_Z24_UNORM, DEPTH24_STENCIL8, DEPTH24_X8, SWIZ_X001, 32, 1),
-        FORMAT(X8Z24_UNORM,       DEPTH_COMPONENT24, DEPTH24_X8, SWIZ_X001, 32, 1),
+        FORMAT(X8Z24_UNORM,       DEPTH24_STENCIL8, DEPTH24_X8, SWIZ_X001, 32, 1),
         FORMAT(S8X24_UINT,        NO,           R32F,        SWIZ_X001, 32, 1),
         FORMAT(Z32_FLOAT,         DEPTH_COMPONENT32F, R32F, SWIZ_X001, 32, 1),
         FORMAT(Z16_UNORM,         DEPTH_COMPONENT16,  DEPTH_COMP16, SWIZ_X001, 32, 1),
@@ -195,6 +195,7 @@ static const struct vc5_format vc5_format_table[] = {
         FORMAT(ETC2_RGB8A1,       NO,           RGB8_PUNCHTHROUGH_ALPHA1, SWIZ_XYZW, 16, 0),
         FORMAT(ETC2_SRGB8A1,      NO,           RGB8_PUNCHTHROUGH_ALPHA1, SWIZ_XYZW, 16, 0),
         FORMAT(ETC2_RGBA8,        NO,           RGBA8_ETC2_EAC, SWIZ_XYZW, 16, 0),
+        FORMAT(ETC2_SRGBA8,       NO,           RGBA8_ETC2_EAC, SWIZ_XYZW, 16, 0),
         FORMAT(ETC2_R11_UNORM,    NO,           R11_EAC,     SWIZ_X001, 16, 0),
         FORMAT(ETC2_R11_SNORM,    NO,           SIGNED_R11_EAC, SWIZ_X001, 16, 0),
         FORMAT(ETC2_RG11_UNORM,   NO,           RG11_EAC,    SWIZ_XY01, 16, 0),

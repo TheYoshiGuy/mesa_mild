@@ -145,7 +145,7 @@ if not with_glvnd
   egl_lib_version = '1.0.0'
 else
   egl_lib_name = 'EGL_mesa'
-  egl_lib_version = '0'
+  egl_lib_version = '0.0.0'
   files_egl += [g_egldispatchstubs_h, g_egldispatchstubs_c]
   files_egl += files('main/eglglvnd.c', 'main/egldispatchstubs.c')
   install_data(
@@ -181,6 +181,10 @@ pkg.generate(
   requires_private : gl_priv_reqs,
   extra_cflags : gl_pkgconfig_c_flags,
 )
+
+if with_platform_wayland
+  subdir('wayland/wayland-egl')
+endif
 
 if with_tests
   if with_glvnd

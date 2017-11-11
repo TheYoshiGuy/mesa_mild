@@ -93,6 +93,9 @@ vc5_start_draw(struct vc5_context *vc5)
         /* There's definitely nothing in the VCD cache we want. */
         cl_emit(&job->bcl, FLUSH_VCD_CACHE, bin);
 
+        /* Disable any leftover OQ state from another job. */
+        cl_emit(&job->bcl, OCCLUSION_QUERY_COUNTER, counter);
+
         /* "Binning mode lists must have a Start Tile Binning item (6) after
          *  any prefix state data before the binning list proper starts."
          */
@@ -221,25 +224,20 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
                         &vertexbuf->vb[elem->vertex_buffer_index];
                 struct vc5_resource *rsc = vc5_resource(vb->buffer.resource);
 
-                struct V3D33_GL_SHADER_STATE_ATTRIBUTE_RECORD attr_unpacked = {
-                        .stride = vb->stride,
-                        .address = cl_address(rsc->bo,
-                                              vb->buffer_offset +
-                                              elem->src_offset),
-                        .number_of_values_read_by_coordinate_shader =
-                                vc5->prog.cs->prog_data.vs->vattr_sizes[i],
-                        .number_of_values_read_by_vertex_shader =
-                                vc5->prog.vs->prog_data.vs->vattr_sizes[i],
-                };
                 const uint32_t size =
                         cl_packet_length(GL_SHADER_STATE_ATTRIBUTE_RECORD);
-                uint8_t attr_packed[size];
-                V3D33_GL_SHADER_STATE_ATTRIBUTE_RECORD_pack(&job->indirect,
-                                                            attr_packed,
-                                                            &attr_unpacked);
-                for (int j = 0; j < size; j++)
-                        attr_packed[j] |= vtx->attrs[i * size + j];
-                cl_emit_prepacked(&job->indirect, &attr_packed);
+                cl_emit_with_prepacked(&job->indirect,
+                                       GL_SHADER_STATE_ATTRIBUTE_RECORD,
+                                       &vtx->attrs[i * size], attr) {
+                        attr.stride = vb->stride;
+                        attr.address = cl_address(rsc->bo,
+                                                  vb->buffer_offset +
+                                                  elem->src_offset);
+                        attr.number_of_values_read_by_coordinate_shader =
+                                vc5->prog.cs->prog_data.vs->vattr_sizes[i];
+                        attr.number_of_values_read_by_vertex_shader =
+                                vc5->prog.vs->prog_data.vs->vattr_sizes[i];
+                }
         }
 
         if (vtx->num_elements == 0) {
@@ -270,6 +268,25 @@ vc5_emit_gl_shader_state(struct vc5_context *vc5,
         vc5_bo_unreference(&fs_uniforms.bo);
 
         job->shader_rec_count++;
+}
+
+/**
+ * Computes the various transform feedback statistics, since they can't be
+ * recorded by CL packets.
+ */
+static void
+vc5_tf_statistics_record(struct vc5_context *vc5,
+                         const struct pipe_draw_info *info,
+                         bool prim_tf)
+{
+        uint32_t prims = u_prims_for_vertices(info->mode, info->count);
+
+        vc5->prims_generated += prims;
+
+        if (prim_tf) {
+                /* XXX: Only count if we didn't overflow. */
+                vc5->tf_prims_generated += prims;
+        }
 }
 
 static void
@@ -362,8 +379,10 @@ vc5_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
          * flag set.
          */
         uint32_t prim_tf_enable = 0;
-        if (vc5->prog.bind_vs->num_tf_outputs)
+        if (vc5->streamout.num_targets)
                 prim_tf_enable = (V3D_PRIM_POINTS_TF - V3D_PRIM_POINTS);
+
+        vc5_tf_statistics_record(vc5, info, prim_tf_enable);
 
         /* Note that the primitive type fields match with OpenGL/gallium
          * definitions, up to but not including QUADS.
@@ -458,6 +477,12 @@ vc5_draw_vbo(struct pipe_context *pctx, const struct pipe_draw_info *info)
 
                 job->resolve |= bit;
                 vc5_job_add_bo(job, rsc->bo);
+        }
+
+        if (job->referenced_size > 768 * 1024 * 1024) {
+                perf_debug("Flushing job with %dkb to try to free up memory\n",
+                        job->referenced_size / 1024);
+                vc5_flush(pctx);
         }
 
         if (V3D_DEBUG & V3D_DEBUG_ALWAYS_FLUSH)

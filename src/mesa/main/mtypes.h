@@ -47,6 +47,7 @@
 #include "main/formats.h"       /* MESA_FORMAT_COUNT */
 #include "compiler/glsl/list.h"
 #include "util/bitscan.h"
+#include "util/simple_mtx.h"
 #include "util/u_dynarray.h"
 
 
@@ -969,7 +970,7 @@ typedef enum
  */
 struct gl_sampler_object
 {
-   mtx_t Mutex;
+   simple_mtx_t Mutex;
    GLuint Name;
    GLint RefCount;
    GLchar *Label;               /**< GL_KHR_debug */
@@ -1001,7 +1002,7 @@ struct gl_sampler_object
  */
 struct gl_texture_object
 {
-   mtx_t Mutex;      /**< for thread safety */
+   simple_mtx_t Mutex;      /**< for thread safety */
    GLint RefCount;             /**< reference count */
    GLuint Name;                /**< the user-visible texture object ID */
    GLchar *Label;               /**< GL_KHR_debug */
@@ -1391,7 +1392,7 @@ typedef enum {
  */
 struct gl_buffer_object
 {
-   mtx_t Mutex;
+   simple_mtx_t Mutex;
    GLint RefCount;
    GLuint Name;
    GLchar *Label;       /**< GL_KHR_debug */
@@ -2059,6 +2060,7 @@ typedef enum
    PROGRAM_BUFFER,      /**< for shader buffers, compile-time only */
    PROGRAM_MEMORY,      /**< for shared, global and local memory */
    PROGRAM_IMAGE,       /**< for shader images, compile-time only */
+   PROGRAM_HW_ATOMIC,   /**< for hw atomic counters, compile-time only */
    PROGRAM_FILE_MAX
 } gl_register_file;
 
@@ -2531,7 +2533,9 @@ struct gl_linked_shader
    struct glsl_symbol_table *symbols;
 };
 
-static inline GLbitfield gl_external_samplers(struct gl_program *prog)
+
+static inline GLbitfield
+gl_external_samplers(const struct gl_program *prog)
 {
    GLbitfield external_samplers = 0;
    GLbitfield mask = prog->SamplersUsed;
@@ -2544,6 +2548,7 @@ static inline GLbitfield gl_external_samplers(struct gl_program *prog)
 
    return external_samplers;
 }
+
 
 /**
  * Compile status enum. compile_skipped is used to indicate the compile
@@ -2872,12 +2877,11 @@ struct gl_shader_program_data
    unsigned NumUniformDataSlots;
    union gl_constant_value *UniformDataSlots;
 
-   bool cache_fallback;
-
    /* TODO: This used by Gallium drivers to skip the cache on tgsi fallback.
     * All structures (gl_program, uniform storage, etc) will get recreated
-    * even though we have already loaded them from cache. Once the i965 cache
-    * lands we should switch to using the cache_fallback support.
+    * even though we have already loaded them from cache. We should instead
+    * switch to storing the GLSL metadata and TGSI IR in a single cache item
+    * like the i965 driver does with NIR.
     */
    bool skip_cache;
    GLboolean Validated;
@@ -3216,7 +3220,7 @@ struct gl_sync_object
  */
 struct gl_shared_state
 {
-   mtx_t Mutex;		   /**< for thread safety */
+   simple_mtx_t Mutex;		   /**< for thread safety */
    GLint RefCount;			   /**< Reference count */
    struct _mesa_HashTable *DisplayList;	   /**< Display lists hash table */
    struct _mesa_HashTable *BitmapAtlas;    /**< For optimized glBitmap text */
@@ -3300,7 +3304,7 @@ struct gl_shared_state
  */
 struct gl_renderbuffer
 {
-   mtx_t Mutex; /**< for thread safety */
+   simple_mtx_t Mutex; /**< for thread safety */
    GLuint ClassID;        /**< Useful for drivers */
    GLuint Name;
    GLchar *Label;         /**< GL_KHR_debug */
@@ -3378,7 +3382,7 @@ struct gl_renderbuffer_attachment
  */
 struct gl_framebuffer
 {
-   mtx_t Mutex;  /**< for thread safety */
+   simple_mtx_t Mutex;  /**< for thread safety */
    /**
     * If zero, this is a window system framebuffer.  If non-zero, this
     * is a FBO framebuffer; note that for some devices (i.e. those with
@@ -3480,8 +3484,8 @@ struct gl_framebuffer
 
    /** Computed from ColorDraw/ReadBuffer above */
    GLuint _NumColorDrawBuffers;
-   GLint _ColorDrawBufferIndexes[MAX_DRAW_BUFFERS]; /**< BUFFER_x or -1 */
-   GLint _ColorReadBufferIndex; /* -1 = None */
+   gl_buffer_index _ColorDrawBufferIndexes[MAX_DRAW_BUFFERS];
+   gl_buffer_index _ColorReadBufferIndex;
    struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS];
    struct gl_renderbuffer *_ColorReadBuffer;
 
@@ -4932,7 +4936,7 @@ struct gl_context
    GLuint ErrorDebugCount;
 
    /* GL_ARB_debug_output/GL_KHR_debug */
-   mtx_t DebugMutex;
+   simple_mtx_t DebugMutex;
    struct gl_debug_state *Debug;
 
    GLenum RenderMode;        /**< either GL_RENDER, GL_SELECT, GL_FEEDBACK */

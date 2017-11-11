@@ -111,6 +111,7 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_COMPUTE:
         case PIPE_CAP_DRAW_INDIRECT:
         case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
+        case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
                 return 1;
 
         case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
@@ -319,7 +320,7 @@ vc5_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
         case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
                 return 0.0f;
         case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
-                return 0.0f;
+                return 16.0f;
         case PIPE_CAPF_GUARD_BAND_LEFT:
         case PIPE_CAPF_GUARD_BAND_TOP:
         case PIPE_CAPF_GUARD_BAND_RIGHT:
@@ -357,7 +358,10 @@ vc5_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
                 else
                         return 16;
         case PIPE_SHADER_CAP_MAX_OUTPUTS:
-                return shader == PIPE_SHADER_FRAGMENT ? 4 : 8;
+                if (shader == PIPE_SHADER_FRAGMENT)
+                        return 4;
+                else
+                        return VC5_MAX_FS_INPUTS / 4;
         case PIPE_SHADER_CAP_MAX_TEMPS:
                 return 256; /* GL_MAX_PROGRAM_TEMPORARIES_ARB */
         case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:

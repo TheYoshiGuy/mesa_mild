@@ -287,6 +287,7 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_LOAD_CONSTBUF:
 	case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
 	case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
+	case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
                 return 0;
 
                 /* Stream output. */
@@ -450,6 +451,8 @@ vc4_screen_get_shader_param(struct pipe_screen *pscreen,
         case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
 	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
         case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
+        case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
+        case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
                 return 0;
         default:
                 fprintf(stderr, "unknown shader param %d\n", param);
@@ -691,6 +694,8 @@ vc4_screen_create(int fd, struct renderonly *ro)
                 vc4_has_feature(screen, DRM_VC4_PARAM_SUPPORTS_ETC1);
         screen->has_threaded_fs =
                 vc4_has_feature(screen, DRM_VC4_PARAM_SUPPORTS_THREADED_FS);
+        screen->has_madvise =
+                vc4_has_feature(screen, DRM_VC4_PARAM_SUPPORTS_MADVISE);
 
         if (!vc4_get_chip_info(screen))
                 goto fail;

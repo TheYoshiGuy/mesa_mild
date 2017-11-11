@@ -26,6 +26,7 @@
 
 #include "etnaviv_format.h"
 
+#include "hw/common_3d.xml.h"
 #include "hw/state.xml.h"
 #include "hw/state_3d.xml.h"
 
@@ -62,7 +63,7 @@ struct etna_format {
 /* vertex + texture */
 #define VT(pipe, vtxfmt, texfmt, texswiz, rsfmt)          \
    [PIPE_FORMAT_##pipe] = {                               \
-      .vtx = VIVS_FE_VERTEX_ELEMENT_CONFIG_TYPE_##vtxfmt, \
+      .vtx = FE_DATA_TYPE_##vtxfmt, \
       .tex = TEXTURE_FORMAT_##texfmt,                     \
       .rs = RS_FORMAT_##rsfmt,                            \
       .present = 1,                                       \
@@ -82,7 +83,7 @@ struct etna_format {
 /* vertex-only */
 #define V_(pipe, fmt, rsfmt)                           \
    [PIPE_FORMAT_##pipe] = {                            \
-      .vtx = VIVS_FE_VERTEX_ELEMENT_CONFIG_TYPE_##fmt, \
+      .vtx = FE_DATA_TYPE_##fmt, \
       .tex = ETNA_NO_MATCH,                            \
       .rs = RS_FORMAT_##rsfmt,                         \
       .present = 1,                                    \
@@ -173,8 +174,8 @@ static struct etna_format formats[PIPE_FORMAT_COUNT] = {
    V_(R10G10B10A2_USCALED, UNSIGNED_INT_10_10_10_2, NONE),
    V_(R10G10B10A2_SSCALED, INT_10_10_10_2,          NONE),
 
-   _T(X8Z24_UNORM,       D24S8, SWIZ(X, Y, Z, W), A8R8G8B8),
-   _T(S8_UINT_Z24_UNORM, D24S8, SWIZ(X, Y, Z, W), A8R8G8B8),
+   _T(X8Z24_UNORM,       D24X8, SWIZ(X, Y, Z, W), A8R8G8B8),
+   _T(S8_UINT_Z24_UNORM, D24X8, SWIZ(X, Y, Z, W), A8R8G8B8),
 
    /* 48-bit */
    V_(R16G16B16_UNORM,   UNSIGNED_SHORT, NONE),
@@ -244,6 +245,36 @@ static struct etna_format formats[PIPE_FORMAT_COUNT] = {
    _T(ETC2_R11_SNORM,  EXT_SIGNED_R11_EAC | EXT_FORMAT,                SWIZ(X, Y, Z, W), NONE),
    _T(ETC2_RG11_UNORM, EXT_RG11_EAC | EXT_FORMAT,                      SWIZ(X, Y, Z, W), NONE),
    _T(ETC2_RG11_SNORM, EXT_SIGNED_RG11_EAC | EXT_FORMAT,               SWIZ(X, Y, Z, W), NONE),
+
+   _T(ASTC_4x4,        ASTC_RGBA_4x4 | ASTC_FORMAT,                    SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_5x4,        ASTC_RGBA_5x4 | ASTC_FORMAT,                    SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_5x5,        ASTC_RGBA_5x5 | ASTC_FORMAT,                    SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_6x5,        ASTC_RGBA_6x5 | ASTC_FORMAT,                    SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_6x6,        ASTC_RGBA_6x6 | ASTC_FORMAT,                    SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_8x5,        ASTC_RGBA_8x5 | ASTC_FORMAT,                    SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_8x6,        ASTC_RGBA_8x6 | ASTC_FORMAT,                    SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_8x8,        ASTC_RGBA_8x8 | ASTC_FORMAT,                    SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_10x5,       ASTC_RGBA_10x5 | ASTC_FORMAT,                   SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_10x6,       ASTC_RGBA_10x6 | ASTC_FORMAT,                   SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_10x8,       ASTC_RGBA_10x8 | ASTC_FORMAT,                   SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_10x10,      ASTC_RGBA_10x10 | ASTC_FORMAT,                  SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_12x10,      ASTC_RGBA_12x10 | ASTC_FORMAT,                  SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_12x12,      ASTC_RGBA_12x12 | ASTC_FORMAT,                  SWIZ(X, Y, Z, W), NONE),
+
+   _T(ASTC_4x4_SRGB,   ASTC_SRGB8_ALPHA8_4x4 | ASTC_FORMAT,            SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_5x4_SRGB,   ASTC_SRGB8_ALPHA8_5x4 | ASTC_FORMAT,            SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_5x5_SRGB,   ASTC_SRGB8_ALPHA8_5x5 | ASTC_FORMAT,            SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_6x5_SRGB,   ASTC_SRGB8_ALPHA8_6x5 | ASTC_FORMAT,            SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_6x6_SRGB,   ASTC_SRGB8_ALPHA8_6x6 | ASTC_FORMAT,            SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_8x5_SRGB,   ASTC_SRGB8_ALPHA8_8x5 | ASTC_FORMAT,            SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_8x6_SRGB,   ASTC_SRGB8_ALPHA8_8x6 | ASTC_FORMAT,            SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_8x8_SRGB,   ASTC_SRGB8_ALPHA8_8x8 | ASTC_FORMAT,            SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_10x5_SRGB,  ASTC_SRGB8_ALPHA8_10x5 | ASTC_FORMAT,           SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_10x6_SRGB,  ASTC_SRGB8_ALPHA8_10x6 | ASTC_FORMAT,           SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_10x8_SRGB,  ASTC_SRGB8_ALPHA8_10x8 | ASTC_FORMAT,           SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_10x10_SRGB, ASTC_SRGB8_ALPHA8_10x10 | ASTC_FORMAT,          SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_12x10_SRGB, ASTC_SRGB8_ALPHA8_12x10 | ASTC_FORMAT,          SWIZ(X, Y, Z, W), NONE),
+   _T(ASTC_12x12_SRGB, ASTC_SRGB8_ALPHA8_12x12 | ASTC_FORMAT,          SWIZ(X, Y, Z, W), NONE),
 
    /* YUV */
    _T(YUYV, YUY2, SWIZ(X, Y, Z, W), YUY2),

@@ -38,7 +38,7 @@
 #include "etnaviv_resource.h"
 #include "etnaviv_translate.h"
 
-#include "os/os_time.h"
+#include "util/os_time.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "util/u_string.h"
@@ -267,6 +267,7 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
    case PIPE_CAP_TILE_RASTER_ORDER:
    case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
+   case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
       return 0;
 
    /* Stream output. */
@@ -458,6 +459,8 @@ etna_screen_get_shader_param(struct pipe_screen *pscreen,
    case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
    case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
    case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
+   case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
+   case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
       return 0;
    }
 
@@ -497,6 +500,10 @@ gpu_supports_texure_format(struct etna_screen *screen, uint32_t fmt,
        */
       if (util_format_is_etc(format))
          supported = VIV_FEATURE(screen, chipMinorFeatures2, HALTI1);
+   }
+
+   if (fmt & ASTC_FORMAT) {
+      supported = screen->specs.tex_astc;
    }
 
    if (!supported)
@@ -787,6 +794,8 @@ etna_get_specs(struct etna_screen *screen)
    screen->specs.single_buffer = VIV_FEATURE(screen, chipMinorFeatures4, SINGLE_BUFFER);
    if (screen->specs.single_buffer)
       DBG("etnaviv: Single buffer mode enabled with %d pixel pipes\n", screen->specs.pixel_pipes);
+
+   screen->specs.tex_astc = VIV_FEATURE(screen, chipMinorFeatures4, TEXTURE_ASTC);
 
    return true;
 

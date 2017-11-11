@@ -141,22 +141,26 @@ brw_set_dest(struct brw_codegen *p, brw_inst *inst, struct brw_reg dest)
 
    /* Generators should set a default exec_size of either 8 (SIMD4x2 or SIMD8)
     * or 16 (SIMD16), as that's normally correct.  However, when dealing with
-    * small registers, we automatically reduce it to match the register size.
-    *
-    * In platforms that support fp64 we can emit instructions with a width of
-    * 4 that need two SIMD8 registers and an exec_size of 8 or 16. In these
-    * cases we need to make sure that these instructions have their exec sizes
-    * set properly when they are emitted and we can't rely on this code to fix
-    * it.
+    * small registers, it can be useful for us to automatically reduce it to
+    * match the register size.
     */
-   bool fix_exec_size;
-   if (devinfo->gen >= 6)
-      fix_exec_size = dest.width < BRW_EXECUTE_4;
-   else
-      fix_exec_size = dest.width < BRW_EXECUTE_8;
+   if (p->automatic_exec_sizes) {
+      /*
+       * In platforms that support fp64 we can emit instructions with a width
+       * of 4 that need two SIMD8 registers and an exec_size of 8 or 16. In
+       * these cases we need to make sure that these instructions have their
+       * exec sizes set properly when they are emitted and we can't rely on
+       * this code to fix it.
+       */
+      bool fix_exec_size;
+      if (devinfo->gen >= 6)
+         fix_exec_size = dest.width < BRW_EXECUTE_4;
+      else
+         fix_exec_size = dest.width < BRW_EXECUTE_8;
 
-   if (fix_exec_size)
-      brw_inst_set_exec_size(devinfo, inst, dest.width);
+      if (fix_exec_size)
+         brw_inst_set_exec_size(devinfo, inst, dest.width);
+   }
 }
 
 void
@@ -1979,6 +1983,7 @@ void brw_oword_block_write_scratch(struct brw_codegen *p,
       brw_MOV(p, mrf, retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
 
       /* set message header global offset field (reg 0, element 2) */
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
       brw_MOV(p,
 	      retype(brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE,
 				  mrf.nr,
@@ -2098,6 +2103,7 @@ brw_oword_block_read_scratch(struct brw_codegen *p,
       brw_MOV(p, mrf, retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
 
       /* set message header global offset field (reg 0, element 2) */
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
       brw_MOV(p, get_element_ud(mrf, 2), brw_imm_ud(offset));
 
       brw_pop_insn_state(p);
@@ -2196,6 +2202,7 @@ void brw_oword_block_read(struct brw_codegen *p,
    brw_MOV(p, mrf, retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
 
    /* set message header global offset field (reg 0, element 2) */
+   brw_set_default_exec_size(p, BRW_EXECUTE_1);
    brw_MOV(p,
 	   retype(brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE,
 			       mrf.nr,
@@ -2444,6 +2451,7 @@ void brw_urb_WRITE(struct brw_codegen *p,
       brw_push_insn_state(p);
       brw_set_default_access_mode(p, BRW_ALIGN_1);
       brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
       brw_OR(p, retype(brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE, msg_reg_nr, 5),
 		       BRW_REGISTER_TYPE_UD),
 	        retype(brw_vec1_grf(0, 5), BRW_REGISTER_TYPE_UD),
@@ -2503,6 +2511,7 @@ brw_send_indirect_message(struct brw_codegen *p,
       brw_push_insn_state(p);
       brw_set_default_access_mode(p, BRW_ALIGN_1);
       brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
       brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
 
       /* Load the indirect descriptor to an address register using OR so the
@@ -2547,6 +2556,7 @@ brw_send_indirect_surface_message(struct brw_codegen *p,
       brw_push_insn_state(p);
       brw_set_default_access_mode(p, BRW_ALIGN_1);
       brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+      brw_set_default_exec_size(p, BRW_EXECUTE_1);
       brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
 
       /* Mask out invalid bits from the surface index to avoid hangs e.g. when
@@ -3274,6 +3284,7 @@ brw_find_live_channel(struct brw_codegen *p, struct brw_reg dst,
          struct brw_reg exec_mask =
             retype(brw_mask_reg(0), BRW_REGISTER_TYPE_UD);
 
+         brw_set_default_exec_size(p, BRW_EXECUTE_1);
          if (mask.file != BRW_IMMEDIATE_VALUE || mask.ud != 0xffffffff) {
             /* Unfortunately, ce0 does not take into account the thread
              * dispatch mask, which may be a problem in cases where it's not
@@ -3295,6 +3306,7 @@ brw_find_live_channel(struct brw_codegen *p, struct brw_reg dst,
       } else {
          const struct brw_reg flag = brw_flag_reg(1, 0);
 
+         brw_set_default_exec_size(p, BRW_EXECUTE_1);
          brw_MOV(p, retype(flag, BRW_REGISTER_TYPE_UD), brw_imm_ud(0));
 
          /* Run enough instructions returning zero with execution masking and
@@ -3320,6 +3332,7 @@ brw_find_live_channel(struct brw_codegen *p, struct brw_reg dst,
           * instructions.
           */
          const enum brw_reg_type type = brw_int_type(exec_size / 8, false);
+         brw_set_default_exec_size(p, BRW_EXECUTE_1);
          brw_FBL(p, vec1(dst), byte_offset(retype(flag, type), qtr_control));
       }
    } else {
@@ -3373,6 +3386,8 @@ brw_broadcast(struct brw_codegen *p,
 
    assert(src.file == BRW_GENERAL_REGISTER_FILE &&
           src.address_mode == BRW_ADDRESS_DIRECT);
+   assert(!src.abs && !src.negate);
+   assert(src.type == dst.type);
 
    if ((src.vstride == 0 && (src.hstride == 0 || !align1)) ||
        idx.file == BRW_IMMEDIATE_VALUE) {
@@ -3385,10 +3400,24 @@ brw_broadcast(struct brw_codegen *p,
               (align1 ? stride(suboffset(src, i), 0, 1, 0) :
                stride(suboffset(src, 4 * i), 0, 4, 1)));
    } else {
+      /* From the Haswell PRM section "Register Region Restrictions":
+       *
+       *    "The lower bits of the AddressImmediate must not overflow to
+       *    change the register address.  The lower 5 bits of Address
+       *    Immediate when added to lower 5 bits of address register gives
+       *    the sub-register offset. The upper bits of Address Immediate
+       *    when added to upper bits of address register gives the register
+       *    address. Any overflow from sub-register offset is dropped."
+       *
+       * Fortunately, for broadcast, we never have a sub-register offset so
+       * this isn't an issue.
+       */
+      assert(src.subnr == 0);
+
       if (align1) {
          const struct brw_reg addr =
             retype(brw_address_reg(0), BRW_REGISTER_TYPE_UD);
-         const unsigned offset = src.nr * REG_SIZE + src.subnr;
+         unsigned offset = src.nr * REG_SIZE + src.subnr;
          /* Limit in bytes of the signed indirect addressing immediate. */
          const unsigned limit = 512;
 
@@ -3406,15 +3435,38 @@ brw_broadcast(struct brw_codegen *p,
           * addressing immediate, account for the difference if the source
           * register is above this limit.
           */
-         if (offset >= limit)
+         if (offset >= limit) {
             brw_ADD(p, addr, addr, brw_imm_ud(offset - offset % limit));
+            offset = offset % limit;
+         }
 
          brw_pop_insn_state(p);
 
          /* Use indirect addressing to fetch the specified component. */
-         brw_MOV(p, dst,
-                 retype(brw_vec1_indirect(addr.subnr, offset % limit),
-                        src.type));
+         if (type_sz(src.type) > 4 &&
+             (devinfo->is_cherryview || gen_device_info_is_9lp(devinfo))) {
+            /* From the Cherryview PRM Vol 7. "Register Region Restrictions":
+             *
+             *    "When source or destination datatype is 64b or operation is
+             *    integer DWord multiply, indirect addressing must not be
+             *    used."
+             *
+             * To work around both of this issue, we do two integer MOVs
+             * insead of one 64-bit MOV.  Because no double value should ever
+             * cross a register boundary, it's safe to use the immediate
+             * offset in the indirect here to handle adding 4 bytes to the
+             * offset and avoid the extra ADD to the register file.
+             */
+            brw_MOV(p, subscript(dst, BRW_REGISTER_TYPE_D, 0),
+                       retype(brw_vec1_indirect(addr.subnr, offset),
+                              BRW_REGISTER_TYPE_D));
+            brw_MOV(p, subscript(dst, BRW_REGISTER_TYPE_D, 1),
+                       retype(brw_vec1_indirect(addr.subnr, offset + 4),
+                              BRW_REGISTER_TYPE_D));
+         } else {
+            brw_MOV(p, dst,
+                    retype(brw_vec1_indirect(addr.subnr, offset), src.type));
+         }
       } else {
          /* In SIMD4x2 mode the index can be either zero or one, replicate it
           * to all bits of a flag register,

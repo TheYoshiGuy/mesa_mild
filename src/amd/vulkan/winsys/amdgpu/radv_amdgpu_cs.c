@@ -28,7 +28,6 @@
 #include <assert.h>
 
 #include "ac_debug.h"
-#include "amdgpu_id.h"
 #include "radv_radeon_winsys.h"
 #include "radv_amdgpu_cs.h"
 #include "radv_amdgpu_bo.h"
@@ -473,7 +472,7 @@ static void radv_amdgpu_cs_add_buffer(struct radeon_winsys_cs *_cs,
 		return;
 	}
 
-	if (bo->is_local)
+	if (bo->base.is_local)
 		return;
 
 	radv_amdgpu_cs_add_buffer_internal(cs, bo->bo, priority);
