@@ -275,6 +275,14 @@ typedef struct nir_variable {
       unsigned int driver_location;
 
       /**
+       * Vertex stream output identifier.
+       *
+       * For packed outputs, bit 31 is set and bits [2*i+1,2*i] indicate the
+       * stream of the i-th component.
+       */
+      unsigned stream;
+
+      /**
        * output index for dual source blending.
        */
       int index;
@@ -1214,7 +1222,6 @@ typedef struct {
     *    - nir_texop_txf_ms
     *    - nir_texop_txs
     *    - nir_texop_lod
-    *    - nir_texop_tg4
     *    - nir_texop_query_levels
     *    - nir_texop_texture_samples
     *    - nir_texop_samples_identical

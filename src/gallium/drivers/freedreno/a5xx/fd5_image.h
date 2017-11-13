@@ -1,7 +1,5 @@
-/* -*- mode: C; c-file-style: "k&r"; tab-width 4; indent-tabs-mode: t; -*- */
-
 /*
- * Copyright (C) 2015 Rob Clark <robclark@freedesktop.org>
+ * Copyright (C) 2017 Rob Clark <robclark@freedesktop.org>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -26,23 +24,12 @@
  *    Rob Clark <robclark@freedesktop.org>
  */
 
-#ifndef IR3_NIR_H_
-#define IR3_NIR_H_
+#ifndef FD5_IMAGE_H_
+#define FD5_IMAGE_H_
 
-#include "compiler/nir/nir.h"
-#include "compiler/shader_enums.h"
+#include "freedreno_context.h"
 
-#include "ir3_shader.h"
+void fd5_emit_images(struct fd_context *ctx, struct fd_ringbuffer *ring,
+		enum pipe_shader_type shader);
 
-void ir3_nir_scan_driver_consts(nir_shader *shader, struct ir3_driver_const_layout *layout);
-
-bool ir3_nir_lower_if_else(nir_shader *shader);
-bool ir3_nir_apply_trig_workarounds(nir_shader *shader);
-
-struct nir_shader * ir3_tgsi_to_nir(const struct tgsi_token *tokens);
-const nir_shader_compiler_options * ir3_get_compiler_options(struct ir3_compiler *compiler);
-bool ir3_key_lowers_nir(const struct ir3_shader_key *key);
-struct nir_shader * ir3_optimize_nir(struct ir3_shader *shader, nir_shader *s,
-		const struct ir3_shader_key *key);
-
-#endif /* IR3_NIR_H_ */
+#endif /* FD5_IMAGE_H_ */

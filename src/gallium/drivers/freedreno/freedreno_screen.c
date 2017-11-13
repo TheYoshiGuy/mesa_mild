@@ -324,11 +324,16 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
 	case PIPE_CAP_QUERY_SO_OVERFLOW:
 	case PIPE_CAP_MEMOBJ:
-	case PIPE_CAP_LOAD_CONSTBUF:
 	case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
 	case PIPE_CAP_TILE_RASTER_ORDER:
 	case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
 	case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
+		return 0;
+
+	case PIPE_CAP_LOAD_CONSTBUF:
+		/* name is confusing, but this turns on std430 packing */
+		if (is_ir3(screen))
+			return 1;
 		return 0;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
@@ -558,6 +563,7 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
 	case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTER_BUFFERS:
 		return 0;
 	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
+	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
 		if (is_a5xx(screen)) {
 			/* a5xx (and a4xx for that matter) has one state-block
 			 * for compute-shader SSBO's and another that is shared
@@ -576,6 +582,10 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
 			 *
 			 * I think that way we could avoid having to patch shaders
 			 * for actual SSBO indexes by using a static partitioning.
+			 *
+			 * Note same state block is used for images and buffers,
+			 * but images also need texture state for read access
+			 * (isam/isam.3d)
 			 */
 			switch(shader)
 			{
@@ -586,9 +596,6 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen,
 				return 0;
 			}
 		}
-		return 0;
-	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
-		/* probably should be same as MAX_SHADRER_BUFFERS but not implemented yet */
 		return 0;
 	}
 	debug_printf("unknown shader param %d\n", param);
@@ -658,6 +665,11 @@ fd_get_compute_param(struct pipe_screen *pscreen, enum pipe_shader_ir ir_type,
 
 	case PIPE_COMPUTE_CAP_MAX_GLOBAL_SIZE:
 	case PIPE_COMPUTE_CAP_MAX_LOCAL_SIZE:
+		if (ret) {
+			uint64_t *local_size = ret;
+			*local_size = 32768;
+		}
+		return sizeof(uint64_t);
 	case PIPE_COMPUTE_CAP_MAX_PRIVATE_SIZE:
 	case PIPE_COMPUTE_CAP_MAX_INPUT_SIZE:
 		break;

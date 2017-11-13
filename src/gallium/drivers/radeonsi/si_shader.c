@@ -1361,16 +1361,9 @@ static LLVMValueRef fetch_input_gs(
 
 	/* Get the vertex offset parameter on GFX6. */
 	unsigned vtx_offset_param = reg->Dimension.Index;
-	if (vtx_offset_param < 2) {
-		vtx_offset_param += ctx->param_gs_vtx0_offset;
-	} else {
-		assert(vtx_offset_param < 6);
-		vtx_offset_param += ctx->param_gs_vtx2_offset - 2;
-	}
-	vtx_offset = lp_build_mul_imm(uint,
-				      LLVMGetParam(ctx->main_fn,
-						   vtx_offset_param),
-				      4);
+	LLVMValueRef gs_vtx_offset = ctx->gs_vtx_offset[vtx_offset_param];
+
+	vtx_offset = lp_build_mul_imm(uint, gs_vtx_offset, 4);
 
 	soffset = LLVMConstInt(ctx->i32, (param * 4 + swizzle) * 256, 0);
 
@@ -4045,15 +4038,14 @@ static unsigned si_llvm_get_stream(struct lp_build_tgsi_context *bld_base,
 }
 
 /* Emit one vertex from the geometry shader */
-static void si_llvm_emit_vertex(
-	const struct lp_build_tgsi_action *action,
-	struct lp_build_tgsi_context *bld_base,
-	struct lp_build_emit_data *emit_data)
+static void si_llvm_emit_vertex(struct ac_shader_abi *abi,
+				unsigned stream,
+				LLVMValueRef *addrs)
 {
-	struct si_shader_context *ctx = si_shader_context(bld_base);
-	struct lp_build_context *uint = &bld_base->uint_bld;
+	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
+	struct tgsi_shader_info *info = &ctx->shader->selector->info;
+	struct lp_build_context *uint = &ctx->bld_base.uint_bld;
 	struct si_shader *shader = ctx->shader;
-	struct tgsi_shader_info *info = &shader->selector->info;
 	struct lp_build_if_state if_state;
 	LLVMValueRef soffset = LLVMGetParam(ctx->main_fn,
 					    ctx->param_gs2vs_offset);
@@ -4061,9 +4053,6 @@ static void si_llvm_emit_vertex(
 	LLVMValueRef can_emit;
 	unsigned chan, offset;
 	int i;
-	unsigned stream;
-
-	stream = si_llvm_get_stream(bld_base, emit_data);
 
 	/* Write vertex attribute values to GSVS ring */
 	gs_next_vertex = LLVMBuildLoad(ctx->ac.builder,
@@ -4091,14 +4080,12 @@ static void si_llvm_emit_vertex(
 
 	offset = 0;
 	for (i = 0; i < info->num_outputs; i++) {
-		LLVMValueRef *out_ptr = ctx->outputs[i];
-
 		for (chan = 0; chan < 4; chan++) {
 			if (!(info->output_usagemask[i] & (1 << chan)) ||
 			    ((info->output_streams[i] >> (2 * chan)) & 3) != stream)
 				continue;
 
-			LLVMValueRef out_val = LLVMBuildLoad(ctx->ac.builder, out_ptr[chan], "");
+			LLVMValueRef out_val = LLVMBuildLoad(ctx->ac.builder, addrs[4 * i + chan], "");
 			LLVMValueRef voffset =
 				LLVMConstInt(ctx->i32, offset *
 					     shader->selector->gs_max_out_vertices, 0);
@@ -4127,6 +4114,18 @@ static void si_llvm_emit_vertex(
 			 si_get_gs_wave_id(ctx));
 	if (!use_kill)
 		lp_build_endif(&if_state);
+}
+
+/* Emit one vertex from the geometry shader */
+static void si_tgsi_emit_vertex(
+	const struct lp_build_tgsi_action *action,
+	struct lp_build_tgsi_context *bld_base,
+	struct lp_build_emit_data *emit_data)
+{
+	struct si_shader_context *ctx = si_shader_context(bld_base);
+	unsigned stream = si_llvm_get_stream(bld_base, emit_data);
+
+	si_llvm_emit_vertex(&ctx->abi, stream, ctx->outputs[0]);
 }
 
 /* Cut one primitive from the geometry shader */
@@ -4612,13 +4611,13 @@ static void create_function(struct si_shader_context *ctx)
 		ctx->param_gs_wave_id = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 
 		/* VGPRs */
-		ctx->param_gs_vtx0_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_vtx1_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->gs_vtx_offset[0]);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->gs_vtx_offset[1]);
 		ctx->param_gs_prim_id = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_vtx2_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_vtx3_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_vtx4_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
-		ctx->param_gs_vtx5_offset = add_arg(&fninfo, ARG_VGPR, ctx->i32);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->gs_vtx_offset[2]);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->gs_vtx_offset[3]);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->gs_vtx_offset[4]);
+		add_arg_assign(&fninfo, ARG_VGPR, ctx->i32, &ctx->gs_vtx_offset[5]);
 		ctx->param_gs_instance_id = add_arg(&fninfo, ARG_VGPR, ctx->i32);
 		break;
 
@@ -5651,7 +5650,7 @@ static void si_init_shader_ctx(struct si_shader_context *ctx,
 	bld_base->op_actions[TGSI_OPCODE_READ_INVOC].fetch_args = read_invoc_fetch_args;
 	bld_base->op_actions[TGSI_OPCODE_READ_INVOC].emit = read_lane_emit;
 
-	bld_base->op_actions[TGSI_OPCODE_EMIT].emit = si_llvm_emit_vertex;
+	bld_base->op_actions[TGSI_OPCODE_EMIT].emit = si_tgsi_emit_vertex;
 	bld_base->op_actions[TGSI_OPCODE_ENDPRIM].emit = si_llvm_emit_primitive;
 	bld_base->op_actions[TGSI_OPCODE_BARRIER].emit = si_llvm_emit_barrier;
 }
@@ -5765,6 +5764,7 @@ static bool si_compile_tgsi_main(struct si_shader_context *ctx,
 		break;
 	case PIPE_SHADER_GEOMETRY:
 		bld_base->emit_fetch_funcs[TGSI_FILE_INPUT] = fetch_input_gs;
+		ctx->abi.emit_vertex = si_llvm_emit_vertex;
 		bld_base->emit_epilogue = si_llvm_emit_gs_epilogue;
 		break;
 	case PIPE_SHADER_FRAGMENT:
