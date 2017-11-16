@@ -196,7 +196,7 @@ radv_physical_device_init(struct radv_physical_device *device,
 	if (strcmp(version->name, "amdgpu")) {
 		drmFreeVersion(version);
 		close(fd);
-		return vk_error(VK_ERROR_INCOMPATIBLE_DRIVER);
+		return VK_ERROR_INCOMPATIBLE_DRIVER;
 	}
 	drmFreeVersion(version);
 
@@ -317,6 +317,7 @@ static const struct debug_control radv_debug_options[] = {
 	{"vmfaults", RADV_DEBUG_VM_FAULTS},
 	{"zerovram", RADV_DEBUG_ZERO_VRAM},
 	{"syncshaders", RADV_DEBUG_SYNC_SHADERS},
+	{"nosisched", RADV_DEBUG_NO_SISCHED},
 	{NULL, 0}
 };
 
@@ -338,6 +339,24 @@ radv_get_perftest_option_name(int id)
 {
 	assert(id < ARRAY_SIZE(radv_debug_options) - 1);
 	return radv_perftest_options[id].string;
+}
+
+static void
+radv_handle_per_app_options(struct radv_instance *instance,
+			    const VkApplicationInfo *info)
+{
+	const char *name = info ? info->pApplicationName : NULL;
+
+	if (!name)
+		return;
+
+	if (!strcmp(name, "Talos - Linux - 32bit") ||
+	    !strcmp(name, "Talos - Linux - 64bit")) {
+		/* Force enable LLVM sisched for Talos because it looks safe
+		 * and it gives few more FPS.
+		 */
+		instance->perftest_flags |= RADV_PERFTEST_SISCHED;
+	}
 }
 
 VkResult radv_CreateInstance(
@@ -396,6 +415,16 @@ VkResult radv_CreateInstance(
 
 	instance->perftest_flags = parse_debug_string(getenv("RADV_PERFTEST"),
 						   radv_perftest_options);
+
+	radv_handle_per_app_options(instance, pCreateInfo->pApplicationInfo);
+
+	if (instance->debug_flags & RADV_DEBUG_NO_SISCHED) {
+		/* Disable sisched when the user requests it, this is mostly
+		 * useful when the driver force-enable sisched for the given
+		 * application.
+		 */
+		instance->perftest_flags &= ~RADV_PERFTEST_SISCHED;
+	}
 
 	*pInstance = radv_instance_to_handle(instance);
 
@@ -882,7 +911,7 @@ radv_get_queue_global_priority(const VkDeviceQueueGlobalPriorityCreateInfoEXT *p
 
 static int
 radv_queue_init(struct radv_device *device, struct radv_queue *queue,
-		int queue_family_index, int idx,
+		uint32_t queue_family_index, int idx,
 		const VkDeviceQueueGlobalPriorityCreateInfoEXT *global_priority)
 {
 	queue->_loader_data.loaderMagic = ICD_LOADER_MAGIC;
@@ -1833,10 +1862,6 @@ static VkResult radv_alloc_sem_counts(struct radv_winsys_sem_counts *counts,
 
 		if (sem->temp_syncobj) {
 			counts->syncobj[syncobj_idx++] = sem->temp_syncobj;
-			if (reset_temp) {
-				/* after we wait on a temp import - drop it */
-				sem->temp_syncobj = 0;
-			}
 		}
 		else if (sem->syncobj)
 			counts->syncobj[syncobj_idx++] = sem->syncobj;
@@ -1855,6 +1880,21 @@ void radv_free_sem_info(struct radv_winsys_sem_info *sem_info)
 	free(sem_info->wait.sem);
 	free(sem_info->signal.syncobj);
 	free(sem_info->signal.sem);
+}
+
+
+static void radv_free_temp_syncobjs(struct radv_device *device,
+				    int num_sems,
+				    const VkSemaphore *sems)
+{
+	for (uint32_t i = 0; i < num_sems; i++) {
+		RADV_FROM_HANDLE(radv_semaphore, sem, sems[i]);
+
+		if (sem->temp_syncobj) {
+			device->ws->destroy_syncobj(device->ws, sem->temp_syncobj);
+			sem->temp_syncobj = 0;
+		}
+	}
 }
 
 VkResult radv_alloc_sem_info(struct radv_winsys_sem_info *sem_info,
@@ -1995,6 +2035,9 @@ VkResult radv_QueueSubmit(
 			}
 		}
 
+		radv_free_temp_syncobjs(queue->device,
+					pSubmits[i].waitSemaphoreCount,
+					pSubmits[i].pWaitSemaphores);
 		radv_free_sem_info(&sem_info);
 		free(cs_array);
 	}
@@ -3525,6 +3568,7 @@ VkResult radv_ImportSemaphoreFdKHR(VkDevice _device,
 	RADV_FROM_HANDLE(radv_device, device, _device);
 	RADV_FROM_HANDLE(radv_semaphore, sem, pImportSemaphoreFdInfo->semaphore);
 	uint32_t syncobj_handle = 0;
+	uint32_t *syncobj_dst = NULL;
 	assert(pImportSemaphoreFdInfo->handleType == VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT_KHR);
 
 	int ret = device->ws->import_syncobj(device->ws, pImportSemaphoreFdInfo->fd, &syncobj_handle);
@@ -3532,10 +3576,15 @@ VkResult radv_ImportSemaphoreFdKHR(VkDevice _device,
 		return vk_error(VK_ERROR_INVALID_EXTERNAL_HANDLE_KHR);
 
 	if (pImportSemaphoreFdInfo->flags & VK_SEMAPHORE_IMPORT_TEMPORARY_BIT_KHR) {
-		sem->temp_syncobj = syncobj_handle;
+		syncobj_dst = &sem->temp_syncobj;
 	} else {
-		sem->syncobj = syncobj_handle;
+		syncobj_dst = &sem->syncobj;
 	}
+
+	if (*syncobj_dst)
+		device->ws->destroy_syncobj(device->ws, *syncobj_dst);
+
+	*syncobj_dst = syncobj_handle;
 	close(pImportSemaphoreFdInfo->fd);
 	return VK_SUCCESS;
 }

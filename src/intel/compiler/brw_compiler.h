@@ -26,7 +26,6 @@
 
 #include <stdio.h>
 #include "common/gen_device_info.h"
-#include "main/mtypes.h"
 #include "main/macros.h"
 #include "util/ralloc.h"
 
@@ -581,7 +580,6 @@ struct brw_stage_prog_data {
       uint32_t gather_texture_start;
       uint32_t ubo_start;
       uint32_t ssbo_start;
-      uint32_t abo_start;
       uint32_t image_start;
       uint32_t shader_time_start;
       uint32_t plane_start[3];

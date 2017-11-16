@@ -86,22 +86,16 @@ brw_upload_initial_gpu_state(struct brw_context *brw)
       /* Recommended optimizations for Victim Cache eviction and floating
        * point blending.
        */
-      BEGIN_BATCH(3);
-      OUT_BATCH(MI_LOAD_REGISTER_IMM | (3 - 2));
-      OUT_BATCH(GEN7_CACHE_MODE_1);
-      OUT_BATCH(REG_MASK(GEN9_FLOAT_BLEND_OPTIMIZATION_ENABLE) |
-                REG_MASK(GEN9_PARTIAL_RESOLVE_DISABLE_IN_VC) |
-                GEN9_FLOAT_BLEND_OPTIMIZATION_ENABLE |
-                GEN9_PARTIAL_RESOLVE_DISABLE_IN_VC);
-      ADVANCE_BATCH();
+      brw_load_register_imm32(brw, GEN7_CACHE_MODE_1,
+                              REG_MASK(GEN9_FLOAT_BLEND_OPTIMIZATION_ENABLE) |
+                              REG_MASK(GEN9_PARTIAL_RESOLVE_DISABLE_IN_VC) |
+                              GEN9_FLOAT_BLEND_OPTIMIZATION_ENABLE |
+                              GEN9_PARTIAL_RESOLVE_DISABLE_IN_VC);
 
       if (gen_device_info_is_9lp(devinfo)) {
-         BEGIN_BATCH(3);
-         OUT_BATCH(MI_LOAD_REGISTER_IMM | (3 - 2));
-         OUT_BATCH(GEN7_GT_MODE);
-         OUT_BATCH(GEN9_SUBSLICE_HASHING_MASK_BITS |
-                   GEN9_SUBSLICE_HASHING_16x16);
-         ADVANCE_BATCH();
+         brw_load_register_imm32(brw, GEN7_GT_MODE,
+                                 GEN9_SUBSLICE_HASHING_MASK_BITS |
+                                 GEN9_SUBSLICE_HASHING_16x16);
       }
    }
 
@@ -210,7 +204,7 @@ void brw_init_state( struct brw_context *brw )
    ctx->DriverFlags.NewUniformBuffer = BRW_NEW_UNIFORM_BUFFER;
    ctx->DriverFlags.NewShaderStorageBuffer = BRW_NEW_UNIFORM_BUFFER;
    ctx->DriverFlags.NewTextureBuffer = BRW_NEW_TEXTURE_BUFFER;
-   ctx->DriverFlags.NewAtomicBuffer = BRW_NEW_ATOMIC_BUFFER;
+   ctx->DriverFlags.NewAtomicBuffer = BRW_NEW_UNIFORM_BUFFER;
    ctx->DriverFlags.NewImageUnits = BRW_NEW_IMAGE_UNITS;
    ctx->DriverFlags.NewDefaultTessLevels = BRW_NEW_DEFAULT_TESS_LEVELS;
    ctx->DriverFlags.NewIntelConservativeRasterization = BRW_NEW_CONSERVATIVE_RASTERIZATION;
@@ -329,7 +323,6 @@ static struct dirty_bit_map brw_bits[] = {
    DEFINE_BIT(BRW_NEW_RASTERIZER_DISCARD),
    DEFINE_BIT(BRW_NEW_STATS_WM),
    DEFINE_BIT(BRW_NEW_UNIFORM_BUFFER),
-   DEFINE_BIT(BRW_NEW_ATOMIC_BUFFER),
    DEFINE_BIT(BRW_NEW_IMAGE_UNITS),
    DEFINE_BIT(BRW_NEW_META_IN_PROGRESS),
    DEFINE_BIT(BRW_NEW_PUSH_CONSTANT_ALLOCATION),

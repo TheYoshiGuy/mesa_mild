@@ -915,33 +915,23 @@ dri2_initialize(_EGLDriver *drv, _EGLDisplay *disp)
       return EGL_FALSE;
 
    switch (disp->Platform) {
-#ifdef HAVE_SURFACELESS_PLATFORM
    case _EGL_PLATFORM_SURFACELESS:
       ret = dri2_initialize_surfaceless(drv, disp);
       break;
-#endif
-#ifdef HAVE_X11_PLATFORM
    case _EGL_PLATFORM_X11:
       ret = dri2_initialize_x11(drv, disp);
       break;
-#endif
-#ifdef HAVE_DRM_PLATFORM
    case _EGL_PLATFORM_DRM:
       ret = dri2_initialize_drm(drv, disp);
       break;
-#endif
-#ifdef HAVE_WAYLAND_PLATFORM
    case _EGL_PLATFORM_WAYLAND:
       ret = dri2_initialize_wayland(drv, disp);
       break;
-#endif
-#ifdef HAVE_ANDROID_PLATFORM
    case _EGL_PLATFORM_ANDROID:
       ret = dri2_initialize_android(drv, disp);
       break;
-#endif
    default:
-      _eglLog(_EGL_WARNING, "No EGL platform enabled.");
+      unreachable("Callers ensure we cannot get here.");
       return EGL_FALSE;
    }
 
@@ -998,43 +988,17 @@ dri2_display_destroy(_EGLDisplay *disp)
 #endif
 
    switch (disp->Platform) {
-#ifdef HAVE_X11_PLATFORM
    case _EGL_PLATFORM_X11:
-      if (dri2_dpy->own_device) {
-         xcb_disconnect(dri2_dpy->conn);
-      }
+      dri2_teardown_x11(dri2_dpy);
       break;
-#endif
-#ifdef HAVE_DRM_PLATFORM
    case _EGL_PLATFORM_DRM:
-      if (dri2_dpy->own_device) {
-         gbm_device_destroy(&dri2_dpy->gbm_dri->base);
-      }
+      dri2_teardown_drm(dri2_dpy);
       break;
-#endif
-#ifdef HAVE_WAYLAND_PLATFORM
    case _EGL_PLATFORM_WAYLAND:
-      if (dri2_dpy->wl_drm)
-          wl_drm_destroy(dri2_dpy->wl_drm);
-      if (dri2_dpy->wl_dmabuf)
-          zwp_linux_dmabuf_v1_destroy(dri2_dpy->wl_dmabuf);
-      if (dri2_dpy->wl_shm)
-          wl_shm_destroy(dri2_dpy->wl_shm);
-      if (dri2_dpy->wl_registry)
-         wl_registry_destroy(dri2_dpy->wl_registry);
-      if (dri2_dpy->wl_queue)
-         wl_event_queue_destroy(dri2_dpy->wl_queue);
-      if (dri2_dpy->wl_dpy_wrapper)
-         wl_proxy_wrapper_destroy(dri2_dpy->wl_dpy_wrapper);
-      u_vector_finish(&dri2_dpy->wl_modifiers.argb8888);
-      u_vector_finish(&dri2_dpy->wl_modifiers.xrgb8888);
-      u_vector_finish(&dri2_dpy->wl_modifiers.rgb565);
-      if (dri2_dpy->own_device) {
-         wl_display_disconnect(dri2_dpy->wl_dpy);
-      }
+      dri2_teardown_wayland(dri2_dpy);
       break;
-#endif
    default:
+      /* TODO: add teardown for other platforms */
       break;
    }
 

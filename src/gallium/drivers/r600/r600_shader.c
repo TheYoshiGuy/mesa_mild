@@ -348,6 +348,7 @@ struct r600_shader_ctx {
 	int					gs_next_vertex;
 	struct r600_shader	*gs_for_vs;
 	int					gs_export_gpr_tregs[4];
+	int                                     gs_rotated_input[2];
 	const struct pipe_stream_output_info	*gs_stream_output_info;
 	unsigned				enabled_stream_buffers_mask;
 	unsigned                                tess_input_info; /* temp with tess input offsets */
@@ -760,7 +761,7 @@ static int single_alu_op3(struct r600_shader_ctx *ctx, int op,
 	int r;
 
 	/* validate this for other ops */
-	assert(op == ALU_OP3_MULADD_UINT24);
+	assert(op == ALU_OP3_MULADD_UINT24 || op == ALU_OP3_CNDE_INT);
 	memset(&alu, 0, sizeof(struct r600_bytecode_alu));
 	alu.op = op;
 	alu.src[0].sel = src0_sel;
@@ -1479,14 +1480,14 @@ static int fetch_gs_input(struct r600_shader_ctx *ctx, struct tgsi_full_src_regi
 	int r;
 	unsigned index = src->Register.Index;
 	unsigned vtx_id = src->Dimension.Index;
-	int offset_reg = vtx_id / 3;
+	int offset_reg = ctx->gs_rotated_input[vtx_id / 3];
 	int offset_chan = vtx_id % 3;
 	int t2 = 0;
 
 	/* offsets of per-vertex data in ESGS ring are passed to GS in R0.x, R0.y,
 	 * R0.w, R1.x, R1.y, R1.z (it seems R0.z is used for PrimitiveID) */
 
-	if (offset_reg == 0 && offset_chan == 2)
+	if (offset_reg == ctx->gs_rotated_input[0] && offset_chan == 2)
 		offset_chan = 3;
 
 	if (src->Dimension.Indirect || src->Register.Indirect)
@@ -1517,7 +1518,7 @@ static int fetch_gs_input(struct r600_shader_ctx *ctx, struct tgsi_full_src_regi
 		for (i = 0; i < 3; i++) {
 			memset(&alu, 0, sizeof(struct r600_bytecode_alu));
 			alu.op = ALU_OP1_MOV;
-			alu.src[0].sel = 0;
+			alu.src[0].sel = ctx->gs_rotated_input[0];
 			alu.src[0].chan = i == 2 ? 3 : i;
 			alu.dst.sel = treg[i];
 			alu.dst.chan = 0;
@@ -2884,6 +2885,13 @@ static int r600_emit_tess_factor(struct r600_shader_ctx *ctx)
 		int out_idx = i >= outer_comps ? tessinner_idx : tessouter_idx;
 		int out_comp = i >= outer_comps ? i - outer_comps : i;
 
+		if (ctx->shader->tcs_prim_mode == PIPE_PRIM_LINES) {
+			if (out_comp == 1)
+				out_comp = 0;
+			else if (out_comp == 0)
+				out_comp = 1;
+		}
+
 		r = single_alu_op2(ctx, ALU_OP2_ADD_INT,
 				   treg[i / 2], (2 * (i % 2)),
 				   temp_reg, 0,
@@ -2983,6 +2991,7 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 	case PIPE_SHADER_GEOMETRY:
 		ring_outputs = true;
 		shader->atomic_base = key.gs.first_atomic_counter;
+		shader->gs_tri_strip_adj_fix = key.gs.tri_strip_adj_fix;
 		break;
 	case PIPE_SHADER_TESS_CTRL:
 		shader->tcs_prim_mode = key.tcs.prim_mode;
@@ -3051,9 +3060,11 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 		ctx.file_offset[i] = 0;
 	}
 
-	if (ctx.type == PIPE_SHADER_VERTEX && ctx.info.num_inputs) {
+	if (ctx.type == PIPE_SHADER_VERTEX)  {
+
 		ctx.file_offset[TGSI_FILE_INPUT] = 1;
-		r600_bytecode_add_cfinst(ctx.bc, CF_OP_CALL_FS);
+		if (ctx.info.num_inputs)
+			r600_bytecode_add_cfinst(ctx.bc, CF_OP_CALL_FS);
 	}
 	if (ctx.type == PIPE_SHADER_FRAGMENT) {
 		if (ctx.bc->chip_class >= EVERGREEN)
@@ -3114,6 +3125,14 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 		ctx.gs_export_gpr_tregs[2] = ctx.bc->ar_reg + 5;
 		ctx.gs_export_gpr_tregs[3] = ctx.bc->ar_reg + 6;
 		ctx.temp_reg = ctx.bc->ar_reg + 7;
+		if (ctx.shader->gs_tri_strip_adj_fix) {
+			ctx.gs_rotated_input[0] = ctx.bc->ar_reg + 7;
+			ctx.gs_rotated_input[1] = ctx.bc->ar_reg + 8;
+			ctx.temp_reg += 2;
+		} else {
+			ctx.gs_rotated_input[0] = 0;
+			ctx.gs_rotated_input[1] = 1;
+		}
 	} else {
 		ctx.temp_reg = ctx.bc->ar_reg + 3;
 	}
@@ -3280,6 +3299,36 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 			r = r600_bytecode_add_alu(ctx.bc, &alu);
 			if (r)
 				return r;
+		}
+
+		if (ctx.shader->gs_tri_strip_adj_fix) {
+			r = single_alu_op2(&ctx, ALU_OP2_AND_INT,
+					   ctx.gs_rotated_input[0], 2,
+					   0, 2,
+					   V_SQ_ALU_SRC_LITERAL, 1);
+			if (r)
+				return r;
+
+			for (i = 0; i < 6; i++) {
+				int rotated = (i + 4) % 6;
+				int offset_reg = i / 3;
+				int offset_chan = i % 3;
+				int rotated_offset_reg = rotated / 3;
+				int rotated_offset_chan = rotated % 3;
+
+				if (offset_reg == 0 && offset_chan == 2)
+					offset_chan = 3;
+				if (rotated_offset_reg == 0 && rotated_offset_chan == 2)
+					rotated_offset_chan = 3;
+
+				r = single_alu_op3(&ctx, ALU_OP3_CNDE_INT,
+						   ctx.gs_rotated_input[offset_reg], offset_chan,
+						   ctx.gs_rotated_input[0], 2,
+						   offset_reg, offset_chan,
+						   rotated_offset_reg, rotated_offset_chan);
+				if (r)
+					return r;
+			}
 		}
 	}
 
@@ -4816,11 +4865,7 @@ static int tgsi_rsq(struct r600_shader_ctx *ctx)
 
 	memset(&alu, 0, sizeof(struct r600_bytecode_alu));
 
-	/* XXX:
-	 * For state trackers other than OpenGL, we'll want to use
-	 * _RECIPSQRT_IEEE instead.
-	 */
-	alu.op = ALU_OP1_RECIPSQRT_CLAMPED;
+	alu.op = ALU_OP1_RECIPSQRT_IEEE;
 
 	for (i = 0; i < inst->Instruction.NumSrcRegs; i++) {
 		r600_bytecode_src(&alu.src[i], &ctx->src[i], 0);
@@ -6062,7 +6107,25 @@ static int tgsi_bfi(struct r600_shader_ctx *ctx)
 	unsigned write_mask = inst->Dst[0].Register.WriteMask;
 	int last_inst = tgsi_last_instruction(write_mask);
 
-	t1 = ctx->temp_reg;
+	t1 = r600_get_temp(ctx);
+
+	for (i = 0; i < 4; i++) {
+		if (!(write_mask & (1<<i)))
+			continue;
+
+		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+		alu.op = ALU_OP2_SETGE_INT;
+		r600_bytecode_src(&alu.src[0], &ctx->src[3], i);
+		alu.src[1].sel = V_SQ_ALU_SRC_LITERAL;
+		alu.src[1].value = 32;
+		alu.dst.sel = ctx->temp_reg;
+		alu.dst.chan = i;
+		alu.dst.write = 1;
+		alu.last = i == last_inst;
+		r = r600_bytecode_add_alu(ctx->bc, &alu);
+		if (r)
+			return r;
+	}
 
 	for (i = 0; i < 4; i++) {
 		if (!(write_mask & (1<<i)))
@@ -6130,6 +6193,26 @@ static int tgsi_bfi(struct r600_shader_ctx *ctx)
 			return r;
 	}
 
+	for (i = 0; i < 4; i++) {
+		if (!(write_mask & (1<<i)))
+			continue;
+		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+		alu.op = ALU_OP3_CNDE_INT;
+		alu.is_op3 = 1;
+		alu.src[0].sel = ctx->temp_reg;
+		alu.src[0].chan = i;
+		r600_bytecode_src(&alu.src[2], &ctx->src[1], i);
+
+		tgsi_dst(ctx, &inst->Dst[0], i, &alu.dst);
+
+		alu.src[1].sel = alu.dst.sel;
+		alu.src[1].chan = i;
+
+		alu.last = i == last_inst;
+		r = r600_bytecode_add_alu(ctx->bc, &alu);
+		if (r)
+			return r;
+	}
 	return 0;
 }
 
@@ -9020,16 +9103,61 @@ static int tgsi_up2h(struct r600_shader_ctx *ctx)
 	return 0;
 }
 
+static int tgsi_bfe(struct r600_shader_ctx *ctx)
+{
+	struct tgsi_full_instruction *inst = &ctx->parse.FullToken.FullInstruction;
+	struct r600_bytecode_alu alu;
+	int lasti = tgsi_last_instruction(inst->Dst[0].Register.WriteMask);
+	int r, i;
+
+	r = tgsi_op3(ctx);
+	if (r)
+		return r;
+
+	for (i = 0; i < lasti + 1; i++) {
+		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+		alu.op = ALU_OP2_SETGE_INT;
+		r600_bytecode_src(&alu.src[0], &ctx->src[2], i);
+		alu.src[1].sel = V_SQ_ALU_SRC_LITERAL;
+		alu.src[1].value = 32;
+		alu.dst.sel = ctx->temp_reg;
+		alu.dst.chan = i;
+		alu.dst.write = 1;
+		if (i == lasti)
+			alu.last = 1;
+		r = r600_bytecode_add_alu(ctx->bc, &alu);
+		if (r)
+			return r;
+	}
+
+	for (i = 0; i < lasti + 1; i++) {
+		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+		alu.op = ALU_OP3_CNDE_INT;
+		alu.is_op3 = 1;
+		alu.src[0].sel = ctx->temp_reg;
+		alu.src[1].chan = i;
+
+		tgsi_dst(ctx, &inst->Dst[0], i, &alu.dst);
+		alu.src[1].sel = alu.dst.sel;
+		alu.src[1].chan = i;
+		r600_bytecode_src(&alu.src[2], &ctx->src[0], i);
+		alu.dst.write = 1;
+		if (i == lasti)
+			alu.last = 1;
+		r = r600_bytecode_add_alu(ctx->bc, &alu);
+		if (r)
+			return r;
+	}
+
+	return 0;
+}
+
 static const struct r600_shader_tgsi_instruction r600_shader_tgsi_instruction[] = {
 	[TGSI_OPCODE_ARL]	= { ALU_OP0_NOP, tgsi_r600_arl},
 	[TGSI_OPCODE_MOV]	= { ALU_OP1_MOV, tgsi_op2},
 	[TGSI_OPCODE_LIT]	= { ALU_OP0_NOP, tgsi_lit},
 
-	/* XXX:
-	 * For state trackers other than OpenGL, we'll want to use
-	 * _RECIP_IEEE instead.
-	 */
-	[TGSI_OPCODE_RCP]	= { ALU_OP1_RECIP_CLAMPED, tgsi_trans_srcx_replicate},
+	[TGSI_OPCODE_RCP]	= { ALU_OP1_RECIP_IEEE, tgsi_trans_srcx_replicate},
 
 	[TGSI_OPCODE_RSQ]	= { ALU_OP0_NOP, tgsi_rsq},
 	[TGSI_OPCODE_EXP]	= { ALU_OP0_NOP, tgsi_exp},
@@ -9039,8 +9167,9 @@ static const struct r600_shader_tgsi_instruction r600_shader_tgsi_instruction[] 
 	[TGSI_OPCODE_DP3]	= { ALU_OP2_DOT4_IEEE, tgsi_dp},
 	[TGSI_OPCODE_DP4]	= { ALU_OP2_DOT4_IEEE, tgsi_dp},
 	[TGSI_OPCODE_DST]	= { ALU_OP0_NOP, tgsi_opdst},
-	[TGSI_OPCODE_MIN]	= { ALU_OP2_MIN, tgsi_op2},
-	[TGSI_OPCODE_MAX]	= { ALU_OP2_MAX, tgsi_op2},
+	/* MIN_DX10 returns non-nan result if one src is NaN, MIN returns NaN */
+	[TGSI_OPCODE_MIN]	= { ALU_OP2_MIN_DX10, tgsi_op2},
+	[TGSI_OPCODE_MAX]	= { ALU_OP2_MAX_DX10, tgsi_op2},
 	[TGSI_OPCODE_SLT]	= { ALU_OP2_SETGT, tgsi_op2_swap},
 	[TGSI_OPCODE_SGE]	= { ALU_OP2_SETGE, tgsi_op2},
 	[TGSI_OPCODE_MAD]	= { ALU_OP3_MULADD_IEEE, tgsi_op3},
@@ -9229,7 +9358,7 @@ static const struct r600_shader_tgsi_instruction eg_shader_tgsi_instruction[] = 
 	[TGSI_OPCODE_MOV]	= { ALU_OP1_MOV, tgsi_op2},
 	[TGSI_OPCODE_LIT]	= { ALU_OP0_NOP, tgsi_lit},
 	[TGSI_OPCODE_RCP]	= { ALU_OP1_RECIP_IEEE, tgsi_trans_srcx_replicate},
-	[TGSI_OPCODE_RSQ]	= { ALU_OP1_RECIPSQRT_IEEE, tgsi_rsq},
+	[TGSI_OPCODE_RSQ]	= { ALU_OP0_NOP, tgsi_rsq},
 	[TGSI_OPCODE_EXP]	= { ALU_OP0_NOP, tgsi_exp},
 	[TGSI_OPCODE_LOG]	= { ALU_OP0_NOP, tgsi_log},
 	[TGSI_OPCODE_MUL]	= { ALU_OP2_MUL_IEEE, tgsi_op2},
@@ -9237,8 +9366,8 @@ static const struct r600_shader_tgsi_instruction eg_shader_tgsi_instruction[] = 
 	[TGSI_OPCODE_DP3]	= { ALU_OP2_DOT4_IEEE, tgsi_dp},
 	[TGSI_OPCODE_DP4]	= { ALU_OP2_DOT4_IEEE, tgsi_dp},
 	[TGSI_OPCODE_DST]	= { ALU_OP0_NOP, tgsi_opdst},
-	[TGSI_OPCODE_MIN]	= { ALU_OP2_MIN, tgsi_op2},
-	[TGSI_OPCODE_MAX]	= { ALU_OP2_MAX, tgsi_op2},
+	[TGSI_OPCODE_MIN]	= { ALU_OP2_MIN_DX10, tgsi_op2},
+	[TGSI_OPCODE_MAX]	= { ALU_OP2_MAX_DX10, tgsi_op2},
 	[TGSI_OPCODE_SLT]	= { ALU_OP2_SETGT, tgsi_op2_swap},
 	[TGSI_OPCODE_SGE]	= { ALU_OP2_SETGE, tgsi_op2},
 	[TGSI_OPCODE_MAD]	= { ALU_OP3_MULADD_IEEE, tgsi_op3},
@@ -9408,8 +9537,8 @@ static const struct r600_shader_tgsi_instruction eg_shader_tgsi_instruction[] = 
 	[TGSI_OPCODE_UMUL_HI]	= { ALU_OP2_MULHI_UINT, tgsi_op2_trans},
 	[TGSI_OPCODE_TG4]	= { FETCH_OP_GATHER4, tgsi_tex},
 	[TGSI_OPCODE_LODQ]	= { FETCH_OP_GET_LOD, tgsi_tex},
-	[TGSI_OPCODE_IBFE]	= { ALU_OP3_BFE_INT, tgsi_op3},
-	[TGSI_OPCODE_UBFE]	= { ALU_OP3_BFE_UINT, tgsi_op3},
+	[TGSI_OPCODE_IBFE]	= { ALU_OP3_BFE_INT, tgsi_bfe},
+	[TGSI_OPCODE_UBFE]	= { ALU_OP3_BFE_UINT, tgsi_bfe},
 	[TGSI_OPCODE_BFI]	= { ALU_OP0_NOP, tgsi_bfi},
 	[TGSI_OPCODE_BREV]	= { ALU_OP1_BFREV_INT, tgsi_op2},
 	[TGSI_OPCODE_POPC]	= { ALU_OP1_BCNT_INT, tgsi_op2},
@@ -9460,8 +9589,8 @@ static const struct r600_shader_tgsi_instruction cm_shader_tgsi_instruction[] = 
 	[TGSI_OPCODE_DP3]	= { ALU_OP2_DOT4_IEEE, tgsi_dp},
 	[TGSI_OPCODE_DP4]	= { ALU_OP2_DOT4_IEEE, tgsi_dp},
 	[TGSI_OPCODE_DST]	= { ALU_OP0_NOP, tgsi_opdst},
-	[TGSI_OPCODE_MIN]	= { ALU_OP2_MIN, tgsi_op2},
-	[TGSI_OPCODE_MAX]	= { ALU_OP2_MAX, tgsi_op2},
+	[TGSI_OPCODE_MIN]	= { ALU_OP2_MIN_DX10, tgsi_op2},
+	[TGSI_OPCODE_MAX]	= { ALU_OP2_MAX_DX10, tgsi_op2},
 	[TGSI_OPCODE_SLT]	= { ALU_OP2_SETGT, tgsi_op2_swap},
 	[TGSI_OPCODE_SGE]	= { ALU_OP2_SETGE, tgsi_op2},
 	[TGSI_OPCODE_MAD]	= { ALU_OP3_MULADD_IEEE, tgsi_op3},
@@ -9631,8 +9760,8 @@ static const struct r600_shader_tgsi_instruction cm_shader_tgsi_instruction[] = 
 	[TGSI_OPCODE_UMUL_HI]	= { ALU_OP2_MULHI_UINT, cayman_mul_int_instr},
 	[TGSI_OPCODE_TG4]	= { FETCH_OP_GATHER4, tgsi_tex},
 	[TGSI_OPCODE_LODQ]	= { FETCH_OP_GET_LOD, tgsi_tex},
-	[TGSI_OPCODE_IBFE]	= { ALU_OP3_BFE_INT, tgsi_op3},
-	[TGSI_OPCODE_UBFE]	= { ALU_OP3_BFE_UINT, tgsi_op3},
+	[TGSI_OPCODE_IBFE]	= { ALU_OP3_BFE_INT, tgsi_bfe},
+	[TGSI_OPCODE_UBFE]	= { ALU_OP3_BFE_UINT, tgsi_bfe},
 	[TGSI_OPCODE_BFI]	= { ALU_OP0_NOP, tgsi_bfi},
 	[TGSI_OPCODE_BREV]	= { ALU_OP1_BFREV_INT, tgsi_op2},
 	[TGSI_OPCODE_POPC]	= { ALU_OP1_BCNT_INT, tgsi_op2},

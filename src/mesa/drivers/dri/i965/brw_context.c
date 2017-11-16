@@ -345,11 +345,10 @@ brw_initialize_context_constants(struct brw_context *brw)
       [MESA_SHADER_GEOMETRY] = devinfo->gen >= 6,
       [MESA_SHADER_FRAGMENT] = true,
       [MESA_SHADER_COMPUTE] =
-         ((ctx->API == API_OPENGL_COMPAT || ctx->API == API_OPENGL_CORE) &&
+         (_mesa_is_desktop_gl(ctx) &&
           ctx->Const.MaxComputeWorkGroupSize[0] >= 1024) ||
          (ctx->API == API_OPENGLES2 &&
-          ctx->Const.MaxComputeWorkGroupSize[0] >= 128) ||
-         _mesa_extension_override_enables.ARB_compute_shader,
+          ctx->Const.MaxComputeWorkGroupSize[0] >= 128),
    };
 
    unsigned num_stages = 0;
@@ -1055,6 +1054,7 @@ brwCreateContext(gl_api api,
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
       brw_init_shader_time(brw);
 
+   _mesa_override_extensions(ctx);
    _mesa_compute_version(ctx);
 
    _mesa_initialize_dispatch_tables(ctx);

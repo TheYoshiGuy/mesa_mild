@@ -817,7 +817,7 @@ static void r600_init_color_surface(struct r600_context *rctx,
 	unsigned offset;
 	const struct util_format_description *desc;
 	int i;
-	bool blend_bypass = 0, blend_clamp = 1, do_endian_swap = FALSE;
+	bool blend_bypass = 0, blend_clamp = 0, do_endian_swap = FALSE;
 
 	if (rtex->db_compatible && !r600_can_sample_zs(rtex, false)) {
 		r600_init_flushed_depth_texture(&rctx->b.b, surf->base.texture, NULL);
@@ -869,6 +869,8 @@ static void r600_init_color_surface(struct r600_context *rctx,
 			ntype = V_0280A0_NUMBER_UNORM;
 		else if (desc->channel[i].pure_integer)
 			ntype = V_0280A0_NUMBER_UINT;
+	} else if (desc->channel[i].type == UTIL_FORMAT_TYPE_FLOAT) {
+		ntype = V_0280A0_NUMBER_FLOAT;
 	}
 
 	if (R600_BIG_ENDIAN)
@@ -882,6 +884,11 @@ static void r600_init_color_surface(struct r600_context *rctx,
 	assert(swap != ~0);
 
 	endian = r600_colorformat_endian_swap(format, do_endian_swap);
+
+	/* blend clamp should be set for all NORM/SRGB types */
+	if (ntype == V_0280A0_NUMBER_UNORM || ntype == V_0280A0_NUMBER_SNORM ||
+	    ntype == V_0280A0_NUMBER_SRGB)
+		blend_clamp = 1;
 
 	/* set blend bypass according to docs if SINT/UINT or
 	   8/24 COLOR variants */
@@ -917,6 +924,7 @@ static void r600_init_color_surface(struct r600_context *rctx,
 		     ntype != V_0280A0_NUMBER_UINT &&
 		     ntype != V_0280A0_NUMBER_SINT) &&
 		    G_0280A0_BLEND_CLAMP(color_info) &&
+		    /* XXX this condition is always true since BLEND_FLOAT32 is never set (bug?). */
 		    !G_0280A0_BLEND_FLOAT32(color_info)) {
 			color_info |= S_0280A0_SOURCE_FORMAT(V_0280A0_EXPORT_NORM);
 			surf->export_16bpc = true;
@@ -2549,6 +2557,12 @@ void r600_update_ps_state(struct pipe_context *ctx, struct r600_pipe_shader *sha
 	r600_store_context_reg_seq(cb, R_028850_SQ_PGM_RESOURCES_PS, 2);
 	r600_store_value(cb, /* R_028850_SQ_PGM_RESOURCES_PS*/
 			 S_028850_NUM_GPRS(rshader->bc.ngpr) |
+	/*
+	 * docs are misleading about the dx10_clamp bit. This only affects
+	 * instructions using CLAMP dst modifier, in which case they will
+	 * return 0 with this set for a NaN (otherwise NaN).
+	 */
+			 S_028850_DX10_CLAMP(1) |
 			 S_028850_STACK_SIZE(rshader->bc.nstack) |
 			 S_028850_UNCACHED_FIRST_INST(ufi));
 	r600_store_value(cb, exports_ps); /* R_028854_SQ_PGM_EXPORTS_PS */
@@ -2598,6 +2612,7 @@ void r600_update_vs_state(struct pipe_context *ctx, struct r600_pipe_shader *sha
 			       S_0286C4_VS_EXPORT_COUNT(nparams - 1));
 	r600_store_context_reg(cb, R_028868_SQ_PGM_RESOURCES_VS,
 			       S_028868_NUM_GPRS(rshader->bc.ngpr) |
+			       S_028868_DX10_CLAMP(1) |
 			       S_028868_STACK_SIZE(rshader->bc.nstack));
 	if (rshader->vs_position_window_space) {
 		r600_store_context_reg(cb, R_028818_PA_CL_VTE_CNTL,
@@ -2682,6 +2697,7 @@ void r600_update_gs_state(struct pipe_context *ctx, struct r600_pipe_shader *sha
 
 	r600_store_context_reg(cb, R_02887C_SQ_PGM_RESOURCES_GS,
 			       S_02887C_NUM_GPRS(rshader->bc.ngpr) |
+			       S_02887C_DX10_CLAMP(1) |
 			       S_02887C_STACK_SIZE(rshader->bc.nstack));
 	r600_store_context_reg(cb, R_02886C_SQ_PGM_START_GS, 0);
 	/* After that, the NOP relocation packet must be emitted (shader->bo, RADEON_USAGE_READ). */
@@ -2696,6 +2712,7 @@ void r600_update_es_state(struct pipe_context *ctx, struct r600_pipe_shader *sha
 
 	r600_store_context_reg(cb, R_028890_SQ_PGM_RESOURCES_ES,
 			       S_028890_NUM_GPRS(rshader->bc.ngpr) |
+			       S_028890_DX10_CLAMP(1) |
 			       S_028890_STACK_SIZE(rshader->bc.nstack));
 	r600_store_context_reg(cb, R_028880_SQ_PGM_START_ES, 0);
 	/* After that, the NOP relocation packet must be emitted (shader->bo, RADEON_USAGE_READ). */

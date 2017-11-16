@@ -169,9 +169,20 @@ static uint32_t r600_translate_blend_factor(int blend_fact)
 	return 0;
 }
 
-static unsigned r600_tex_dim(unsigned dim, unsigned nr_samples)
+static unsigned r600_tex_dim(struct r600_texture *rtex,
+			     unsigned view_target, unsigned nr_samples)
 {
-	switch (dim) {
+	unsigned res_target = rtex->resource.b.b.target;
+
+	if (view_target == PIPE_TEXTURE_CUBE ||
+	    view_target == PIPE_TEXTURE_CUBE_ARRAY)
+		res_target = view_target;
+		/* If interpreting cubemaps as something else, set 2D_ARRAY. */
+	else if (res_target == PIPE_TEXTURE_CUBE ||
+		 res_target == PIPE_TEXTURE_CUBE_ARRAY)
+		res_target = PIPE_TEXTURE_2D_ARRAY;
+
+	switch (res_target) {
 	default:
 	case PIPE_TEXTURE_1D:
 		return V_030000_SQ_TEX_DIM_1D;
@@ -805,13 +816,10 @@ static int evergreen_fill_tex_resource_words(struct r600_context *rctx,
 	va = tmp->resource.gpu_address;
 
 	/* array type views and views into array types need to use layer offset */
-	dim = params->target;
-	if (params->target != PIPE_TEXTURE_CUBE)
-		dim = MAX2(params->target, texture->target);
-
-	tex_resource_words[0] = (S_030000_DIM(r600_tex_dim(dim, texture->nr_samples)) |
-				       S_030000_PITCH((pitch / 8) - 1) |
-				       S_030000_TEX_WIDTH(width - 1));
+	dim = r600_tex_dim(tmp, params->target, texture->nr_samples);
+	tex_resource_words[0] = (S_030000_DIM(dim) |
+				 S_030000_PITCH((pitch / 8) - 1) |
+				 S_030000_TEX_WIDTH(width - 1));
 	if (rscreen->b.chip_class == CAYMAN)
 		tex_resource_words[0] |= CM_S_030000_NON_DISP_TILING_ORDER(non_disp_tiling);
 	else
@@ -1042,7 +1050,7 @@ static void evergreen_set_color_surface_buffer(struct r600_context *rctx,
 		}
 	}
 	ntype = V_028C70_NUMBER_UNORM;
-		if (desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB)
+	if (desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB)
 		ntype = V_028C70_NUMBER_SRGB;
 	else if (desc->channel[i].type == UTIL_FORMAT_TYPE_SIGNED) {
 		if (desc->channel[i].normalized)
@@ -1054,7 +1062,10 @@ static void evergreen_set_color_surface_buffer(struct r600_context *rctx,
 			ntype = V_028C70_NUMBER_UNORM;
 		else if (desc->channel[i].pure_integer)
 			ntype = V_028C70_NUMBER_UINT;
+	} else if (desc->channel[i].type == UTIL_FORMAT_TYPE_FLOAT) {
+		ntype = V_028C70_NUMBER_FLOAT;
 	}
+
 	pitch = (pitch / 8) - 1;
 	color->pitch = S_028C64_PITCH_TILE_MAX(pitch);
 
@@ -1180,6 +1191,8 @@ static void evergreen_set_color_surface_common(struct r600_context *rctx,
 			ntype = V_028C70_NUMBER_UNORM;
 		else if (desc->channel[i].pure_integer)
 			ntype = V_028C70_NUMBER_UINT;
+	} else if (desc->channel[i].type == UTIL_FORMAT_TYPE_FLOAT) {
+		ntype = V_028C70_NUMBER_FLOAT;
 	}
 
 	if (R600_BIG_ENDIAN)
@@ -3236,6 +3249,7 @@ void evergreen_update_ps_state(struct pipe_context *ctx, struct r600_pipe_shader
 	r600_store_value(cb, /* R_028844_SQ_PGM_RESOURCES_PS */
 			 S_028844_NUM_GPRS(rshader->bc.ngpr) |
 			 S_028844_PRIME_CACHE_ON_DRAW(1) |
+			 S_028844_DX10_CLAMP(1) |
 			 S_028844_STACK_SIZE(rshader->bc.nstack));
 	/* After that, the NOP relocation packet must be emitted (shader->bo, RADEON_USAGE_READ). */
 
@@ -3256,6 +3270,7 @@ void evergreen_update_es_state(struct pipe_context *ctx, struct r600_pipe_shader
 
 	r600_store_context_reg(cb, R_028890_SQ_PGM_RESOURCES_ES,
 			       S_028890_NUM_GPRS(rshader->bc.ngpr) |
+			       S_028890_DX10_CLAMP(1) |
 			       S_028890_STACK_SIZE(rshader->bc.nstack));
 	r600_store_context_reg(cb, R_02888C_SQ_PGM_START_ES,
 			       shader->bo->gpu_address >> 8);
@@ -3318,6 +3333,7 @@ void evergreen_update_gs_state(struct pipe_context *ctx, struct r600_pipe_shader
 
 	r600_store_context_reg(cb, R_028878_SQ_PGM_RESOURCES_GS,
 			       S_028878_NUM_GPRS(rshader->bc.ngpr) |
+			       S_028878_DX10_CLAMP(1) |
 			       S_028878_STACK_SIZE(rshader->bc.nstack));
 	r600_store_context_reg(cb, R_028874_SQ_PGM_START_GS,
 			       shader->bo->gpu_address >> 8);
@@ -3358,6 +3374,7 @@ void evergreen_update_vs_state(struct pipe_context *ctx, struct r600_pipe_shader
 			       S_0286C4_VS_EXPORT_COUNT(nparams - 1));
 	r600_store_context_reg(cb, R_028860_SQ_PGM_RESOURCES_VS,
 			       S_028860_NUM_GPRS(rshader->bc.ngpr) |
+			       S_028860_DX10_CLAMP(1) |
 			       S_028860_STACK_SIZE(rshader->bc.nstack));
 	if (rshader->vs_position_window_space) {
 		r600_store_context_reg(cb, R_028818_PA_CL_VTE_CNTL,
@@ -3392,6 +3409,7 @@ void evergreen_update_hs_state(struct pipe_context *ctx, struct r600_pipe_shader
 	r600_init_command_buffer(cb, 32);
 	r600_store_context_reg(cb, R_0288BC_SQ_PGM_RESOURCES_HS,
 			       S_0288BC_NUM_GPRS(rshader->bc.ngpr) |
+			       S_0288BC_DX10_CLAMP(1) |
 			       S_0288BC_STACK_SIZE(rshader->bc.nstack));
 	r600_store_context_reg(cb, R_0288B8_SQ_PGM_START_HS,
 			       shader->bo->gpu_address >> 8);
@@ -3405,6 +3423,7 @@ void evergreen_update_ls_state(struct pipe_context *ctx, struct r600_pipe_shader
 	r600_init_command_buffer(cb, 32);
 	r600_store_context_reg(cb, R_0288D4_SQ_PGM_RESOURCES_LS,
 			       S_0288D4_NUM_GPRS(rshader->bc.ngpr) |
+			       S_0288D4_DX10_CLAMP(1) |
 			       S_0288D4_STACK_SIZE(rshader->bc.nstack));
 	r600_store_context_reg(cb, R_0288D0_SQ_PGM_START_LS,
 			       shader->bo->gpu_address >> 8);
@@ -4221,6 +4240,9 @@ void evergreen_emit_atomic_buffer_save(struct r600_context *rctx,
 	unsigned reloc;
 
 	mask = *atomic_used_mask_p;
+	if (!mask)
+		return;
+
 	while (mask) {
 		unsigned atomic_index = u_bit_scan(&mask);
 		struct r600_shader_atomic *atomic = &combined_atomics[atomic_index];
