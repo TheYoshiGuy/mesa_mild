@@ -1,4 +1,5 @@
 # Copyright © 2017 Dylan Baker
+# Copyright © 2017 Intel Corporation
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -37,11 +38,18 @@ if with_gallium_softpipe
     subdir('drivers/llvmpipe')
   endif
 endif
+if with_gallium_r300 or with_gallium_radeonsi or with_gallium_r600
+  subdir('winsys/radeon/drm')
+endif
+if with_gallium_r300
+  subdir('drivers/r300')
+endif
+if with_gallium_r600
+  subdir('drivers/r600')
+endif
 if with_gallium_radeonsi
-  # TODO: some of these are needed by r300 and r600
   subdir('drivers/radeon')
   subdir('drivers/radeonsi')
-  subdir('winsys/radeon/drm')
   subdir('winsys/amdgpu/drm')
 endif
 if with_gallium_nouveau
@@ -70,24 +78,32 @@ endif
 if with_gallium_imx
   subdir('winsys/imx/drm')
 endif
-if with_glx == 'gallium-xlib'
-  subdir('winsys/sw/xlib')
+if with_gallium_i915
+  subdir('winsys/i915/drm')
+  subdir('drivers/i915')
 endif
-subdir('state_trackers/dri')
+if with_gallium_svga
+  subdir('drivers/svga')
+  subdir('winsys/svga/drm')
+endif
+if with_gallium_virgl
+  subdir('drivers/virgl')
+  subdir('winsys/virgl/drm')
+  subdir('winsys/virgl/vtest')
+endif
+if with_dri
+  subdir('state_trackers/dri')
+endif
 if with_osmesa == 'gallium'
   subdir('state_trackers/osmesa')
 endif
 if with_glx == 'gallium-xlib'
+  subdir('winsys/sw/xlib')
   subdir('state_trackers/glx/xlib')
 endif
-# TODO: i915
-# TODO: SVGA
-# TODO: r300
-# TODO: r600
 # TODO: SWR
-# TODO: virgl
 # TODO: clover
-if with_dri and with_gallium
+if with_dri
   subdir('targets/dri')
 endif
 if with_osmesa == 'gallium'

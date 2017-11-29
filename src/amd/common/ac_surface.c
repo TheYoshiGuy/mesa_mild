@@ -304,7 +304,7 @@ static int gfx6_compute_level(ADDR_HANDLE addrlib,
 
 	surf_level = is_stencil ? &surf->u.legacy.stencil_level[level] : &surf->u.legacy.level[level];
 	surf_level->offset = align64(surf->surf_size, AddrSurfInfoOut->baseAlign);
-	surf_level->slice_size = AddrSurfInfoOut->sliceSize;
+	surf_level->slice_size_dw = AddrSurfInfoOut->sliceSize / 4;
 	surf_level->nblk_x = AddrSurfInfoOut->pitch;
 	surf_level->nblk_y = AddrSurfInfoOut->height;
 
@@ -586,7 +586,7 @@ static int gfx6_compute_surface(ADDR_HANDLE addrlib,
 		info->chip_class >= VI &&
 		!(surf->flags & RADEON_SURF_Z_OR_SBUFFER) &&
 		!(surf->flags & RADEON_SURF_DISABLE_DCC) &&
-		!compressed && AddrDccIn.numSamples <= 1 &&
+		!compressed &&
 		((config->info.array_size == 1 && config->info.depth == 1) ||
 		 config->info.levels == 1);
 
@@ -861,7 +861,7 @@ static int gfx9_compute_miptree(ADDR_HANDLE addrlib,
 
 	ret = Addr2ComputeSurfaceInfo(addrlib, in, &out);
 	if (ret != ADDR_OK)
-	return ret;
+		return ret;
 
 	if (in->flags.stencil) {
 		surf->u.gfx9.stencil.swizzle_mode = in->swizzleMode;
@@ -927,9 +927,7 @@ static int gfx9_compute_miptree(ADDR_HANDLE addrlib,
 		if (!(surf->flags & RADEON_SURF_DISABLE_DCC) &&
 		    !(surf->flags & RADEON_SURF_SCANOUT) &&
 		    !compressed &&
-		    in->swizzleMode != ADDR_SW_LINEAR &&
-		    /* TODO: We could support DCC with MSAA. */
-		    in->numSamples == 1) {
+		    in->swizzleMode != ADDR_SW_LINEAR) {
 			ADDR2_COMPUTE_DCCINFO_INPUT din = {0};
 			ADDR2_COMPUTE_DCCINFO_OUTPUT dout = {0};
 			ADDR2_META_MIP_INFO meta_mip_info[RADEON_SURF_MAX_LEVELS] = {};

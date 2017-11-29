@@ -767,7 +767,7 @@ dd_copy_draw_state(struct dd_draw_state *dst, struct dd_draw_state *src)
    }
 
    dst->num_so_targets = src->num_so_targets;
-   for (i = 0; i < ARRAY_SIZE(src->so_targets); i++)
+   for (i = 0; i < src->num_so_targets; i++)
       pipe_so_target_reference(&dst->so_targets[i], src->so_targets[i]);
    memcpy(dst->so_offsets, src->so_offsets, sizeof(src->so_offsets));
 
@@ -1034,10 +1034,10 @@ dd_thread_main(void *input)
       /* Fences can be NULL legitimately when timeout detection is disabled. */
       if ((fence &&
            !screen->fence_finish(screen, NULL, fence,
-                                 dscreen->timeout_ms * 1000*1000)) ||
+                                 (uint64_t)dscreen->timeout_ms * 1000*1000)) ||
           (fence2 &&
            !screen->fence_finish(screen, NULL, fence2,
-                                 dscreen->timeout_ms * 1000*1000))) {
+                                 (uint64_t)dscreen->timeout_ms * 1000*1000))) {
          mtx_lock(&dctx->mutex);
          list_splice(&records, &dctx->records);
          dd_report_hang(dctx);

@@ -59,10 +59,10 @@ endif
 if with_gallium_radeonsi
   gallium_dri_c_args += '-DGALLIUM_RADEONSI'
   gallium_dri_link_with += [
-    libradeonsi, libradeonwinsys, libamdgpuwinsys, libradeon,
-    libamd_common,
+    libradeonsi, libamdgpuwinsys, libradeon, libamd_common,
   ]
   gallium_dri_drivers += 'radeonsi_dri.so'
+  gallium_dri_sources += [si_driinfo_h]
 endif
 if with_gallium_nouveau
   gallium_dri_c_args += '-DGALLIUM_NOUVEAU'
@@ -106,6 +106,35 @@ if with_gallium_imx
   gallium_dri_c_args += '-DGALLIUM_IMX'
   gallium_dri_link_with += libimxdrm
   gallium_dri_drivers += 'imx-drm_dri.so'
+endif
+if with_gallium_i915
+  gallium_dri_c_args += '-DGALLIUM_I915'
+  gallium_dri_link_with += [libi915, libi915drm]
+  gallium_dri_drivers += 'i915_dri.so'
+endif
+if with_gallium_r300
+  gallium_dri_c_args += '-DGALLIUM_R300'
+  gallium_dri_link_with += libr300
+  gallium_dri_drivers += 'r300_dri.so'
+endif
+if with_gallium_r600
+  gallium_dri_c_args += '-DGALLIUM_R600'
+  gallium_dri_link_with += libr600
+  gallium_dri_drivers += 'r600_dri.so'
+endif
+if with_gallium_svga
+  gallium_dri_c_args += '-DGALLIUM_VMWGFX'
+  gallium_dri_link_with += [libsvga, libsvgadrm]
+  gallium_dri_drivers += 'vmwgfx_dri.so'
+endif
+if with_gallium_virgl
+  gallium_dri_c_args += '-DGALLIUM_VIRGL'
+  gallium_dri_link_with += [libvirgl, libvirgldrm, libvirglvtest]
+  gallium_dri_drivers += 'virtio_gpu_dri.so'
+endif
+
+if with_gallium_radeonsi or with_gallium_r300 or with_gallium_r600
+  gallium_dri_link_with += libradeonwinsys
 endif
 
 if with_gallium_vc4 or with_gallium_vc5

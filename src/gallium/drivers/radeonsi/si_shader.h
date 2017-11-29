@@ -149,9 +149,6 @@ struct nir_shader;
 
 /* SGPR user data indices */
 enum {
-	/* GFX9 merged shaders have RW_BUFFERS among the first 8 system SGPRs,
-	 * and these two are used for other purposes.
-	 */
 	SI_SGPR_RW_BUFFERS,  /* rings (& stream-out, VS only) */
 	SI_SGPR_RW_BUFFERS_HI,
 	SI_SGPR_BINDLESS_SAMPLERS_AND_IMAGES,
@@ -344,8 +341,10 @@ struct si_shader_selector {
 	ubyte		clipdist_mask;
 	ubyte		culldist_mask;
 
-	/* GS parameters. */
+	/* ES parameters. */
 	unsigned	esgs_itemsize;
+
+	/* GS parameters. */
 	unsigned	gs_input_verts_per_prim;
 	unsigned	gs_output_prim;
 	unsigned	gs_max_out_vertices;
@@ -455,6 +454,7 @@ union si_shader_part_key {
 		unsigned	num_merged_next_stage_vgprs:3;
 		unsigned	last_input:4;
 		unsigned	as_ls:1;
+		unsigned	as_es:1;
 		/* Prologs for monolithic shaders shouldn't set EXEC. */
 		unsigned	is_monolithic:1;
 	} vs_prolog;

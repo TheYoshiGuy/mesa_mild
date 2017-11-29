@@ -560,15 +560,6 @@ brw_upload_invariant_state(struct brw_context *brw)
    ADVANCE_BATCH();
 }
 
-const struct brw_tracked_state brw_invariant_state = {
-   .dirty = {
-      .mesa = 0,
-      .brw = BRW_NEW_BLORP |
-             BRW_NEW_CONTEXT,
-   },
-   .emit = brw_upload_invariant_state
-};
-
 /**
  * Define the base addresses which some state is referenced from.
  *
@@ -650,7 +641,7 @@ brw_upload_state_base_address(struct brw_context *brw)
       /* General state buffer size */
       OUT_BATCH(0xfffff001);
       /* Dynamic state buffer size */
-      OUT_BATCH(ALIGN(brw->batch.state_bo->size, 4096) | 1);
+      OUT_BATCH(ALIGN(MAX_STATE_SIZE, 4096) | 1);
       /* Indirect object upper bound */
       OUT_BATCH(0xfffff001);
       /* Instruction access upper bound */

@@ -39,6 +39,7 @@
 #include "tilemgr.h"
 #include "tessellator.h"
 #include <limits>
+#include <iostream>
 
 //////////////////////////////////////////////////////////////////////////
 /// @brief Helper macro to generate a bitmask
@@ -770,6 +771,7 @@ void TransposeSOAtoAOS(uint8_t* pDst, uint8_t* pSrc, uint32_t numVerts, uint32_t
     }
 }
 
+
 //////////////////////////////////////////////////////////////////////////
 /// @brief Implements GS stage.
 /// @param pDC - pointer to draw context.
@@ -954,7 +956,7 @@ static void GeometryShaderStage(
                 PA_STATE_CUT gsPa(pDC, (uint8_t*)pGsBuffers->pGsTransposed, numEmittedVerts, pState->outputVertexSize, reinterpret_cast<simd16mask *>(pCutBuffer), numEmittedVerts, numAttribs, pState->outputTopology, processCutVerts, pa.numVertsPerPrim);
 
 #else
-                PA_STATE_CUT gsPa(pDC, (uint8_t*)pGsBuffers->pGsTransposed, numEmittedVerts, pState->outputVertexSize, pCutBuffer, numEmittedVerts, numAttribs, pState->outputTopology, processCutVerts);
+                PA_STATE_CUT gsPa(pDC, (uint8_t*)pGsBuffers->pGsTransposed, numEmittedVerts, pState->outputVertexSize, pCutBuffer, numEmittedVerts, numAttribs, pState->outputTopology, processCutVerts, pa.numVertsPerPrim);
 
 #endif
                 while (gsPa.GetNextStreamOutput())
@@ -1237,6 +1239,7 @@ static void TessellationStages(
         dsContext.pDomainU = (simdscalar*)tsData.pDomainPointsU;
         dsContext.pDomainV = (simdscalar*)tsData.pDomainPointsV;
         dsContext.pOutputData = gt_pTessellationThreadData->pDSOutput;
+        dsContext.outVertexAttribOffset = tsState.dsOutVtxAttribOffset;
 #if USE_SIMD16_FRONTEND
         dsContext.vectorStride = RoundUpEven(requiredDSVectorInvocations);      // simd8 -> simd16
 #else
@@ -1334,8 +1337,11 @@ static void TessellationStages(
 
                     SWR_ASSERT(pfnClipFunc);
 #if USE_SIMD16_FRONTEND
-                    tessPa.useAlternateOffset = false;
-                    pfnClipFunc(pDC, tessPa, workerId, prim_simd16, GenMask(numPrims), primID);
+
+                    {
+                        tessPa.useAlternateOffset = false;
+                        pfnClipFunc(pDC, tessPa, workerId, prim_simd16, GenMask(numPrims), primID);
+                    }
 #else
                     pfnClipFunc(pDC, tessPa, workerId, prim,
                         GenMask(tessPa.NumPrims()), _simd_set1_epi32(dsContext.PrimitiveID));

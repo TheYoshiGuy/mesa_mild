@@ -22,6 +22,7 @@ files_libradeonsi = files(
   'cik_sdma.c',
   'driinfo_radeonsi.h',
   'si_blit.c',
+  'si_clear.c',
   'si_compute.c',
   'si_compute.h',
   'si_cp_dma.c',
@@ -29,6 +30,7 @@ files_libradeonsi = files(
   'si_descriptors.c',
   'si_dma.c',
   'si_fence.c',
+  'si_get.c',
   'si_hw_context.c',
   'si_pipe.c',
   'si_pipe.h',
@@ -51,6 +53,7 @@ files_libradeonsi = files(
   'si_state_streamout.c',
   'si_state_viewport.c',
   'si_state.h',
+  'si_test_dma.c',
   'si_uvd.c',
 )
 

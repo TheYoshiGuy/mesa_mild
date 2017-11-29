@@ -270,7 +270,7 @@ void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 	     (src &&
 	      ctx->ws->cs_is_buffer_referenced(ctx->gfx.cs, src->buf,
 					       RADEON_USAGE_WRITE))))
-		ctx->gfx.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
+		ctx->gfx.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
 
 	/* Flush if there's not enough space, or if the memory usage per IB
 	 * is too large.
@@ -288,7 +288,7 @@ void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 	if (!ctx->ws->cs_check_space(ctx->dma.cs, num_dw) ||
 	    ctx->dma.cs->used_vram + ctx->dma.cs->used_gart > 64 * 1024 * 1024 ||
 	    !radeon_cs_memory_below_limit(ctx->screen, ctx->dma.cs, vram, gtt)) {
-		ctx->dma.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
+		ctx->dma.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
 		assert((num_dw + ctx->dma.cs->current.cdw) <= ctx->dma.cs->current.max_dw);
 	}
 
@@ -319,10 +319,6 @@ void r600_need_dma_space(struct r600_common_context *ctx, unsigned num_dw,
 
 	/* this function is called before all DMA calls, so increment this. */
 	ctx->num_dma_calls++;
-}
-
-static void r600_memory_barrier(struct pipe_context *ctx, unsigned flags)
-{
 }
 
 void r600_preflush_suspend_features(struct r600_common_context *ctx)
@@ -404,10 +400,10 @@ static void r600_flush_from_st(struct pipe_context *ctx,
 	struct pipe_fence_handle *gfx_fence = NULL;
 	struct pipe_fence_handle *sdma_fence = NULL;
 	bool deferred_fence = false;
-	unsigned rflags = RADEON_FLUSH_ASYNC;
+	unsigned rflags = PIPE_FLUSH_ASYNC;
 
 	if (flags & PIPE_FLUSH_END_OF_FRAME)
-		rflags |= RADEON_FLUSH_END_OF_FRAME;
+		rflags |= PIPE_FLUSH_END_OF_FRAME;
 
 	/* DMA IBs are preambles to gfx IBs, therefore must be flushed first. */
 	if (rctx->dma.cs)
@@ -630,12 +626,12 @@ static bool r600_resource_commit(struct pipe_context *pctx,
 	if (radeon_emitted(ctx->gfx.cs, ctx->initial_gfx_cs_size) &&
 	    ctx->ws->cs_is_buffer_referenced(ctx->gfx.cs,
 					     res->buf, RADEON_USAGE_READWRITE)) {
-		ctx->gfx.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
+		ctx->gfx.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
 	}
 	if (radeon_emitted(ctx->dma.cs, 0) &&
 	    ctx->ws->cs_is_buffer_referenced(ctx->dma.cs,
 					     res->buf, RADEON_USAGE_READWRITE)) {
-		ctx->dma.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
+		ctx->dma.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
 	}
 
 	ctx->ws->cs_sync_flush(ctx->dma.cs);
@@ -664,7 +660,6 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	rctx->b.transfer_flush_region = u_transfer_flush_region_vtbl;
 	rctx->b.transfer_unmap = u_transfer_unmap_vtbl;
 	rctx->b.texture_subdata = u_default_texture_subdata;
-	rctx->b.memory_barrier = r600_memory_barrier;
 	rctx->b.flush = r600_flush_from_st;
 	rctx->b.set_debug_callback = r600_set_debug_callback;
 	rctx->b.fence_server_sync = r600_fence_server_sync;
@@ -1199,7 +1194,7 @@ static boolean r600_fence_finish(struct pipe_screen *screen,
 	if (rctx &&
 	    rfence->gfx_unflushed.ctx == rctx &&
 	    rfence->gfx_unflushed.ib_index == rctx->num_gfx_cs_flushes) {
-		rctx->gfx.flush(rctx, timeout ? 0 : RADEON_FLUSH_ASYNC, NULL);
+		rctx->gfx.flush(rctx, timeout ? 0 : PIPE_FLUSH_ASYNC, NULL);
 		rfence->gfx_unflushed.ctx = NULL;
 
 		if (!timeout)

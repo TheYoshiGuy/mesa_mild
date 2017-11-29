@@ -152,7 +152,7 @@ static void si_set_streamout_targets(struct pipe_context *ctx,
 		if (!targets[i])
 			continue;
 
-		r600_context_add_resource_size(ctx, targets[i]->buffer);
+		si_context_add_resource_size(ctx, targets[i]->buffer);
 		enabled_mask |= 1 << i;
 
 		if (offsets[i] == ((unsigned)-1))
@@ -349,7 +349,6 @@ void si_emit_streamout_end(struct si_context *sctx)
 	}
 
 	sctx->streamout.begin_emitted = false;
-	sctx->b.flags |= R600_CONTEXT_STREAMOUT_FLUSH;
 }
 
 /* STREAMOUT CONFIG DERIVED STATE

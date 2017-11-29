@@ -116,8 +116,10 @@ dri_create_context(gl_api api, const struct gl_config * visual,
        && (ctx_config->release_behavior == __DRI_CTX_RELEASE_BEHAVIOR_NONE))
       attribs.flags |= ST_CONTEXT_FLAG_RELEASE_NONE;
 
+   struct dri_context *share_ctx = NULL;
    if (sharedContextPrivate) {
-      st_share = ((struct dri_context *)sharedContextPrivate)->st;
+      share_ctx = (struct dri_context *)sharedContextPrivate;
+      st_share = share_ctx->st;
    }
 
    ctx = CALLOC_STRUCT(dri_context);
@@ -168,7 +170,8 @@ dri_create_context(gl_api api, const struct gl_config * visual,
 
    if (ctx->st->cso_context) {
       ctx->pp = pp_init(ctx->st->pipe, screen->pp_enabled, ctx->st->cso_context);
-      ctx->hud = hud_create(ctx->st->pipe, ctx->st->cso_context);
+      ctx->hud = hud_create(ctx->st->cso_context,
+                            share_ctx ? share_ctx->hud : NULL);
    }
 
    /* Do this last. */
@@ -206,7 +209,7 @@ dri_destroy_context(__DRIcontext * cPriv)
    struct dri_context *ctx = dri_context(cPriv);
 
    if (ctx->hud) {
-      hud_destroy(ctx->hud);
+      hud_destroy(ctx->hud, ctx->st->cso_context);
    }
 
    if (ctx->pp)
@@ -222,24 +225,25 @@ dri_destroy_context(__DRIcontext * cPriv)
    free(ctx);
 }
 
+/* This is called inside MakeCurrent to unbind the context. */
 GLboolean
 dri_unbind_context(__DRIcontext * cPriv)
 {
    /* dri_util.c ensures cPriv is not null */
    struct dri_screen *screen = dri_screen(cPriv->driScreenPriv);
    struct dri_context *ctx = dri_context(cPriv);
+   struct st_context_iface *st = ctx->st;
    struct st_api *stapi = screen->st_api;
 
    if (--ctx->bind_count == 0) {
-      if (ctx->st == ctx->stapi->get_current(ctx->stapi)) {
-         if (ctx->st->thread_finish)
-            ctx->st->thread_finish(ctx->st);
+      if (st == stapi->get_current(stapi)) {
+         if (st->thread_finish)
+            st->thread_finish(st);
 
-         /* For conformance, unbind is supposed to flush the context.
-          * However, if we do it here we might end up flushing a partially
-          * destroyed context. Instead, we flush in dri_make_current and
-          * in dri_destroy_context which should cover all the cases.
-          */
+         /* Record HUD queries for the duration the context was "current". */
+         if (ctx->hud)
+            hud_record_only(ctx->hud, st->pipe);
+
          stapi->make_current(stapi, NULL, NULL, NULL);
       }
    }
@@ -256,14 +260,6 @@ dri_make_current(__DRIcontext * cPriv,
    struct dri_context *ctx = dri_context(cPriv);
    struct dri_drawable *draw = dri_drawable(driDrawPriv);
    struct dri_drawable *read = dri_drawable(driReadPriv);
-   struct st_context_iface *old_st = ctx->stapi->get_current(ctx->stapi);
-
-   if (old_st && old_st->thread_finish)
-      old_st->thread_finish(old_st);
-
-   /* Flush the old context here so we don't have to flush on unbind() */
-   if (old_st && old_st != ctx->st)
-      old_st->flush(old_st, ST_FLUSH_FRONT, NULL);
 
    ++ctx->bind_count;
 

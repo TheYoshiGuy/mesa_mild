@@ -4289,16 +4289,16 @@ static const struct brw_tracked_state genX(cs_state) = {
 static void
 genX(upload_raster)(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->ctx;
+   const struct gl_context *ctx = &brw->ctx;
 
    /* _NEW_BUFFERS */
-   bool render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
+   const bool render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
 
    /* _NEW_POLYGON */
-   struct gl_polygon_attrib *polygon = &ctx->Polygon;
+   const struct gl_polygon_attrib *polygon = &ctx->Polygon;
 
    /* _NEW_POINT */
-   struct gl_point_attrib *point = &ctx->Point;
+   const struct gl_point_attrib *point = &ctx->Point;
 
    brw_batch_emit(brw, GENX(3DSTATE_RASTER), raster) {
       if (brw->polygon_front_bit == render_to_fbo)
@@ -4322,7 +4322,7 @@ genX(upload_raster)(struct brw_context *brw)
          raster.CullMode = CULLMODE_NONE;
       }
 
-      point->SmoothFlag = raster.SmoothPointEnable;
+      raster.SmoothPointEnable = point->SmoothFlag;
 
       raster.DXMultisampleRasterizationEnable =
          _mesa_is_multisample_enabled(ctx);
@@ -5366,8 +5366,6 @@ genX(init_atoms)(struct brw_context *brw)
 
       /* Command packets:
        */
-      &brw_invariant_state,
-
       &brw_binding_table_pointers,
       &genX(blend_constant_color),
 

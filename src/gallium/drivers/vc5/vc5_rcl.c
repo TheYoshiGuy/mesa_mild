@@ -36,12 +36,8 @@ load_raw(struct vc5_cl *cl, struct pipe_surface *psurf, int buffer)
                 load.raw_mode = true;
                 load.buffer_to_load = buffer;
                 load.address = cl_address(rsc->bo, surf->offset);
-
-                struct vc5_resource_slice *slice =
-                        &rsc->slices[psurf->u.tex.level];
                 load.padded_height_of_output_image_in_uif_blocks =
-                        (slice->size / slice->stride) /
-                        (2 * vc5_utile_height(rsc->cpp));
+                        surf->padded_height_of_output_image_in_uif_blocks;
         }
 }
 
@@ -59,12 +55,8 @@ store_raw(struct vc5_cl *cl, struct pipe_surface *psurf, int buffer,
                 store.disable_colour_buffers_clear_on_write = !color_clear;
                 store.disable_z_buffer_clear_on_write = !z_clear;
                 store.disable_stencil_buffer_clear_on_write = !s_clear;
-
-                struct vc5_resource_slice *slice =
-                        &rsc->slices[psurf->u.tex.level];
                 store.padded_height_of_output_image_in_uif_blocks =
-                        (slice->size / slice->stride) /
-                        (2 * vc5_utile_height(rsc->cpp));
+                        surf->padded_height_of_output_image_in_uif_blocks;
         }
 }
 
@@ -165,6 +157,12 @@ vc5_rcl_emit_generic_per_tile_list(struct vc5_job *job, int last_cbuf)
         bool needs_color_clear = job->cleared & pipe_clear_color_buffers;
         bool needs_z_clear = job->cleared & PIPE_CLEAR_DEPTH;
         bool needs_s_clear = job->cleared & PIPE_CLEAR_STENCIL;
+        /* Note that only the color RT being stored will be cleared by a
+         * STORE_GENERAL, or all of them if the buffer is NONE.
+         */
+        bool msaa_color_clear = (needs_color_clear &&
+                                 (job->cleared & pipe_clear_color_buffers) ==
+                                 (job->resolve & pipe_clear_color_buffers));
 
         uint32_t stores_pending = job->resolve;
 
@@ -184,7 +182,7 @@ vc5_rcl_emit_generic_per_tile_list(struct vc5_job *job, int last_cbuf)
 
                 stores_pending &= ~bit;
                 store_raw(cl, psurf, RENDER_TARGET_0 + i,
-                          !stores_pending && needs_color_clear,
+                          !stores_pending && msaa_color_clear,
                           !stores_pending && needs_z_clear,
                           !stores_pending && needs_s_clear);
 
@@ -197,7 +195,7 @@ vc5_rcl_emit_generic_per_tile_list(struct vc5_job *job, int last_cbuf)
                 stores_pending &= ~PIPE_CLEAR_DEPTHSTENCIL;
                 store_raw(cl, job->zsbuf,
                           zs_buffer_from_pipe_bits(job->resolve),
-                          !stores_pending && needs_color_clear,
+                          false,
                           !stores_pending && needs_z_clear,
                           !stores_pending && needs_s_clear);
 
@@ -213,6 +211,9 @@ vc5_rcl_emit_generic_per_tile_list(struct vc5_job *job, int last_cbuf)
                         store.enable_z_write = stores_pending & PIPE_CLEAR_DEPTH;
                         store.enable_stencil_write = stores_pending & PIPE_CLEAR_STENCIL;
 
+                        /* Note that when set this will clear all of the color
+                         * buffers.
+                         */
                         store.disable_colour_buffers_clear_on_write =
                                 !needs_color_clear;
                         store.disable_z_buffer_clear_on_write =
@@ -220,6 +221,14 @@ vc5_rcl_emit_generic_per_tile_list(struct vc5_job *job, int last_cbuf)
                         store.disable_stencil_buffer_clear_on_write =
                                 !needs_s_clear;
                 };
+        } else if (needs_color_clear && !msaa_color_clear) {
+                /* If we had MSAA color stores that didn't match the set of
+                 * MSAA color clears, then we need to clear the color buffers
+                 * now.
+                 */
+                cl_emit(&job->rcl, STORE_TILE_BUFFER_GENERAL, store) {
+                        store.buffer_to_store = NONE;
+                }
         }
 
         cl_emit(cl, RETURN_FROM_SUB_LIST, ret);
@@ -276,15 +285,35 @@ vc5_emit_rcl(struct vc5_job *job)
                 if (!psurf)
                         continue;
                 struct vc5_surface *surf = vc5_surface(psurf);
+                struct vc5_resource *rsc = vc5_resource(psurf->texture);
+
+                uint32_t config_pad = 0;
+                uint32_t clear_pad = 0;
+
+                /* XXX: Set the pad for raster. */
+                if (surf->tiling == VC5_TILING_UIF_NO_XOR ||
+                    surf->tiling == VC5_TILING_UIF_XOR) {
+                        int uif_block_height = vc5_utile_height(rsc->cpp) * 2;
+                        uint32_t implicit_padded_height = (align(job->draw_height, uif_block_height) /
+                                                           uif_block_height);
+                        if (surf->padded_height_of_output_image_in_uif_blocks -
+                            implicit_padded_height < 15) {
+                                config_pad = (surf->padded_height_of_output_image_in_uif_blocks -
+                                              implicit_padded_height);
+                        } else {
+                                config_pad = 15;
+                                clear_pad = surf->padded_height_of_output_image_in_uif_blocks;
+                        }
+                }
 
                 cl_emit(&job->rcl, TILE_RENDERING_MODE_CONFIGURATION_RENDER_TARGET_CONFIG, rt) {
-                        struct vc5_resource *rsc = vc5_resource(psurf->texture);
                         rt.address = cl_address(rsc->bo, surf->offset);
                         rt.internal_type = surf->internal_type;
                         rt.output_image_format = surf->format;
                         rt.memory_format = surf->tiling;
                         rt.internal_bpp = surf->internal_bpp;
                         rt.render_target_number = i;
+                        rt.pad = config_pad;
 
                         if (job->resolve & PIPE_CLEAR_COLOR0 << i)
                                 rsc->writes++;
@@ -310,9 +339,10 @@ vc5_emit_rcl(struct vc5_job *job)
                         };
                 }
 
-                if (surf->internal_bpp >= INTERNAL_BPP_128) {
+                if (surf->internal_bpp >= INTERNAL_BPP_128 || clear_pad) {
                         cl_emit(&job->rcl, TILE_RENDERING_MODE_CONFIGURATION_CLEAR_COLORS_PART3,
                                 clear) {
+                                clear.uif_padded_height_in_uif_blocks = clear_pad;
                                 clear.clear_color_high_16_bits = job->clear_color[i][3] >> 16;
                                 clear.render_target_number = i;
                         };
@@ -330,11 +360,8 @@ vc5_emit_rcl(struct vc5_job *job)
 
                         zs.internal_type = surf->internal_type;
                         zs.output_image_format = surf->format;
-
-                        struct vc5_resource_slice *slice = &rsc->slices[psurf->u.tex.level];
-                        /* XXX */
                         zs.padded_height_of_output_image_in_uif_blocks =
-                                (slice->size / slice->stride) / (2 * vc5_utile_height(rsc->cpp));
+                                surf->padded_height_of_output_image_in_uif_blocks;
 
                         assert(surf->tiling != VC5_TILING_RASTER);
                         zs.memory_format = surf->tiling;

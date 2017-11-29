@@ -27,10 +27,12 @@ files_libradeon = files(
   'r600_pipe_common.h',
   'r600_query.c',
   'r600_query.h',
-  'r600_test_dma.c',
   'r600_texture.c',
   'radeon_uvd.c',
   'radeon_uvd.h',
+  'radeon_vcn_enc_1_2.c',
+  'radeon_vcn_enc.c',
+  'radeon_vcn_enc.h',
   'radeon_vcn_dec.c',
   'radeon_vcn_dec.h',
   'radeon_vce_40_2_2.c',
@@ -49,6 +51,6 @@ libradeon = static_library(
   c_args : ['-Wstrict-overflow=0', c_vis_args],
   dependencies : [dep_llvm, dep_clock],
   include_directories : [
-    inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_gallium_drivers,
+    inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_gallium_drivers, inc_amd_common,
   ],
 )

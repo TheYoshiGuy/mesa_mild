@@ -141,8 +141,9 @@ emit_one_texture(struct vc5_context *vc5, struct vc5_texture_stateobj *stage_tex
                  * TEXTURE_SHADER_STATE that ignores psview->min/max_lod to
                  * support txf properly.
                  */
-                .min_level_of_detail = (psview->u.tex.first_level +
-                                        MAX2(psampler->min_lod, 0)),
+                .min_level_of_detail = MIN2(psview->u.tex.first_level +
+                                            MAX2(psampler->min_lod, 0),
+                                            psview->u.tex.last_level),
                 .max_level_of_detail = MIN2(psview->u.tex.first_level +
                                             psampler->max_lod,
                                             psview->u.tex.last_level),
@@ -205,6 +206,18 @@ emit_textures(struct vc5_context *vc5, struct vc5_texture_stateobj *stage_tex)
                 if (stage_tex->textures[i])
                         emit_one_texture(vc5, stage_tex, i);
         }
+}
+
+static uint32_t
+translate_colormask(struct vc5_context *vc5, uint32_t colormask, int rt)
+{
+        if (vc5->swap_color_rb & (1 << rt)) {
+                colormask = ((colormask & (2 | 8)) |
+                             ((colormask & 1) << 2) |
+                             ((colormask & 4) >> 2));
+        }
+
+        return (~colormask) & 0xf;
 }
 
 void
@@ -339,13 +352,11 @@ vc5_emit_state(struct pipe_context *pctx)
                         clip.viewport_z_scale_zc_to_zs =
                                 vc5->viewport.scale[2];
                 }
-                if (0 /* XXX */) {
                 cl_emit(&job->bcl, CLIPPER_Z_MIN_MAX_CLIPPING_PLANES, clip) {
                         clip.minimum_zw = (vc5->viewport.translate[2] -
                                            vc5->viewport.scale[2]);
                         clip.maximum_zw = (vc5->viewport.translate[2] +
                                            vc5->viewport.scale[2]);
-                }
                 }
 
                 cl_emit(&job->bcl, VIEWPORT_OFFSET, vp) {
@@ -386,19 +397,22 @@ vc5_emit_state(struct pipe_context *pctx)
                 cl_emit(&job->bcl, COLOUR_WRITE_MASKS, mask) {
                         if (blend->independent_blend_enable) {
                                 mask.render_target_0_per_colour_component_write_masks =
-                                        (~blend->rt[0].colormask) & 0xf;
+                                        translate_colormask(vc5, blend->rt[0].colormask, 0);
                                 mask.render_target_1_per_colour_component_write_masks =
-                                        (~blend->rt[1].colormask) & 0xf;
+                                        translate_colormask(vc5, blend->rt[1].colormask, 1);
                                 mask.render_target_2_per_colour_component_write_masks =
-                                        (~blend->rt[2].colormask) & 0xf;
+                                        translate_colormask(vc5, blend->rt[2].colormask, 2);
                                 mask.render_target_3_per_colour_component_write_masks =
-                                        (~blend->rt[3].colormask) & 0xf;
+                                        translate_colormask(vc5, blend->rt[3].colormask, 3);
                         } else {
-                                uint8_t colormask = (~blend->rt[0].colormask) & 0xf;
-                                mask.render_target_0_per_colour_component_write_masks = colormask;
-                                mask.render_target_1_per_colour_component_write_masks = colormask;
-                                mask.render_target_2_per_colour_component_write_masks = colormask;
-                                mask.render_target_3_per_colour_component_write_masks = colormask;
+                                mask.render_target_0_per_colour_component_write_masks =
+                                        translate_colormask(vc5, blend->rt[0].colormask, 0);
+                                mask.render_target_1_per_colour_component_write_masks =
+                                        translate_colormask(vc5, blend->rt[0].colormask, 1);
+                                mask.render_target_2_per_colour_component_write_masks =
+                                        translate_colormask(vc5, blend->rt[0].colormask, 2);
+                                mask.render_target_3_per_colour_component_write_masks =
+                                        translate_colormask(vc5, blend->rt[0].colormask, 3);
                         }
                 }
         }
@@ -424,7 +438,7 @@ vc5_emit_state(struct pipe_context *pctx)
                         cl_emit_with_prepacked(&job->bcl, STENCIL_CONFIG,
                                                vc5->zsa->stencil_front, config) {
                                 config.stencil_ref_value =
-                                        vc5->stencil_ref.ref_value[1];
+                                        vc5->stencil_ref.ref_value[0];
                         }
                 }
 

@@ -199,6 +199,18 @@ si_descriptors_begin_new_cs(struct si_context *sctx, struct si_descriptors *desc
 
 /* SAMPLER VIEWS */
 
+static inline enum radeon_bo_priority
+si_get_sampler_view_priority(struct r600_resource *res)
+{
+	if (res->b.b.target == PIPE_BUFFER)
+		return RADEON_PRIO_SAMPLER_BUFFER;
+
+	if (res->b.b.nr_samples > 1)
+		return RADEON_PRIO_SAMPLER_TEXTURE_MSAA;
+
+	return RADEON_PRIO_SAMPLER_TEXTURE;
+}
+
 static unsigned
 si_sampler_and_image_descriptors_idx(unsigned shader)
 {
@@ -237,12 +249,12 @@ static void si_sampler_view_add_buffer(struct si_context *sctx,
 	if (resource->target != PIPE_BUFFER) {
 		struct r600_texture *tex = (struct r600_texture*)resource;
 
-		if (tex->is_depth && !r600_can_sample_zs(tex, is_stencil_sampler))
+		if (tex->is_depth && !si_can_sample_zs(tex, is_stencil_sampler))
 			resource = &tex->flushed_depth_texture->resource.b.b;
 	}
 
 	rres = (struct r600_resource*)resource;
-	priority = r600_get_sampler_view_priority(rres);
+	priority = si_get_sampler_view_priority(rres);
 
 	radeon_add_to_buffer_list_check_mem(&sctx->b, &sctx->b.gfx,
 					    rres, usage, priority,
@@ -306,14 +318,14 @@ void si_set_mutable_tex_desc_fields(struct si_screen *sscreen,
 {
 	uint64_t va, meta_va = 0;
 
-	if (tex->is_depth && !r600_can_sample_zs(tex, is_stencil)) {
+	if (tex->is_depth && !si_can_sample_zs(tex, is_stencil)) {
 		tex = tex->flushed_depth_texture;
 		is_stencil = false;
 	}
 
 	va = tex->resource.gpu_address;
 
-	if (sscreen->b.chip_class >= GFX9) {
+	if (sscreen->info.chip_class >= GFX9) {
 		/* Only stencil_offset needs to be added here. */
 		if (is_stencil)
 			va += tex->surface.u.gfx9.stencil_offset;
@@ -330,11 +342,11 @@ void si_set_mutable_tex_desc_fields(struct si_screen *sscreen,
 	/* Only macrotiled modes can set tile swizzle.
 	 * GFX9 doesn't use (legacy) base_level_info.
 	 */
-	if (sscreen->b.chip_class >= GFX9 ||
+	if (sscreen->info.chip_class >= GFX9 ||
 	    base_level_info->mode == RADEON_SURF_MODE_2D)
 		state[0] |= tex->surface.tile_swizzle;
 
-	if (sscreen->b.chip_class >= VI) {
+	if (sscreen->info.chip_class >= VI) {
 		state[6] &= C_008F28_COMPRESSION_EN;
 		state[7] = 0;
 
@@ -342,7 +354,7 @@ void si_set_mutable_tex_desc_fields(struct si_screen *sscreen,
 			meta_va = (!tex->dcc_separate_buffer ? tex->resource.gpu_address : 0) +
 				  tex->dcc_offset;
 
-			if (sscreen->b.chip_class == VI) {
+			if (sscreen->info.chip_class == VI) {
 				meta_va += base_level_info->dcc_offset;
 				assert(base_level_info->mode == RADEON_SURF_MODE_2D);
 			}
@@ -358,7 +370,7 @@ void si_set_mutable_tex_desc_fields(struct si_screen *sscreen,
 		}
 	}
 
-	if (sscreen->b.chip_class >= GFX9) {
+	if (sscreen->info.chip_class >= GFX9) {
 		state[3] &= C_008F1C_SW_MODE;
 		state[4] &= C_008F20_PITCH_GFX9;
 
@@ -688,6 +700,16 @@ static void si_set_shader_image_desc(struct si_context *ctx,
 		unsigned level = view->u.tex.level;
 		unsigned width, height, depth, hw_level;
 		bool uses_dcc = vi_dcc_enabled(tex, level);
+		unsigned access = view->access;
+
+		/* Clear the write flag when writes can't occur.
+		 * Note that DCC_DECOMPRESS for MSAA doesn't work in some cases,
+		 * so we don't wanna trigger it.
+		 */
+		if (tex->is_depth || tex->resource.b.b.nr_samples >= 2) {
+			assert(!"Z/S and MSAA image stores are not supported");
+			access &= ~PIPE_IMAGE_ACCESS_WRITE;
+		}
 
 		assert(!tex->is_depth);
 		assert(tex->fmask.size == 0);
@@ -1715,7 +1737,7 @@ static void si_invalidate_buffer(struct pipe_context *ctx, struct pipe_resource 
 	uint64_t old_va = rbuffer->gpu_address;
 
 	/* Reallocate the buffer in the same pipe_resource. */
-	si_alloc_resource(&sctx->screen->b, rbuffer);
+	si_alloc_resource(sctx->screen, rbuffer);
 
 	si_rebind_buffer(ctx, buf, old_va);
 }

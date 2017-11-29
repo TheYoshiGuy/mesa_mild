@@ -25,6 +25,7 @@ inc_mapi = include_directories('mapi')
 inc_src = include_directories('.')
 inc_gallium = include_directories('gallium/include')
 inc_gallium_aux = include_directories('gallium/auxiliary')
+inc_amd_common = include_directories('amd/common')
 
 libglsl_util = static_library(
   'glsl_util',
@@ -45,7 +46,6 @@ sha1_h = custom_target(
 
 subdir('gtest')
 subdir('util')
-subdir('mapi/glapi/gen')
 subdir('mapi')
 # TODO: opengl
 subdir('compiler')
@@ -69,7 +69,9 @@ endif
 if with_egl
   subdir('egl')
 endif
-subdir('gallium')
+if with_gallium
+  subdir('gallium')
+endif
 
 # This must be after at least mesa, glx, and gallium, since libgl will be
 # defined in one of those subdirs depending on the glx provider.

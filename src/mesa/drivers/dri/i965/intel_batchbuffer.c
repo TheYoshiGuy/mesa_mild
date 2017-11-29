@@ -52,15 +52,6 @@
 #define BATCH_SZ (20 * 1024)
 #define STATE_SZ (16 * 1024)
 
-/* The kernel assumes batchbuffers are smaller than 256kB. */
-#define MAX_BATCH_SIZE (256 * 1024)
-
-/* 3DSTATE_BINDING_TABLE_POINTERS has a U16 offset from Surface State Base
- * Address, which means that we can't put binding tables beyond 64kB.  This
- * effectively limits the maximum statebuffer size to 64kB.
- */
-#define MAX_STATE_SIZE (64 * 1024)
-
 static void
 intel_batchbuffer_reset(struct brw_context *brw);
 
@@ -564,6 +555,30 @@ do_batch_dump(struct brw_context *brw)
          decode_struct(brw, spec, "DEPTH_STENCIL_STATE", state,
                        state_gtt_offset, p[1] & ~0x3fu, color);
          break;
+      case MEDIA_INTERFACE_DESCRIPTOR_LOAD: {
+         struct gen_group *group =
+            gen_spec_find_struct(spec, "RENDER_SURFACE_STATE");
+         if (!group)
+            break;
+
+         uint32_t idd_offset = p[3] & ~0x1fu;
+         decode_struct(brw, spec, "INTERFACE_DESCRIPTOR_DATA", state,
+                       state_gtt_offset, idd_offset, color);
+
+         uint32_t ss_offset = state[idd_offset / 4 + 3] & ~0x1fu;
+         decode_structs(brw, spec, "SAMPLER_STATE", state,
+                        state_gtt_offset, ss_offset, 4 * 4, color);
+
+         uint32_t bt_offset = state[idd_offset / 4 + 4] & ~0x1fu;
+         int bt_entries = brw_state_batch_size(brw, bt_offset) / 4;
+         uint32_t *bt_pointers = &state[bt_offset / 4];
+         for (int i = 0; i < bt_entries; i++) {
+            fprintf(stderr, "SURFACE_STATE - BTI = %d\n", i);
+            gen_print_group(stderr, group, state_gtt_offset + bt_pointers[i],
+                            &state[bt_pointers[i] / 4], color);
+         }
+         break;
+      }
       }
    }
 
@@ -601,8 +616,10 @@ brw_new_batch(struct brw_context *brw)
     * would otherwise be stored in the context (which for all intents and
     * purposes means everything).
     */
-   if (brw->hw_ctx == 0)
+   if (brw->hw_ctx == 0) {
       brw->ctx.NewDriverState |= BRW_NEW_CONTEXT;
+      brw_upload_invariant_state(brw);
+   }
 
    brw->ctx.NewDriverState |= BRW_NEW_BATCH;
 

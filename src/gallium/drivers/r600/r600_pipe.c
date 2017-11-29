@@ -332,7 +332,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
 		if (family >= CHIP_CEDAR)
-		   return 410;
+		   return 420;
 		/* pre-evergreen geom shaders need newer kernel */
 		if (rscreen->b.info.drm_minor >= 37)
 		   return 330;
@@ -362,6 +362,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
 		return family >= CHIP_CEDAR ? 0 : 1;
 
+	case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
+		return 8;
+
 	/* Unsupported features. */
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
@@ -384,7 +387,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_STRING_MARKER:
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
 	case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
-	case PIPE_CAP_CULL_DISTANCE:
 	case PIPE_CAP_PRIMITIVE_RESTART_FOR_PATCHES:
 	case PIPE_CAP_TGSI_VOTE:
 	case PIPE_CAP_MAX_WINDOW_RECTANGLES:
@@ -409,7 +411,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_LOAD_CONSTBUF:
 	case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
 	case PIPE_CAP_TILE_RASTER_ORDER:
-	case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
 	case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
 		return 0;
 
@@ -420,6 +421,8 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		    rscreen->b.family == CHIP_HEMLOCK)
 			return 1;
 		return 0;
+	case PIPE_CAP_CULL_DISTANCE:
+		return 1;
 
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
 		if (family >= CHIP_CEDAR)
@@ -607,9 +610,13 @@ static int r600_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_LDEXP_SUPPORTED:
 	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
-	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
 	case PIPE_SHADER_CAP_LOWER_IF_THRESHOLD:
 	case PIPE_SHADER_CAP_TGSI_SKIP_MERGE_REGISTERS:
+		return 0;
+	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
+		if (rscreen->b.family >= CHIP_CEDAR &&
+		    (shader == PIPE_SHADER_FRAGMENT))
+		    return 8;
 		return 0;
 	case PIPE_SHADER_CAP_MAX_HW_ATOMIC_COUNTERS:
 		if (rscreen->b.family >= CHIP_CEDAR && rscreen->has_atomics)

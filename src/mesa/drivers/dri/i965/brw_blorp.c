@@ -139,15 +139,16 @@ blorp_surf_for_miptree(struct brw_context *brw,
          intel_miptree_check_level_layer(mt, *level, start_layer + i);
    }
 
-   surf->surf = &mt->surf;
-   surf->addr = (struct blorp_address) {
-      .buffer = mt->bo,
-      .offset = mt->offset,
-      .reloc_flags = is_render_target ? EXEC_OBJECT_WRITE : 0,
-      .mocs = brw_get_bo_mocs(devinfo, mt->bo),
+   *surf = (struct blorp_surf) {
+      .surf = &mt->surf,
+      .addr = (struct blorp_address) {
+         .buffer = mt->bo,
+         .offset = mt->offset,
+         .reloc_flags = is_render_target ? EXEC_OBJECT_WRITE : 0,
+         .mocs = brw_get_bo_mocs(devinfo, mt->bo),
+      },
+      .aux_usage = aux_usage,
    };
-
-   surf->aux_usage = aux_usage;
 
    struct isl_surf *aux_surf = NULL;
    if (mt->mcs_buf)
@@ -1472,7 +1473,7 @@ brw_blorp_resolve_color(struct brw_context *brw, struct intel_mipmap_tree *mt,
 
    struct blorp_batch batch;
    blorp_batch_init(&brw->blorp, &batch, brw, 0);
-   blorp_ccs_resolve(&batch, &surf, level, layer,
+   blorp_ccs_resolve(&batch, &surf, level, layer, 1,
                      brw_blorp_to_isl_format(brw, format, true),
                      resolve_op);
    blorp_batch_finish(&batch);

@@ -21,6 +21,7 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "radeonsi/si_pipe.h"
 #include "r600_cs.h"
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
@@ -63,7 +64,7 @@ void *si_buffer_map_sync_with_rings(struct r600_common_context *ctx,
 	    ctx->ws->cs_is_buffer_referenced(ctx->gfx.cs,
 					     resource->buf, rusage)) {
 		if (usage & PIPE_TRANSFER_DONTBLOCK) {
-			ctx->gfx.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
+			ctx->gfx.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
 			return NULL;
 		} else {
 			ctx->gfx.flush(ctx, 0, NULL);
@@ -74,7 +75,7 @@ void *si_buffer_map_sync_with_rings(struct r600_common_context *ctx,
 	    ctx->ws->cs_is_buffer_referenced(ctx->dma.cs,
 					     resource->buf, rusage)) {
 		if (usage & PIPE_TRANSFER_DONTBLOCK) {
-			ctx->dma.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
+			ctx->dma.flush(ctx, PIPE_FLUSH_ASYNC, NULL);
 			return NULL;
 		} else {
 			ctx->dma.flush(ctx, 0, NULL);
@@ -98,7 +99,7 @@ void *si_buffer_map_sync_with_rings(struct r600_common_context *ctx,
 	return ctx->ws->buffer_map(resource->buf, NULL, usage);
 }
 
-void si_init_resource_fields(struct r600_common_screen *rscreen,
+void si_init_resource_fields(struct si_screen *sscreen,
 			     struct r600_resource *res,
 			     uint64_t size, unsigned alignment)
 {
@@ -123,8 +124,8 @@ void si_init_resource_fields(struct r600_common_screen *rscreen,
 		/* Older kernels didn't always flush the HDP cache before
 		 * CS execution
 		 */
-		if (rscreen->info.drm_major == 2 &&
-		    rscreen->info.drm_minor < 40) {
+		if (sscreen->info.drm_major == 2 &&
+		    sscreen->info.drm_minor < 40) {
 			res->domains = RADEON_DOMAIN_GTT;
 			res->flags |= RADEON_FLAG_GTT_WC;
 			break;
@@ -151,8 +152,8 @@ void si_init_resource_fields(struct r600_common_screen *rscreen,
 		 * ensures all CPU writes finish before the GPU
 		 * executes a command stream.
 		 */
-		if (rscreen->info.drm_major == 2 &&
-		    rscreen->info.drm_minor < 40)
+		if (sscreen->info.drm_major == 2 &&
+		    sscreen->info.drm_minor < 40)
 			res->domains = RADEON_DOMAIN_GTT;
 	}
 
@@ -177,39 +178,41 @@ void si_init_resource_fields(struct r600_common_screen *rscreen,
 	 * DRM 3.6.0 has good BO move throttling, so we can allow VRAM-only
 	 * placements even with a low amount of stolen VRAM.
 	 */
-	if (!rscreen->info.has_dedicated_vram &&
-	    (rscreen->info.drm_major < 3 || rscreen->info.drm_minor < 6) &&
+	if (!sscreen->info.has_dedicated_vram &&
+	    (sscreen->info.drm_major < 3 || sscreen->info.drm_minor < 6) &&
 	    res->domains == RADEON_DOMAIN_VRAM) {
 		res->domains = RADEON_DOMAIN_VRAM_GTT;
 		res->flags &= ~RADEON_FLAG_NO_CPU_ACCESS; /* disallowed with VRAM_GTT */
 	}
 
-	if (rscreen->debug_flags & DBG(NO_WC))
+	if (sscreen->debug_flags & DBG(NO_WC))
 		res->flags &= ~RADEON_FLAG_GTT_WC;
 
 	/* Set expected VRAM and GART usage for the buffer. */
 	res->vram_usage = 0;
 	res->gart_usage = 0;
+	res->max_forced_staging_uploads = 0;
+	res->b.max_forced_staging_uploads = 0;
 
 	if (res->domains & RADEON_DOMAIN_VRAM) {
 		res->vram_usage = size;
 
 		res->max_forced_staging_uploads =
 		res->b.max_forced_staging_uploads =
-			rscreen->info.has_dedicated_vram &&
-			size >= rscreen->info.vram_vis_size / 4 ? 1 : 0;
+			sscreen->info.has_dedicated_vram &&
+			size >= sscreen->info.vram_vis_size / 4 ? 1 : 0;
 	} else if (res->domains & RADEON_DOMAIN_GTT) {
 		res->gart_usage = size;
 	}
 }
 
-bool si_alloc_resource(struct r600_common_screen *rscreen,
+bool si_alloc_resource(struct si_screen *sscreen,
 		       struct r600_resource *res)
 {
 	struct pb_buffer *old_buf, *new_buf;
 
 	/* Allocate a new resource. */
-	new_buf = rscreen->ws->buffer_create(rscreen->ws, res->bo_size,
+	new_buf = sscreen->ws->buffer_create(sscreen->ws, res->bo_size,
 					     res->bo_alignment,
 					     res->domains, res->flags);
 	if (!new_buf) {
@@ -223,8 +226,8 @@ bool si_alloc_resource(struct r600_common_screen *rscreen,
 	old_buf = res->buf;
 	res->buf = new_buf; /* should be atomic */
 
-	if (rscreen->info.has_virtual_memory)
-		res->gpu_address = rscreen->ws->buffer_get_virtual_address(res->buf);
+	if (sscreen->info.has_virtual_memory)
+		res->gpu_address = sscreen->ws->buffer_get_virtual_address(res->buf);
 	else
 		res->gpu_address = 0;
 
@@ -234,7 +237,7 @@ bool si_alloc_resource(struct r600_common_screen *rscreen,
 	res->TC_L2_dirty = false;
 
 	/* Print debug information. */
-	if (rscreen->debug_flags & DBG(VM) && res->b.b.target == PIPE_BUFFER) {
+	if (sscreen->debug_flags & DBG(VM) && res->b.b.target == PIPE_BUFFER) {
 		fprintf(stderr, "VM start=0x%"PRIX64"  end=0x%"PRIX64" | Buffer %"PRIu64" bytes\n",
 			res->gpu_address, res->gpu_address + res->buf->size,
 			res->buf->size);
@@ -308,8 +311,8 @@ void si_replace_buffer_storage(struct pipe_context *ctx,
 	rctx->rebind_buffer(ctx, dst, old_gpu_address);
 }
 
-void si_invalidate_resource(struct pipe_context *ctx,
-			    struct pipe_resource *resource)
+static void si_invalidate_resource(struct pipe_context *ctx,
+				   struct pipe_resource *resource)
 {
 	struct r600_common_context *rctx = (struct r600_common_context*)ctx;
 	struct r600_resource *rbuffer = r600_resource(resource);
@@ -560,10 +563,10 @@ static void r600_buffer_transfer_unmap(struct pipe_context *ctx,
 	slab_free(&rctx->pool_transfers, transfer);
 }
 
-void si_buffer_subdata(struct pipe_context *ctx,
-		       struct pipe_resource *buffer,
-		       unsigned usage, unsigned offset,
-		       unsigned size, const void *data)
+static void si_buffer_subdata(struct pipe_context *ctx,
+			      struct pipe_resource *buffer,
+			      unsigned usage, unsigned offset,
+			      unsigned size, const void *data)
 {
 	struct pipe_transfer *transfer = NULL;
 	struct pipe_box box;
@@ -614,19 +617,19 @@ r600_alloc_buffer_struct(struct pipe_screen *screen,
 	return rbuffer;
 }
 
-struct pipe_resource *si_buffer_create(struct pipe_screen *screen,
-				       const struct pipe_resource *templ,
-				       unsigned alignment)
+static struct pipe_resource *si_buffer_create(struct pipe_screen *screen,
+					      const struct pipe_resource *templ,
+					      unsigned alignment)
 {
-	struct r600_common_screen *rscreen = (struct r600_common_screen*)screen;
+	struct si_screen *sscreen = (struct si_screen*)screen;
 	struct r600_resource *rbuffer = r600_alloc_buffer_struct(screen, templ);
 
-	si_init_resource_fields(rscreen, rbuffer, templ->width0, alignment);
+	si_init_resource_fields(sscreen, rbuffer, templ->width0, alignment);
 
 	if (templ->flags & PIPE_RESOURCE_FLAG_SPARSE)
 		rbuffer->flags |= RADEON_FLAG_SPARSE;
 
-	if (!si_alloc_resource(rscreen, rbuffer)) {
+	if (!si_alloc_resource(sscreen, rbuffer)) {
 		FREE(rbuffer);
 		return NULL;
 	}
@@ -654,13 +657,13 @@ struct pipe_resource *si_aligned_buffer_create(struct pipe_screen *screen,
 	return si_buffer_create(screen, &buffer, alignment);
 }
 
-struct pipe_resource *
+static struct pipe_resource *
 si_buffer_from_user_memory(struct pipe_screen *screen,
 			   const struct pipe_resource *templ,
 			   void *user_memory)
 {
-	struct r600_common_screen *rscreen = (struct r600_common_screen*)screen;
-	struct radeon_winsys *ws = rscreen->ws;
+	struct si_screen *sscreen = (struct si_screen*)screen;
+	struct radeon_winsys *ws = sscreen->ws;
 	struct r600_resource *rbuffer = r600_alloc_buffer_struct(screen, templ);
 
 	rbuffer->domains = RADEON_DOMAIN_GTT;
@@ -676,7 +679,7 @@ si_buffer_from_user_memory(struct pipe_screen *screen,
 		return NULL;
 	}
 
-	if (rscreen->info.has_virtual_memory)
+	if (sscreen->info.has_virtual_memory)
 		rbuffer->gpu_address =
 			ws->buffer_get_virtual_address(rbuffer->buf);
 	else
@@ -686,4 +689,31 @@ si_buffer_from_user_memory(struct pipe_screen *screen,
 	rbuffer->gart_usage = templ->width0;
 
 	return &rbuffer->b.b;
+}
+
+static struct pipe_resource *si_resource_create(struct pipe_screen *screen,
+						const struct pipe_resource *templ)
+{
+	if (templ->target == PIPE_BUFFER) {
+		return si_buffer_create(screen, templ, 256);
+	} else {
+		return si_texture_create(screen, templ);
+	}
+}
+
+void si_init_screen_buffer_functions(struct si_screen *sscreen)
+{
+	sscreen->b.resource_create = si_resource_create;
+	sscreen->b.resource_destroy = u_resource_destroy_vtbl;
+	sscreen->b.resource_from_user_memory = si_buffer_from_user_memory;
+}
+
+void si_init_buffer_functions(struct si_context *sctx)
+{
+	sctx->b.b.invalidate_resource = si_invalidate_resource;
+	sctx->b.b.transfer_map = u_transfer_map_vtbl;
+	sctx->b.b.transfer_flush_region = u_transfer_flush_region_vtbl;
+	sctx->b.b.transfer_unmap = u_transfer_unmap_vtbl;
+	sctx->b.b.texture_subdata = u_default_texture_subdata;
+	sctx->b.b.buffer_subdata = si_buffer_subdata;
 }
