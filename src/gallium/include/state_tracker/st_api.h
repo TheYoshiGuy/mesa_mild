@@ -225,6 +225,7 @@ struct st_config_options
    boolean glsl_zero_init;
    boolean force_glsl_abs_sqrt;
    boolean allow_relaxed_core_profile;
+   boolean allow_glsl_cross_stage_interpolation_mismatch;
    unsigned char config_options_sha1[20];
 };
 

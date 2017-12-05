@@ -130,14 +130,12 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	unsigned i;
 
 	assert(nir->info.stage == MESA_SHADER_VERTEX ||
+	       nir->info.stage == MESA_SHADER_GEOMETRY ||
 	       nir->info.stage == MESA_SHADER_FRAGMENT);
 
 	info->processor = pipe_shader_type_from_mesa(nir->info.stage);
 	info->num_tokens = 2; /* indicate that the shader is non-empty */
 	info->num_instructions = 2;
-
-	info->num_inputs = nir->num_inputs;
-	info->num_outputs = nir->num_outputs;
 
 	if (nir->info.stage == MESA_SHADER_GEOMETRY) {
 		info->properties[TGSI_PROPERTY_GS_INPUT_PRIM] = nir->info.gs.input_primitive;
@@ -147,12 +145,12 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	}
 
 	i = 0;
+	uint64_t processed_inputs = 0;
+	unsigned num_inputs = 0;
 	nir_foreach_variable(variable, &nir->inputs) {
 		unsigned semantic_name, semantic_index;
 		unsigned attrib_count = glsl_count_attribute_slots(variable->type,
 								   nir->info.stage == MESA_SHADER_VERTEX);
-
-		assert(attrib_count == 1 && "not implemented");
 
 		/* Vertex shader inputs don't have semantics. The state
 		 * tracker has already mapped them to attributes via
@@ -161,14 +159,26 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		if (nir->info.stage == MESA_SHADER_VERTEX)
 			continue;
 
+		assert(nir->info.stage != MESA_SHADER_FRAGMENT ||
+		       (attrib_count == 1 && "not implemented"));
+
 		/* Fragment shader position is a system value. */
 		if (nir->info.stage == MESA_SHADER_FRAGMENT &&
 		    variable->data.location == VARYING_SLOT_POS) {
 			if (variable->data.pixel_center_integer)
 				info->properties[TGSI_PROPERTY_FS_COORD_PIXEL_CENTER] =
 					TGSI_FS_COORD_PIXEL_CENTER_INTEGER;
+
+			num_inputs++;
 			continue;
 		}
+
+		i = variable->data.driver_location;
+		if (processed_inputs & ((uint64_t)1 << i))
+			continue;
+
+		processed_inputs |= ((uint64_t)1 << i);
+		num_inputs++;
 
 		tgsi_get_gl_varying_semantic(variable->data.location, true,
 					     &semantic_name, &semantic_index);
@@ -235,11 +245,16 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 			info->colors_read |= 0x0f;
 		else if (variable->data.location == VARYING_SLOT_COL1)
 			info->colors_read |= 0xf0;
-
-		i++;
 	}
 
+	if (nir->info.stage != MESA_SHADER_VERTEX)
+		info->num_inputs = num_inputs;
+	else
+		info->num_inputs = nir->num_inputs;
+
 	i = 0;
+	uint64_t processed_outputs = 0;
+	unsigned num_outputs = 0;
 	nir_foreach_variable(variable, &nir->outputs) {
 		unsigned semantic_name, semantic_index;
 
@@ -250,6 +265,13 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 			tgsi_get_gl_varying_semantic(variable->data.location, true,
 						     &semantic_name, &semantic_index);
 		}
+
+		i = variable->data.driver_location;
+		if (processed_outputs & ((uint64_t)1 << i))
+			continue;
+
+		processed_outputs |= ((uint64_t)1 << i);
+		num_outputs++;
 
 		info->output_semantic_name[i] = semantic_name;
 		info->output_semantic_index[i] = semantic_index;
@@ -327,9 +349,9 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 				info->writes_position = true;
 			break;
 		}
-
-		i++;
 	}
+
+	info->num_outputs = num_outputs;
 
 	nir_foreach_variable(variable, &nir->uniforms) {
 		const struct glsl_type *type = variable->type;
@@ -444,21 +466,18 @@ si_lower_nir(struct si_shader_selector* sel)
 }
 
 static void declare_nir_input_vs(struct si_shader_context *ctx,
-				 struct nir_variable *variable, unsigned rel,
+				 struct nir_variable *variable,
 				 LLVMValueRef out[4])
 {
-	si_llvm_load_input_vs(ctx, variable->data.driver_location / 4 + rel, out);
+	si_llvm_load_input_vs(ctx, variable->data.driver_location / 4, out);
 }
 
 static void declare_nir_input_fs(struct si_shader_context *ctx,
-				 struct nir_variable *variable, unsigned rel,
-				 unsigned *fs_attr_idx,
+				 struct nir_variable *variable,
+				 unsigned input_index,
 				 LLVMValueRef out[4])
 {
-	unsigned slot = variable->data.location + rel;
-
-	assert(variable->data.location >= VARYING_SLOT_VAR0 || rel == 0);
-
+	unsigned slot = variable->data.location;
 	if (slot == VARYING_SLOT_POS) {
 		out[0] = LLVMGetParam(ctx->main_fn, SI_PARAM_POS_X_FLOAT);
 		out[1] = LLVMGetParam(ctx->main_fn, SI_PARAM_POS_Y_FLOAT);
@@ -468,8 +487,27 @@ static void declare_nir_input_fs(struct si_shader_context *ctx,
 		return;
 	}
 
-	si_llvm_load_input_fs(ctx, *fs_attr_idx, out);
-	(*fs_attr_idx)++;
+	si_llvm_load_input_fs(ctx, input_index, out);
+}
+
+LLVMValueRef si_nir_load_input_gs(struct ac_shader_abi *abi,
+				  unsigned location,
+				  unsigned driver_location,
+				  unsigned component,
+				  unsigned num_components,
+				  unsigned vertex_index,
+				  unsigned const_index,
+				  LLVMTypeRef type)
+{
+	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
+
+	LLVMValueRef value[4];
+	for (unsigned i = component; i < num_components + component; i++) {
+		value[i] = si_llvm_load_input_gs(&ctx->abi, driver_location  / 4,
+						 vertex_index, type, i);
+	}
+
+	return ac_build_varying_gather_values(&ctx->ac, value, num_components, component);
 }
 
 static LLVMValueRef
@@ -523,24 +561,35 @@ bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir)
 {
 	struct tgsi_shader_info *info = &ctx->shader->selector->info;
 
-	unsigned fs_attr_idx = 0;
-	nir_foreach_variable(variable, &nir->inputs) {
-		unsigned attrib_count = glsl_count_attribute_slots(variable->type,
-								   nir->info.stage == MESA_SHADER_VERTEX);
-		unsigned input_idx = variable->data.driver_location;
+	if (nir->info.stage == MESA_SHADER_VERTEX ||
+	    nir->info.stage == MESA_SHADER_FRAGMENT) {
+		uint64_t processed_inputs = 0;
+		nir_foreach_variable(variable, &nir->inputs) {
+			unsigned attrib_count = glsl_count_attribute_slots(variable->type,
+									   nir->info.stage == MESA_SHADER_VERTEX);
+			unsigned input_idx = variable->data.driver_location;
 
-		for (unsigned i = 0; i < attrib_count; ++i) {
+			assert(attrib_count == 1);
+
 			LLVMValueRef data[4];
+			unsigned loc = variable->data.location;
+
+			/* Packed components share the same location so skip
+			 * them if we have already processed the location.
+			 */
+			if (processed_inputs & ((uint64_t)1 << loc))
+				continue;
 
 			if (nir->info.stage == MESA_SHADER_VERTEX)
-				declare_nir_input_vs(ctx, variable, i, data);
+				declare_nir_input_vs(ctx, variable, data);
 			else if (nir->info.stage == MESA_SHADER_FRAGMENT)
-				declare_nir_input_fs(ctx, variable, i, &fs_attr_idx, data);
+				declare_nir_input_fs(ctx, variable, input_idx / 4, data);
 
 			for (unsigned chan = 0; chan < 4; chan++) {
 				ctx->inputs[input_idx + chan] =
 					LLVMBuildBitCast(ctx->ac.builder, data[chan], ctx->ac.i32, "");
 			}
+			processed_inputs |= ((uint64_t)1 << loc);
 		}
 	}
 

@@ -386,7 +386,9 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *ws,
    unsigned va_gap_size;
    int r;
 
-   assert(initial_domain & RADEON_DOMAIN_VRAM_GTT);
+   /* VRAM or GTT must be specified, but not both at the same time. */
+   assert(util_bitcount(initial_domain & RADEON_DOMAIN_VRAM_GTT) == 1);
+
    bo = CALLOC_STRUCT(amdgpu_winsys_bo);
    if (!bo) {
       return NULL;
@@ -400,6 +402,16 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *ws,
    if (initial_domain & RADEON_DOMAIN_VRAM)
       request.preferred_heap |= AMDGPU_GEM_DOMAIN_VRAM;
    if (initial_domain & RADEON_DOMAIN_GTT)
+      request.preferred_heap |= AMDGPU_GEM_DOMAIN_GTT;
+
+   /* If VRAM is just stolen system memory, allow both VRAM and
+    * GTT, whichever has free space. If a buffer is evicted from
+    * VRAM to GTT, it will stay there.
+    *
+    * DRM 3.6.0 has good BO move throttling, so we can allow VRAM-only
+    * placements even with a low amount of stolen VRAM.
+    */
+   if (!ws->info.has_dedicated_vram && ws->info.drm_minor < 6)
       request.preferred_heap |= AMDGPU_GEM_DOMAIN_GTT;
 
    if (flags & RADEON_FLAG_NO_CPU_ACCESS)
@@ -427,7 +439,14 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *ws,
    if (r)
       goto error_va_alloc;
 
-   r = amdgpu_bo_va_op(buf_handle, 0, size, va, 0, AMDGPU_VA_OP_MAP);
+   unsigned vm_flags = AMDGPU_VM_PAGE_READABLE |
+                       AMDGPU_VM_PAGE_EXECUTABLE;
+
+   if (!(flags & RADEON_FLAG_READ_ONLY))
+       vm_flags |= AMDGPU_VM_PAGE_WRITEABLE;
+
+   r = amdgpu_bo_va_op_raw(ws->dev, buf_handle, 0, size, va, vm_flags,
+			   AMDGPU_VA_OP_MAP);
    if (r)
       goto error_va_map;
 

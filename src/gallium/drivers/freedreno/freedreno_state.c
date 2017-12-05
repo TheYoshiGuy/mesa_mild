@@ -235,14 +235,14 @@ fd_set_framebuffer_state(struct pipe_context *pctx,
 			 * multiple times to the same surface), so we might as
 			 * well go ahead and flush this one:
 			 */
-			fd_batch_flush(old_batch, false);
+			fd_batch_flush(old_batch, false, false);
 		}
 
 		fd_batch_reference(&old_batch, NULL);
 	} else {
 		DBG("%d: cbufs[0]=%p, zsbuf=%p", ctx->batch->needs_flush,
 				framebuffer->cbufs[0], framebuffer->zsbuf);
-		fd_batch_flush(ctx->batch, false);
+		fd_batch_flush(ctx->batch, false, false);
 	}
 
 	cso = &ctx->batch->framebuffer;
@@ -432,7 +432,7 @@ fd_create_stream_output_target(struct pipe_context *pctx,
 	target->buffer_offset = buffer_offset;
 	target->buffer_size = buffer_size;
 
-	assert(rsc->base.b.target == PIPE_BUFFER);
+	assert(rsc->base.target == PIPE_BUFFER);
 	util_range_add(&rsc->valid_buffer_range,
 		buffer_offset, buffer_offset + buffer_size);
 

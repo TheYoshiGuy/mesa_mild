@@ -31,7 +31,6 @@
 
 #include "util/list.h"
 #include "util/u_range.h"
-#include "util/u_transfer.h"
 
 #include "freedreno_batch.h"
 #include "freedreno_util.h"
@@ -64,7 +63,7 @@ struct fd_resource_slice {
 struct set;
 
 struct fd_resource {
-	struct u_resource base;
+	struct pipe_resource base;
 	struct fd_bo *bo;
 	uint32_t cpp;
 	enum pipe_format internal_format;
@@ -73,6 +72,7 @@ struct fd_resource {
 	struct fd_resource_slice slices[MAX_MIP_LEVELS];
 	/* buffer range that has been initialized */
 	struct util_range valid_buffer_range;
+	bool valid;
 
 	/* reference to the resource holding stencil data for a z32_s8 texture */
 	/* TODO rename to secondary or auxiliary? */
@@ -143,7 +143,7 @@ fd_transfer(struct pipe_transfer *ptrans)
 static inline struct fd_resource_slice *
 fd_resource_slice(struct fd_resource *rsc, unsigned level)
 {
-	assert(level <= rsc->base.b.last_level);
+	assert(level <= rsc->base.last_level);
 	return &rsc->slices[level];
 }
 

@@ -24,11 +24,14 @@ files_etnaviv = files(
   'hw/common_3d.xml.h',
   'hw/isa.xml.h',
   'hw/state_3d.xml.h',
+  'hw/state_blt.xml.h',
   'hw/state.xml.h',
   'etnaviv_asm.c',
   'etnaviv_asm.h',
   'etnaviv_blend.c',
   'etnaviv_blend.h',
+  'etnaviv_blt.c',
+  'etnaviv_blt.h',
   'etnaviv_clear_blit.c',
   'etnaviv_clear_blit.h',
   'etnaviv_compiler.c',
@@ -67,6 +70,8 @@ files_etnaviv = files(
   'etnaviv_surface.h',
   'etnaviv_texture.c',
   'etnaviv_texture.h',
+  'etnaviv_texture_state.c',
+  'etnaviv_texture_state.h',
   'etnaviv_tiling.c',
   'etnaviv_tiling.h',
   'etnaviv_transfer.c',
@@ -92,6 +97,11 @@ etnaviv_compiler = executable(
   'etnaviv_compiler_cmdline.c',
   include_directories : [inc_include, inc_src, inc_gallium, inc_gallium_aux],
   link_with : [libmesa_util, libgallium, libetnaviv],
-  dependencies : dep_libdrm_etnaviv,
+  dependencies : [dep_libdrm_etnaviv, dep_lmsensors],
   build_by_default : false,
+)
+
+driver_etnaviv = declare_dependency(
+  compile_args : '-DGALLIUM_ETNAVIV',
+  link_with : [libetnaviv, libetnavivdrm],
 )

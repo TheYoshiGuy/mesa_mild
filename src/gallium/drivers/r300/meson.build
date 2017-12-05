@@ -129,6 +129,11 @@ libr300 = static_library(
   dependencies : [dep_libdrm_radeon, dep_llvm],
 )
 
+driver_r300 = declare_dependency(
+  compile_args : '-DGALLIUM_R300',
+  link_with : [libr300, libradeonwinsys],
+)
+
 if with_tests
   test('r300_compiler_test', executable(
       'r300_compiler_test',
@@ -150,7 +155,9 @@ if with_tests
         include_directories('compiler'),
       ],
       link_with : [libr300, libgallium, libmesa_util],
-      dependencies : [dep_m, dep_clock, dep_dl, dep_thread, dep_unwind],
+      dependencies : [
+        dep_m, dep_clock, dep_dl, dep_thread, dep_unwind, dep_lmsensors,
+      ],
     )
   )
 endif

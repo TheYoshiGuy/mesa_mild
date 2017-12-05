@@ -392,15 +392,7 @@ glXCreateContext(Display * dpy, XVisualInfo * vis,
       config = glx_config_find_visual(psc->visuals, vis->visualid);
 
    if (config == NULL) {
-      xError error;
-
-      error.errorCode = BadValue;
-      error.resourceID = vis->visualid;
-      error.sequenceNumber = dpy->request;
-      error.type = X_Error;
-      error.majorCode = __glXSetupForCommand(dpy);
-      error.minorCode = X_GLXCreateContext;
-      _XError(dpy, &error);
+      __glXSendError(dpy, BadValue, vis->visualid, X_GLXCreateContext, True);
       return None;
    }
 
@@ -528,7 +520,7 @@ glXWaitGL(void)
 {
    struct glx_context *gc = __glXGetCurrentContext();
 
-   if (gc != &dummyContext && gc->vtable->wait_gl)
+   if (gc->vtable->wait_gl)
       gc->vtable->wait_gl(gc);
 }
 
@@ -541,7 +533,7 @@ glXWaitX(void)
 {
    struct glx_context *gc = __glXGetCurrentContext();
 
-   if (gc != &dummyContext && gc->vtable->wait_x)
+   if (gc->vtable->wait_x)
       gc->vtable->wait_x(gc);
 }
 
@@ -550,7 +542,7 @@ glXUseXFont(Font font, int first, int count, int listBase)
 {
    struct glx_context *gc = __glXGetCurrentContext();
 
-   if (gc != &dummyContext && gc->vtable->use_x_font)
+   if (gc->vtable->use_x_font)
       gc->vtable->use_x_font(gc, font, first, count, listBase);
 }
 
@@ -2431,7 +2423,7 @@ __glXBindTexImageEXT(Display * dpy,
 {
    struct glx_context *gc = __glXGetCurrentContext();
 
-   if (gc == &dummyContext || gc->vtable->bind_tex_image == NULL)
+   if (gc->vtable->bind_tex_image == NULL)
       return;
 
    gc->vtable->bind_tex_image(dpy, drawable, buffer, attrib_list);
@@ -2442,7 +2434,7 @@ __glXReleaseTexImageEXT(Display * dpy, GLXDrawable drawable, int buffer)
 {
    struct glx_context *gc = __glXGetCurrentContext();
 
-   if (gc == &dummyContext || gc->vtable->release_tex_image == NULL)
+   if (gc->vtable->release_tex_image == NULL)
       return;
 
    gc->vtable->release_tex_image(dpy, drawable, buffer);

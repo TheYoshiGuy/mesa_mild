@@ -103,6 +103,15 @@ enum {
 	LOCAL_ADDR_SPACE = 3,
 };
 
+static bool llvm_type_is_64bit(struct si_shader_context *ctx,
+			       LLVMTypeRef type)
+{
+	if (type == ctx->ac.i64 || type == ctx->ac.f64)
+		return true;
+
+	return false;
+}
+
 static bool is_merged_shader(struct si_shader *shader)
 {
 	if (shader->selector->screen->info.chip_class <= VI)
@@ -1032,14 +1041,13 @@ static LLVMValueRef get_tcs_tes_buffer_address_from_reg(
 }
 
 static LLVMValueRef buffer_load(struct lp_build_tgsi_context *bld_base,
-                                enum tgsi_opcode_type type, unsigned swizzle,
+                                LLVMTypeRef type, unsigned swizzle,
                                 LLVMValueRef buffer, LLVMValueRef offset,
                                 LLVMValueRef base, bool can_speculate)
 {
 	struct si_shader_context *ctx = si_shader_context(bld_base);
 	LLVMValueRef value, value2;
-	LLVMTypeRef llvm_type = tgsi2llvmtype(bld_base, type);
-	LLVMTypeRef vec_type = LLVMVectorType(llvm_type, 4);
+	LLVMTypeRef vec_type = LLVMVectorType(type, 4);
 
 	if (swizzle == ~0) {
 		value = ac_build_buffer_load(&ctx->ac, buffer, 4, NULL, base, offset,
@@ -1048,7 +1056,7 @@ static LLVMValueRef buffer_load(struct lp_build_tgsi_context *bld_base,
 		return LLVMBuildBitCast(ctx->ac.builder, value, vec_type, "");
 	}
 
-	if (!tgsi_type_is_64bit(type)) {
+	if (!llvm_type_is_64bit(ctx, type)) {
 		value = ac_build_buffer_load(&ctx->ac, buffer, 4, NULL, base, offset,
 					     0, 1, 0, can_speculate, false);
 
@@ -1074,7 +1082,7 @@ static LLVMValueRef buffer_load(struct lp_build_tgsi_context *bld_base,
  * \param dw_addr	address in dwords
  */
 static LLVMValueRef lds_load(struct lp_build_tgsi_context *bld_base,
-			     enum tgsi_opcode_type type, unsigned swizzle,
+			     LLVMTypeRef type, unsigned swizzle,
 			     LLVMValueRef dw_addr)
 {
 	struct si_shader_context *ctx = si_shader_context(bld_base);
@@ -1091,11 +1099,11 @@ static LLVMValueRef lds_load(struct lp_build_tgsi_context *bld_base,
 	}
 
 	/* Split 64-bit loads. */
-	if (tgsi_type_is_64bit(type)) {
+	if (llvm_type_is_64bit(ctx, type)) {
 		LLVMValueRef lo, hi;
 
-		lo = lds_load(bld_base, TGSI_TYPE_UNSIGNED, swizzle, dw_addr);
-		hi = lds_load(bld_base, TGSI_TYPE_UNSIGNED, swizzle + 1, dw_addr);
+		lo = lds_load(bld_base, ctx->i32, swizzle, dw_addr);
+		hi = lds_load(bld_base, ctx->i32, swizzle + 1, dw_addr);
 		return si_llvm_emit_fetch_64bit(bld_base, type, lo, hi);
 	}
 
@@ -1104,7 +1112,7 @@ static LLVMValueRef lds_load(struct lp_build_tgsi_context *bld_base,
 
 	value = ac_lds_load(&ctx->ac, dw_addr);
 
-	return bitcast(bld_base, type, value);
+	return LLVMBuildBitCast(ctx->ac.builder, value, type, "");
 }
 
 /**
@@ -1114,13 +1122,11 @@ static LLVMValueRef lds_load(struct lp_build_tgsi_context *bld_base,
  * \param dw_addr	address in dwords
  * \param value		value to store
  */
-static void lds_store(struct lp_build_tgsi_context *bld_base,
+static void lds_store(struct si_shader_context *ctx,
 		      unsigned dw_offset_imm, LLVMValueRef dw_addr,
 		      LLVMValueRef value)
 {
-	struct si_shader_context *ctx = si_shader_context(bld_base);
-
-	dw_addr = lp_build_add(&bld_base->uint_bld, dw_addr,
+	dw_addr = lp_build_add(&ctx->bld_base.uint_bld, dw_addr,
 			    LLVMConstInt(ctx->i32, dw_offset_imm, 0));
 
 	ac_lds_store(&ctx->ac, dw_addr, value);
@@ -1162,7 +1168,7 @@ static LLVMValueRef fetch_input_tcs(
 	dw_addr = get_tcs_in_current_patch_offset(ctx);
 	dw_addr = get_dw_address(ctx, NULL, reg, stride, dw_addr);
 
-	return lds_load(bld_base, type, swizzle, dw_addr);
+	return lds_load(bld_base, tgsi2llvmtype(bld_base, type), swizzle, dw_addr);
 }
 
 static LLVMValueRef fetch_output_tcs(
@@ -1182,7 +1188,7 @@ static LLVMValueRef fetch_output_tcs(
 		dw_addr = get_dw_address(ctx, NULL, reg, NULL, dw_addr);
 	}
 
-	return lds_load(bld_base, type, swizzle, dw_addr);
+	return lds_load(bld_base, tgsi2llvmtype(bld_base, type), swizzle, dw_addr);
 }
 
 static LLVMValueRef fetch_input_tes(
@@ -1198,7 +1204,8 @@ static LLVMValueRef fetch_input_tes(
 	base = LLVMGetParam(ctx->main_fn, ctx->param_tcs_offchip_offset);
 	addr = get_tcs_tes_buffer_address_from_reg(ctx, NULL, reg);
 
-	return buffer_load(bld_base, type, swizzle, buffer, base, addr, true);
+	return buffer_load(bld_base, tgsi2llvmtype(bld_base, type), swizzle,
+			   buffer, base, addr, true);
 }
 
 static void store_output_tcs(struct lp_build_tgsi_context *bld_base,
@@ -1266,7 +1273,7 @@ static void store_output_tcs(struct lp_build_tgsi_context *bld_base,
 
 		/* Skip LDS stores if there is no LDS read of this output. */
 		if (!skip_lds_store)
-			lds_store(bld_base, chan_index, dw_addr, value);
+			lds_store(ctx, chan_index, dw_addr, value);
 
 		value = ac_to_integer(&ctx->ac, value);
 		values[chan_index] = value;
@@ -1298,33 +1305,28 @@ static void store_output_tcs(struct lp_build_tgsi_context *bld_base,
 	}
 }
 
-static LLVMValueRef fetch_input_gs(
-	struct lp_build_tgsi_context *bld_base,
-	const struct tgsi_full_src_register *reg,
-	enum tgsi_opcode_type type,
-	unsigned swizzle)
+LLVMValueRef si_llvm_load_input_gs(struct ac_shader_abi *abi,
+				   unsigned input_index,
+				   unsigned vtx_offset_param,
+				   LLVMTypeRef type,
+				   unsigned swizzle)
 {
-	struct si_shader_context *ctx = si_shader_context(bld_base);
+	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
+	struct lp_build_tgsi_context *bld_base = &ctx->bld_base;
 	struct si_shader *shader = ctx->shader;
 	struct lp_build_context *uint =	&ctx->bld_base.uint_bld;
 	LLVMValueRef vtx_offset, soffset;
 	struct tgsi_shader_info *info = &shader->selector->info;
-	unsigned semantic_name = info->input_semantic_name[reg->Register.Index];
-	unsigned semantic_index = info->input_semantic_index[reg->Register.Index];
+	unsigned semantic_name = info->input_semantic_name[input_index];
+	unsigned semantic_index = info->input_semantic_index[input_index];
 	unsigned param;
 	LLVMValueRef value;
-
-	if (swizzle != ~0 && semantic_name == TGSI_SEMANTIC_PRIMID)
-		return get_primitive_id(ctx, swizzle);
-
-	if (!reg->Register.Dimension)
-		return NULL;
 
 	param = si_shader_io_get_unique_index(semantic_name, semantic_index);
 
 	/* GFX9 has the ESGS ring in LDS. */
 	if (ctx->screen->info.chip_class >= GFX9) {
-		unsigned index = reg->Dimension.Index;
+		unsigned index = vtx_offset_param;
 
 		switch (index / 2) {
 		case 0:
@@ -1354,14 +1356,14 @@ static LLVMValueRef fetch_input_gs(
 		LLVMValueRef values[TGSI_NUM_CHANNELS];
 		unsigned chan;
 		for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
-			values[chan] = fetch_input_gs(bld_base, reg, type, chan);
+			values[chan] = si_llvm_load_input_gs(abi, input_index, vtx_offset_param,
+							     type, chan);
 		}
 		return lp_build_gather_values(&ctx->gallivm, values,
 					      TGSI_NUM_CHANNELS);
 	}
 
 	/* Get the vertex offset parameter on GFX6. */
-	unsigned vtx_offset_param = reg->Dimension.Index;
 	LLVMValueRef gs_vtx_offset = ctx->gs_vtx_offset[vtx_offset_param];
 
 	vtx_offset = lp_build_mul_imm(uint, gs_vtx_offset, 4);
@@ -1370,17 +1372,38 @@ static LLVMValueRef fetch_input_gs(
 
 	value = ac_build_buffer_load(&ctx->ac, ctx->esgs_ring, 1, ctx->i32_0,
 				     vtx_offset, soffset, 0, 1, 0, true, false);
-	if (tgsi_type_is_64bit(type)) {
+	if (llvm_type_is_64bit(ctx, type)) {
 		LLVMValueRef value2;
 		soffset = LLVMConstInt(ctx->i32, (param * 4 + swizzle + 1) * 256, 0);
 
 		value2 = ac_build_buffer_load(&ctx->ac, ctx->esgs_ring, 1,
 					      ctx->i32_0, vtx_offset, soffset,
 					      0, 1, 0, true, false);
-		return si_llvm_emit_fetch_64bit(bld_base, type,
-						value, value2);
+		return si_llvm_emit_fetch_64bit(bld_base, type, value, value2);
 	}
-	return bitcast(bld_base, type, value);
+	return LLVMBuildBitCast(ctx->ac.builder, value, type, "");
+}
+
+static LLVMValueRef fetch_input_gs(
+	struct lp_build_tgsi_context *bld_base,
+	const struct tgsi_full_src_register *reg,
+	enum tgsi_opcode_type type,
+	unsigned swizzle)
+{
+	struct si_shader_context *ctx = si_shader_context(bld_base);
+	struct tgsi_shader_info *info = &ctx->shader->selector->info;
+
+	unsigned semantic_name = info->input_semantic_name[reg->Register.Index];
+	if (swizzle != ~0 && semantic_name == TGSI_SEMANTIC_PRIMID)
+		return get_primitive_id(ctx, swizzle);
+
+	if (!reg->Register.Dimension)
+		return NULL;
+
+	return si_llvm_load_input_gs(&ctx->abi, reg->Register.Index,
+				     reg->Dimension.Index,
+				     tgsi2llvmtype(bld_base, type),
+				     swizzle);
 }
 
 static int lookup_interp_param_index(unsigned interpolate, unsigned location)
@@ -1764,7 +1787,7 @@ void si_load_system_value(struct si_shader_context *ctx,
 		addr = get_tcs_tes_buffer_address(ctx, get_rel_patch_id(ctx), NULL,
 		                          LLVMConstInt(ctx->i32, param, 0));
 
-		value = buffer_load(&ctx->bld_base, TGSI_TYPE_FLOAT,
+		value = buffer_load(&ctx->bld_base, ctx->f32,
 		                    ~0, buffer, base, addr, true);
 
 		break;
@@ -1980,7 +2003,8 @@ static LLVMValueRef fetch_constant(
 
 		lo = fetch_constant(bld_base, reg, TGSI_TYPE_UNSIGNED, swizzle);
 		hi = fetch_constant(bld_base, reg, TGSI_TYPE_UNSIGNED, swizzle + 1);
-		return si_llvm_emit_fetch_64bit(bld_base, type, lo, hi);
+		return si_llvm_emit_fetch_64bit(bld_base, tgsi2llvmtype(bld_base, type),
+						lo, hi);
 	}
 
 	idx = reg->Register.Index * 4 + swizzle;
@@ -2744,7 +2768,7 @@ static void si_copy_tcs_inputs(struct lp_build_tgsi_context *bld_base)
 		                              invocation_id,
 		                              LLVMConstInt(ctx->i32, i, 0));
 
-		LLVMValueRef value = lds_load(bld_base, TGSI_TYPE_SIGNED, ~0,
+		LLVMValueRef value = lds_load(bld_base, ctx->ac.i32, ~0,
 		                              lds_ptr);
 
 		ac_build_buffer_store_dword(&ctx->ac, buffer, value, 4, buffer_addr,
@@ -2831,11 +2855,11 @@ static void si_write_tess_factors(struct lp_build_tgsi_context *bld_base,
 
 		for (i = 0; i < outer_comps; i++) {
 			outer[i] = out[i] =
-				lds_load(bld_base, TGSI_TYPE_SIGNED, i, lds_outer);
+				lds_load(bld_base, ctx->ac.i32, i, lds_outer);
 		}
 		for (i = 0; i < inner_comps; i++) {
 			inner[i] = out[outer_comps+i] =
-				lds_load(bld_base, TGSI_TYPE_SIGNED, i, lds_inner);
+				lds_load(bld_base, ctx->ac.i32, i, lds_inner);
 		}
 	}
 
@@ -3129,9 +3153,11 @@ static void si_set_es_return_value_for_gs(struct si_shader_context *ctx)
 	ctx->return_value = ret;
 }
 
-static void si_llvm_emit_ls_epilogue(struct lp_build_tgsi_context *bld_base)
+static void si_llvm_emit_ls_epilogue(struct ac_shader_abi *abi,
+				     unsigned max_outputs,
+				     LLVMValueRef *addrs)
 {
-	struct si_shader_context *ctx = si_shader_context(bld_base);
+	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
 	struct si_shader *shader = ctx->shader;
 	struct tgsi_shader_info *info = &shader->selector->info;
 	unsigned i, chan;
@@ -3144,7 +3170,6 @@ static void si_llvm_emit_ls_epilogue(struct lp_build_tgsi_context *bld_base)
 	/* Write outputs to LDS. The next shader (TCS aka HS) will read
 	 * its inputs from it. */
 	for (i = 0; i < info->num_outputs; i++) {
-		LLVMValueRef *out_ptr = ctx->outputs[i];
 		unsigned name = info->output_semantic_name[i];
 		unsigned index = info->output_semantic_index[i];
 
@@ -3175,8 +3200,8 @@ static void si_llvm_emit_ls_epilogue(struct lp_build_tgsi_context *bld_base)
 			if (!(info->output_usagemask[i] & (1 << chan)))
 				continue;
 
-			lds_store(bld_base, chan, dw_addr,
-				  LLVMBuildLoad(ctx->ac.builder, out_ptr[chan], ""));
+			lds_store(ctx, chan, dw_addr,
+				  LLVMBuildLoad(ctx->ac.builder, addrs[4 * i + chan], ""));
 		}
 	}
 
@@ -3184,9 +3209,11 @@ static void si_llvm_emit_ls_epilogue(struct lp_build_tgsi_context *bld_base)
 		si_set_ls_return_value_for_tcs(ctx);
 }
 
-static void si_llvm_emit_es_epilogue(struct lp_build_tgsi_context *bld_base)
+static void si_llvm_emit_es_epilogue(struct ac_shader_abi *abi,
+				     unsigned max_outputs,
+				     LLVMValueRef *addrs)
 {
-	struct si_shader_context *ctx = si_shader_context(bld_base);
+	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
 	struct si_shader *es = ctx->shader;
 	struct tgsi_shader_info *info = &es->selector->info;
 	LLVMValueRef soffset = LLVMGetParam(ctx->main_fn,
@@ -3207,7 +3234,6 @@ static void si_llvm_emit_es_epilogue(struct lp_build_tgsi_context *bld_base)
 	}
 
 	for (i = 0; i < info->num_outputs; i++) {
-		LLVMValueRef *out_ptr = ctx->outputs[i];
 		int param;
 
 		if (info->output_semantic_name[i] == TGSI_SEMANTIC_VIEWPORT_INDEX ||
@@ -3218,12 +3244,12 @@ static void si_llvm_emit_es_epilogue(struct lp_build_tgsi_context *bld_base)
 						      info->output_semantic_index[i]);
 
 		for (chan = 0; chan < 4; chan++) {
-			LLVMValueRef out_val = LLVMBuildLoad(ctx->ac.builder, out_ptr[chan], "");
+			LLVMValueRef out_val = LLVMBuildLoad(ctx->ac.builder, addrs[4 * i + chan], "");
 			out_val = ac_to_integer(&ctx->ac, out_val);
 
 			/* GFX9 has the ESGS ring in LDS. */
 			if (ctx->screen->info.chip_class >= GFX9) {
-				lds_store(bld_base, param * 4 + chan, lds_base, out_val);
+				lds_store(ctx, param * 4 + chan, lds_base, out_val);
 				continue;
 			}
 
@@ -3247,15 +3273,31 @@ static LLVMValueRef si_get_gs_wave_id(struct si_shader_context *ctx)
 		return LLVMGetParam(ctx->main_fn, ctx->param_gs_wave_id);
 }
 
-static void si_llvm_emit_gs_epilogue(struct lp_build_tgsi_context *bld_base)
+static void emit_gs_epilogue(struct si_shader_context *ctx)
 {
-	struct si_shader_context *ctx = si_shader_context(bld_base);
-
 	ac_build_sendmsg(&ctx->ac, AC_SENDMSG_GS_OP_NOP | AC_SENDMSG_GS_DONE,
 			 si_get_gs_wave_id(ctx));
 
 	if (ctx->screen->info.chip_class >= GFX9)
 		lp_build_endif(&ctx->merged_wrap_if_state);
+}
+
+static void si_llvm_emit_gs_epilogue(struct ac_shader_abi *abi,
+				     unsigned max_outputs,
+				     LLVMValueRef *addrs)
+{
+	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
+	struct tgsi_shader_info UNUSED *info = &ctx->shader->selector->info;
+
+	assert(info->num_outputs <= max_outputs);
+
+	emit_gs_epilogue(ctx);
+}
+
+static void si_tgsi_emit_gs_epilogue(struct lp_build_tgsi_context *bld_base)
+{
+	struct si_shader_context *ctx = si_shader_context(bld_base);
+	emit_gs_epilogue(ctx);
 }
 
 static void si_llvm_emit_vs_epilogue(struct ac_shader_abi *abi,
@@ -4429,10 +4471,8 @@ static void create_function(struct si_shader_context *ctx)
 		declare_vs_specific_input_sgprs(ctx, &fninfo);
 
 		if (shader->key.as_es) {
-			assert(!shader->selector->nir);
 			ctx->param_es2gs_offset = add_arg(&fninfo, ARG_SGPR, ctx->i32);
 		} else if (shader->key.as_ls) {
-			assert(!shader->selector->nir);
 			/* no extra parameters */
 		} else {
 			if (shader->is_gs_copy_shader) {
@@ -5736,13 +5776,12 @@ static bool si_compile_tgsi_main(struct si_shader_context *ctx,
 	case PIPE_SHADER_VERTEX:
 		ctx->load_input = declare_input_vs;
 		if (shader->key.as_ls)
-			bld_base->emit_epilogue = si_llvm_emit_ls_epilogue;
+			ctx->abi.emit_outputs = si_llvm_emit_ls_epilogue;
 		else if (shader->key.as_es)
-			bld_base->emit_epilogue = si_llvm_emit_es_epilogue;
-		else {
+			ctx->abi.emit_outputs = si_llvm_emit_es_epilogue;
+		else
 			ctx->abi.emit_outputs = si_llvm_emit_vs_epilogue;
-			bld_base->emit_epilogue = si_tgsi_emit_epilogue;
-		}
+		bld_base->emit_epilogue = si_tgsi_emit_epilogue;
 		break;
 	case PIPE_SHADER_TESS_CTRL:
 		bld_base->emit_fetch_funcs[TGSI_FILE_INPUT] = fetch_input_tcs;
@@ -5753,16 +5792,17 @@ static bool si_compile_tgsi_main(struct si_shader_context *ctx,
 	case PIPE_SHADER_TESS_EVAL:
 		bld_base->emit_fetch_funcs[TGSI_FILE_INPUT] = fetch_input_tes;
 		if (shader->key.as_es)
-			bld_base->emit_epilogue = si_llvm_emit_es_epilogue;
-		else {
+			ctx->abi.emit_outputs = si_llvm_emit_es_epilogue;
+		else
 			ctx->abi.emit_outputs = si_llvm_emit_vs_epilogue;
-			bld_base->emit_epilogue = si_tgsi_emit_epilogue;
-		}
+		bld_base->emit_epilogue = si_tgsi_emit_epilogue;
 		break;
 	case PIPE_SHADER_GEOMETRY:
 		bld_base->emit_fetch_funcs[TGSI_FILE_INPUT] = fetch_input_gs;
+		ctx->abi.load_inputs = si_nir_load_input_gs;
 		ctx->abi.emit_vertex = si_llvm_emit_vertex;
-		bld_base->emit_epilogue = si_llvm_emit_gs_epilogue;
+		ctx->abi.emit_outputs = si_llvm_emit_gs_epilogue;
+		bld_base->emit_epilogue = si_tgsi_emit_gs_epilogue;
 		break;
 	case PIPE_SHADER_FRAGMENT:
 		ctx->load_input = declare_input_fs;
