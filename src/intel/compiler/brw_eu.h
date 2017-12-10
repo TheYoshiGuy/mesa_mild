@@ -486,6 +486,21 @@ brw_typed_surface_write(struct brw_codegen *p,
                         unsigned num_channels);
 
 void
+brw_byte_scattered_read(struct brw_codegen *p,
+                        struct brw_reg dst,
+                        struct brw_reg payload,
+                        struct brw_reg surface,
+                        unsigned msg_length,
+                        unsigned bit_size);
+
+void
+brw_byte_scattered_write(struct brw_codegen *p,
+                         struct brw_reg payload,
+                         struct brw_reg surface,
+                         unsigned msg_length,
+                         unsigned bit_size);
+
+void
 brw_memory_fence(struct brw_codegen *p,
                  struct brw_reg dst);
 
@@ -509,6 +524,10 @@ brw_broadcast(struct brw_codegen *p,
               struct brw_reg dst,
               struct brw_reg src,
               struct brw_reg idx);
+
+void
+brw_rounding_mode(struct brw_codegen *p,
+                  enum brw_rnd_mode mode);
 
 /***********************************************************************
  * brw_eu_util.c:

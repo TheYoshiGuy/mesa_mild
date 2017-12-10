@@ -145,11 +145,14 @@ public:
                                    exec_list *acp);
    bool opt_drop_redundant_mov_to_flags();
    bool opt_register_renaming();
+   bool opt_bank_conflicts();
+   unsigned bank_conflict_cycles(const fs_inst *inst) const;
    bool register_coalesce();
    bool compute_to_mrf();
    bool eliminate_find_live_channel();
    bool dead_code_eliminate();
    bool remove_duplicate_mrf_writes();
+   bool remove_extra_rounding_modes();
 
    bool opt_sampler_eot();
    bool virtual_grf_interferes(int a, int b);
@@ -496,6 +499,17 @@ void shuffle_32bit_load_result_to_64bit_data(const brw::fs_builder &bld,
 fs_reg shuffle_64bit_data_for_32bit_write(const brw::fs_builder &bld,
                                           const fs_reg &src,
                                           uint32_t components);
+
+void shuffle_32bit_load_result_to_16bit_data(const brw::fs_builder &bld,
+                                             const fs_reg &dst,
+                                             const fs_reg &src,
+                                             uint32_t components);
+
+void shuffle_16bit_data_for_32bit_write(const brw::fs_builder &bld,
+                                        const fs_reg &dst,
+                                        const fs_reg &src,
+                                        uint32_t components);
+
 fs_reg setup_imm_df(const brw::fs_builder &bld,
                     double v);
 

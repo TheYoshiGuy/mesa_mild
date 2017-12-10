@@ -3487,8 +3487,8 @@ cleartexsubimage_depth_stencil(struct gl_context *ctx,
                                const GLvoid *clearValue,
                                GLint zoffset)
 {
-   GLint stencilValue;
-   GLfloat depthValue;
+   GLint stencilValue = 0;
+   GLfloat depthValue = 0.0f;
    GLenum status;
 
    _mesa_meta_framebuffer_texture_image(ctx, ctx->DrawBuffer,

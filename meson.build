@@ -190,6 +190,9 @@ endif
 if with_gallium_imx and not with_gallium_etnaviv
   error('IMX driver requires etnaviv driver')
 endif
+if with_gallium_pl111 and not with_gallium_vc4
+  error('pl111 driver requires vc4 driver')
+endif
 
 dep_libdrm_intel = []
 if with_dri_i915 or with_gallium_i915
@@ -1107,9 +1110,9 @@ if with_platform_x11
     dep_xcb_glx = dependency('xcb-glx', version : '>= 1.8.1')
     dep_xxf86vm = dependency('xxf86vm', required : false)
   endif
-  if with_any_vk or with_glx == 'dri' or
-      (with_gallium_vdpau or with_gallium_xvmc or with_gallium_omx or
-       with_gallium_xa)
+  if (with_any_vk or with_glx == 'dri' or
+       (with_gallium_vdpau or with_gallium_xvmc or with_gallium_omx or
+        with_gallium_xa))
     dep_xcb = dependency('xcb')
     dep_x11_xcb = dependency('x11-xcb')
   endif

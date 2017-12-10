@@ -2086,6 +2086,18 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
                                    inst->mlen, src[2].ud);
          break;
 
+      case SHADER_OPCODE_BYTE_SCATTERED_READ:
+         assert(src[2].file == BRW_IMMEDIATE_VALUE);
+         brw_byte_scattered_read(p, dst, src[0], src[1],
+                                 inst->mlen, src[2].ud);
+         break;
+
+      case SHADER_OPCODE_BYTE_SCATTERED_WRITE:
+         assert(src[2].file == BRW_IMMEDIATE_VALUE);
+         brw_byte_scattered_write(p, src[0], src[1],
+                                  inst->mlen, src[2].ud);
+         break;
+
       case SHADER_OPCODE_TYPED_ATOMIC:
          assert(src[2].file == BRW_IMMEDIATE_VALUE);
          brw_typed_atomic(p, dst, src[0], src[1],
@@ -2174,6 +2186,11 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
          assert(src[0].type == BRW_REGISTER_TYPE_DF);
          assert(dst.type == BRW_REGISTER_TYPE_DF);
          brw_DIM(p, dst, retype(src[0], BRW_REGISTER_TYPE_F));
+         break;
+
+      case SHADER_OPCODE_RND_MODE:
+         assert(src[0].file == BRW_IMMEDIATE_VALUE);
+         brw_rounding_mode(p, (brw_rnd_mode) src[0].d);
          break;
 
       default:

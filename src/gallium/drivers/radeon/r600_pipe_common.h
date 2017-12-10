@@ -53,6 +53,7 @@ struct si_context;
 #define R600_RESOURCE_FLAG_FORCE_TILING		(PIPE_RESOURCE_FLAG_DRV_PRIV << 2)
 #define R600_RESOURCE_FLAG_DISABLE_DCC		(PIPE_RESOURCE_FLAG_DRV_PRIV << 3)
 #define R600_RESOURCE_FLAG_UNMAPPABLE		(PIPE_RESOURCE_FLAG_DRV_PRIV << 4)
+#define R600_RESOURCE_FLAG_READ_ONLY		(PIPE_RESOURCE_FLAG_DRV_PRIV << 5)
 
 /* Debug flags. */
 enum {
@@ -394,6 +395,7 @@ struct r600_common_context {
 	struct pipe_fence_handle	*last_gfx_fence;
 	struct pipe_fence_handle	*last_sdma_fence;
 	struct r600_resource		*eop_bug_scratch;
+	struct u_upload_mgr		*cached_gtt_allocator;
 	unsigned			num_gfx_cs_flushes;
 	unsigned			initial_gfx_cs_size;
 	unsigned			gpu_reset_counter;

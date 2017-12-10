@@ -133,6 +133,7 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
    }
 
    struct spirv_to_nir_options spirv_options = {
+      .lower_workgroup_access_to_offsets = true,
       .caps = {
          .float64 = device->instance->physicalDevice.info.gen >= 8,
          .int64 = device->instance->physicalDevice.info.gen >= 8,
@@ -141,6 +142,7 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
          .image_write_without_format = true,
          .multiview = true,
          .variable_pointers = true,
+         .storage_16bit = device->instance->physicalDevice.info.gen >= 8,
       },
    };
 
@@ -387,6 +389,9 @@ anv_pipeline_compile(struct anv_pipeline *pipeline,
                      struct brw_stage_prog_data *prog_data,
                      struct anv_pipeline_bind_map *map)
 {
+   const struct brw_compiler *compiler =
+      pipeline->device->instance->physicalDevice.compiler;
+
    nir_shader *nir = anv_shader_compile_to_nir(pipeline, mem_ctx,
                                                module, entrypoint, stage,
                                                spec_info);
@@ -400,10 +405,8 @@ anv_pipeline_compile(struct anv_pipeline *pipeline,
    if (stage != MESA_SHADER_COMPUTE)
       NIR_PASS_V(nir, anv_nir_lower_multiview, pipeline->subpass->view_mask);
 
-   if (stage == MESA_SHADER_COMPUTE) {
-      NIR_PASS_V(nir, brw_nir_lower_cs_shared);
+   if (stage == MESA_SHADER_COMPUTE)
       prog_data->total_shared = nir->num_shared;
-   }
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
@@ -437,6 +440,9 @@ anv_pipeline_compile(struct anv_pipeline *pipeline,
    /* Apply the actual pipeline layout to UBOs, SSBOs, and textures */
    if (pipeline->layout)
       anv_nir_apply_pipeline_layout(pipeline, nir, prog_data, map);
+
+   if (stage != MESA_SHADER_COMPUTE)
+      brw_nir_analyze_ubo_ranges(compiler, nir, prog_data->ubo_ranges);
 
    assert(nir->num_uniforms == prog_data->nr_params * 4);
 

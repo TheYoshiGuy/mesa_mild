@@ -820,6 +820,8 @@ static inline void r600_shader_selector_key(const struct pipe_context *ctx,
 		key->tcs.prim_mode = rctx->tes_shader->info.properties[TGSI_PROPERTY_TES_PRIM_MODE];
 		key->tcs.first_atomic_counter = r600_get_hw_atomic_count(ctx, PIPE_SHADER_TESS_CTRL);
 		break;
+	case PIPE_SHADER_COMPUTE:
+		break;
 	default:
 		assert(0);
 	}
@@ -827,7 +829,7 @@ static inline void r600_shader_selector_key(const struct pipe_context *ctx,
 
 /* Select the hw shader variant depending on the current state.
  * (*dirty) is set to 1 if current variant was changed */
-static int r600_shader_select(struct pipe_context *ctx,
+int r600_shader_select(struct pipe_context *ctx,
         struct r600_pipe_shader_selector* sel,
         bool *dirty)
 {
@@ -895,17 +897,27 @@ static int r600_shader_select(struct pipe_context *ctx,
 	return 0;
 }
 
-static void *r600_create_shader_state(struct pipe_context *ctx,
-			       const struct pipe_shader_state *state,
-			       unsigned pipe_shader_type)
+struct r600_pipe_shader_selector *r600_create_shader_state_tokens(struct pipe_context *ctx,
+								  const struct tgsi_token *tokens,
+								  unsigned pipe_shader_type)
 {
 	struct r600_pipe_shader_selector *sel = CALLOC_STRUCT(r600_pipe_shader_selector);
 	int i;
 
 	sel->type = pipe_shader_type;
-	sel->tokens = tgsi_dup_tokens(state->tokens);
+	sel->tokens = tgsi_dup_tokens(tokens);
+	tgsi_scan_shader(tokens, &sel->info);
+	return sel;
+}
+
+static void *r600_create_shader_state(struct pipe_context *ctx,
+			       const struct pipe_shader_state *state,
+			       unsigned pipe_shader_type)
+{
+	int i;
+	struct r600_pipe_shader_selector *sel = r600_create_shader_state_tokens(ctx, state->tokens, pipe_shader_type);
+
 	sel->so = state->stream_output;
-	tgsi_scan_shader(state->tokens, &sel->info);
 
 	switch (pipe_shader_type) {
 	case PIPE_SHADER_GEOMETRY:
@@ -1046,8 +1058,8 @@ static void r600_bind_tes_state(struct pipe_context *ctx, void *state)
 	rctx->b.streamout.stride_in_dw = rctx->tes_shader->so.stride;
 }
 
-static void r600_delete_shader_selector(struct pipe_context *ctx,
-		struct r600_pipe_shader_selector *sel)
+void r600_delete_shader_selector(struct pipe_context *ctx,
+				 struct r600_pipe_shader_selector *sel)
 {
 	struct r600_pipe_shader *p = sel->current, *c;
 	while (p) {
@@ -1204,16 +1216,22 @@ static void r600_set_sample_mask(struct pipe_context *pipe, unsigned sample_mask
 	r600_mark_atom_dirty(rctx, &rctx->sample_mask.atom);
 }
 
-static void r600_update_driver_const_buffers(struct r600_context *rctx)
+void r600_update_driver_const_buffers(struct r600_context *rctx, bool compute_only)
 {
 	int sh, size;
 	void *ptr;
 	struct pipe_constant_buffer cb;
-	for (sh = 0; sh < PIPE_SHADER_TYPES; sh++) {
+	int start, end;
+
+	start = compute_only ? PIPE_SHADER_COMPUTE : 0;
+	end = compute_only ? PIPE_SHADER_TYPES : PIPE_SHADER_COMPUTE;
+
+	for (sh = start; sh < end; sh++) {
 		struct r600_shader_driver_constants_info *info = &rctx->driver_consts[sh];
 		if (!info->vs_ucp_dirty &&
 		    !info->texture_const_dirty &&
-		    !info->ps_sample_pos_dirty)
+		    !info->ps_sample_pos_dirty &&
+		    !info->cs_block_grid_size_dirty)
 			continue;
 
 		ptr = info->constants;
@@ -1240,6 +1258,17 @@ static void r600_update_driver_const_buffers(struct r600_context *rctx)
 			info->ps_sample_pos_dirty = false;
 		}
 
+		if (info->cs_block_grid_size_dirty) {
+			assert(sh == PIPE_SHADER_COMPUTE);
+			if (!size) {
+				ptr = rctx->cs_block_grid_sizes;
+				size = R600_CS_BLOCK_GRID_SIZE;
+			} else {
+				memcpy(ptr, rctx->cs_block_grid_sizes, R600_CS_BLOCK_GRID_SIZE);
+			}
+			info->cs_block_grid_size_dirty = false;
+		}
+
 		if (info->texture_const_dirty) {
 			assert (ptr);
 			assert (size);
@@ -1247,6 +1276,8 @@ static void r600_update_driver_const_buffers(struct r600_context *rctx)
 				memcpy(ptr, rctx->clip_state.state.ucp, R600_UCP_SIZE);
 			if (sh == PIPE_SHADER_FRAGMENT)
 				memcpy(ptr, rctx->sample_positions, R600_UCP_SIZE);
+			if (sh == PIPE_SHADER_COMPUTE)
+				memcpy(ptr, rctx->cs_block_grid_sizes, R600_CS_BLOCK_GRID_SIZE);
 		}
 		info->texture_const_dirty = false;
 
@@ -1329,7 +1360,7 @@ static void r600_setup_buffer_constants(struct r600_context *rctx, int shader_ty
  * 1. buffer size for TXQ
  * 2. number of cube layers in a cube map array.
  */
-static void eg_setup_buffer_constants(struct r600_context *rctx, int shader_type)
+void eg_setup_buffer_constants(struct r600_context *rctx, int shader_type)
 {
 	struct r600_textures_info *samplers = &rctx->samplers[shader_type];
 	struct r600_image_state *images = NULL;
@@ -1343,6 +1374,9 @@ static void eg_setup_buffer_constants(struct r600_context *rctx, int shader_type
 	if (shader_type == PIPE_SHADER_FRAGMENT) {
 		images = &rctx->fragment_images;
 		buffers = &rctx->fragment_buffers;
+	} else if (shader_type == PIPE_SHADER_COMPUTE) {
+		images = &rctx->compute_images;
+		buffers = &rctx->compute_buffers;
 	}
 
 	if (!samplers->views.dirty_buffer_constants &&
@@ -1524,7 +1558,7 @@ static void r600_generate_fixed_func_tcs(struct r600_context *rctx)
 		ureg_create_shader_and_destroy(ureg, &rctx->b.b);
 }
 
-static void r600_update_compressed_resource_state(struct r600_context *rctx)
+void r600_update_compressed_resource_state(struct r600_context *rctx, bool compute_only)
 {
 	unsigned i;
 	unsigned counter;
@@ -1533,15 +1567,25 @@ static void r600_update_compressed_resource_state(struct r600_context *rctx)
 	if (counter != rctx->b.last_compressed_colortex_counter) {
 		rctx->b.last_compressed_colortex_counter = counter;
 
-		for (i = 0; i < PIPE_SHADER_TYPES; ++i) {
-			r600_update_compressed_colortex_mask(&rctx->samplers[i].views);
+		if (compute_only) {
+			r600_update_compressed_colortex_mask(&rctx->samplers[PIPE_SHADER_COMPUTE].views);
+		} else {
+			for (i = 0; i < PIPE_SHADER_TYPES; ++i) {
+				r600_update_compressed_colortex_mask(&rctx->samplers[i].views);
+			}
 		}
-		r600_update_compressed_colortex_mask_images(&rctx->fragment_images);
+		if (!compute_only)
+			r600_update_compressed_colortex_mask_images(&rctx->fragment_images);
+		r600_update_compressed_colortex_mask_images(&rctx->compute_images);
 	}
 
 	/* Decompress textures if needed. */
 	for (i = 0; i < PIPE_SHADER_TYPES; i++) {
 		struct r600_samplerview_state *views = &rctx->samplers[i].views;
+
+		if (compute_only)
+			if (i != PIPE_SHADER_COMPUTE)
+				continue;
 		if (views->compressed_depthtex_mask) {
 			r600_decompress_depth_textures(rctx, views);
 		}
@@ -1552,7 +1596,16 @@ static void r600_update_compressed_resource_state(struct r600_context *rctx)
 
 	{
 		struct r600_image_state *istate;
-		istate = &rctx->fragment_images;
+
+		if (!compute_only) {
+			istate = &rctx->fragment_images;
+			if (istate->compressed_depthtex_mask)
+				r600_decompress_depth_images(rctx, istate);
+			if (istate->compressed_colortex_mask)
+				r600_decompress_color_images(rctx, istate);
+		}
+
+		istate = &rctx->compute_images;
 		if (istate->compressed_depthtex_mask)
 			r600_decompress_depth_images(rctx, istate);
 		if (istate->compressed_colortex_mask)
@@ -1601,7 +1654,7 @@ static bool r600_update_derived_state(struct r600_context *rctx)
 	struct r600_pipe_shader *clip_so_current = NULL;
 
 	if (!rctx->blitter->running)
-		r600_update_compressed_resource_state(rctx);
+		r600_update_compressed_resource_state(rctx, false);
 
 	SELECT_SHADER_OR_FAIL(ps);
 
@@ -1750,7 +1803,7 @@ static bool r600_update_derived_state(struct r600_context *rctx)
 		}
 	}
 
-	r600_update_driver_const_buffers(rctx);
+	r600_update_driver_const_buffers(rctx, false);
 
 	if (rctx->b.chip_class < EVERGREEN && rctx->ps_shader && rctx->vs_shader) {
 		if (!r600_adjust_gprs(rctx)) {
@@ -1891,7 +1944,7 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 		: info->mode;
 
 	if (rctx->b.chip_class >= EVERGREEN)
-		evergreen_emit_atomic_buffer_setup(rctx, combined_atomics, &atomic_used_mask);
+		evergreen_emit_atomic_buffer_setup(rctx, NULL, combined_atomics, &atomic_used_mask);
 
 	if (index_size) {
 		index_offset += info->start * index_size;
@@ -2175,7 +2228,7 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 
 
 	if (rctx->b.chip_class >= EVERGREEN)
-		evergreen_emit_atomic_buffer_save(rctx, combined_atomics, &atomic_used_mask);
+		evergreen_emit_atomic_buffer_save(rctx, false, combined_atomics, &atomic_used_mask);
 
 	if (rctx->trace_buf)
 		eg_trace_emit(rctx);

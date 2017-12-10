@@ -28,7 +28,8 @@
 #ifndef _NIR_SPIRV_H_
 #define _NIR_SPIRV_H_
 
-#include "nir/nir.h"
+#include "compiler/nir/nir.h"
+#include "compiler/shader_info.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,17 +50,15 @@ enum nir_spirv_debug_level {
 };
 
 struct spirv_to_nir_options {
-   struct {
-      bool float64;
-      bool image_ms_array;
-      bool tessellation;
-      bool draw_parameters;
-      bool image_read_without_format;
-      bool image_write_without_format;
-      bool int64;
-      bool multiview;
-      bool variable_pointers;
-   } caps;
+   /* Whether or not to lower all workgroup variable access to offsets
+    * up-front.  This means you will _shared intrinsics instead of _var
+    * for workgroup data access.
+    *
+    * This is currently required for full variable pointers support.
+    */
+   bool lower_workgroup_access_to_offsets;
+
+   struct spirv_supported_capabilities caps;
 
    struct {
       void (*func)(void *private_data,

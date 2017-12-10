@@ -621,6 +621,18 @@ emit_find_msb_using_lzd(const fs_builder &bld,
    inst->src[0].negate = true;
 }
 
+static brw_rnd_mode
+brw_rnd_mode_from_nir_op (const nir_op op) {
+   switch (op) {
+   case nir_op_f2f16_rtz:
+      return BRW_RND_MODE_RTZ;
+   case nir_op_f2f16_rtne:
+      return BRW_RND_MODE_RTNE;
+   default:
+      unreachable("Operation doesn't support rounding mode");
+   }
+}
+
 void
 fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
 {
@@ -723,6 +735,37 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       inst = bld.MOV(result, op[0]);
       inst->saturate = instr->dest.saturate;
       break;
+
+   case nir_op_f2f16_rtne:
+   case nir_op_f2f16_rtz:
+      bld.emit(SHADER_OPCODE_RND_MODE, bld.null_reg_ud(),
+               brw_imm_d(brw_rnd_mode_from_nir_op(instr->op)));
+      /* fallthrough */
+
+      /* In theory, it would be better to use BRW_OPCODE_F32TO16. Depending
+       * on the HW gen, it is a special hw opcode or just a MOV, and
+       * brw_F32TO16 (at brw_eu_emit) would do the work to chose.
+       *
+       * But if we want to use that opcode, we need to provide support on
+       * different optimizations and lowerings. As right now HF support is
+       * only for gen8+, it will be better to use directly the MOV, and use
+       * BRW_OPCODE_F32TO16 when/if we work for HF support on gen7.
+       */
+
+   case nir_op_f2f16_undef:
+   case nir_op_i2i16:
+   case nir_op_u2u16: {
+      /* TODO: Fixing aligment rules for conversions from 32-bits to
+       * 16-bit types should be moved to lower_conversions
+       */
+      fs_reg tmp = bld.vgrf(op[0].type, 1);
+      tmp = subscript(tmp, result.type, 0);
+      inst = bld.MOV(tmp, op[0]);
+      inst->saturate = instr->dest.saturate;
+      inst = bld.MOV(result, tmp);
+      inst->saturate = instr->dest.saturate;
+      break;
+   }
 
    case nir_op_f2f64:
    case nir_op_f2i64:
@@ -2259,7 +2302,32 @@ do_untyped_vector_read(const fs_builder &bld,
                        const fs_reg offset_reg,
                        unsigned num_components)
 {
-   if (type_sz(dest.type) == 4) {
+   if (type_sz(dest.type) <= 2) {
+      assert(dest.stride == 1);
+
+      if (num_components > 1) {
+         /* Pairs of 16-bit components can be read with untyped read, for 16-bit
+          * vec3 4th component is ignored.
+          */
+         fs_reg read_result =
+            emit_untyped_read(bld, surf_index, offset_reg,
+                              1 /* dims */, DIV_ROUND_UP(num_components, 2),
+                              BRW_PREDICATE_NONE);
+         shuffle_32bit_load_result_to_16bit_data(bld,
+               retype(dest, BRW_REGISTER_TYPE_W),
+               retype(read_result, BRW_REGISTER_TYPE_D),
+               num_components);
+      } else {
+         assert(num_components == 1);
+         /* scalar 16-bit are read using one byte_scattered_read message */
+         fs_reg read_result =
+            emit_byte_scattered_read(bld, surf_index, offset_reg,
+                                     1 /* dims */, 1,
+                                     type_sz(dest.type) * 8 /* bit_size */,
+                                     BRW_PREDICATE_NONE);
+         bld.MOV(dest, subscript(read_result, dest.type, 0));
+      }
+   } else if (type_sz(dest.type) == 4) {
       fs_reg read_result = emit_untyped_read(bld, surf_index, offset_reg,
                                              1 /* dims */,
                                              num_components,
@@ -4032,30 +4100,65 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
        * Also, we have to suffle 64-bit data to be in the appropriate layout
        * expected by our 32-bit write messages.
        */
-      unsigned type_size = 4;
-      if (nir_src_bit_size(instr->src[0]) == 64) {
-         type_size = 8;
-         val_reg = shuffle_64bit_data_for_32bit_write(bld,
-            val_reg, instr->num_components);
-      }
-
-      unsigned type_slots = type_size / 4;
+      unsigned bit_size = nir_src_bit_size(instr->src[0]);
+      unsigned type_size = bit_size / 8;
 
       /* Combine groups of consecutive enabled channels in one write
        * message. We use ffs to find the first enabled channel and then ffs on
-       * the bit-inverse, down-shifted writemask to determine the length of
-       * the block of enabled bits.
+       * the bit-inverse, down-shifted writemask to determine the num_components
+       * of the block of enabled bits.
        */
       while (writemask) {
          unsigned first_component = ffs(writemask) - 1;
-         unsigned length = ffs(~(writemask >> first_component)) - 1;
+         unsigned num_components = ffs(~(writemask >> first_component)) - 1;
+         fs_reg write_src = offset(val_reg, bld, first_component);
 
-         /* We can't write more than 2 64-bit components at once. Limit the
-          * length of the write to what we can do and let the next iteration
-          * handle the rest
-          */
-         if (type_size > 4)
-            length = MIN2(2, length);
+         if (type_size > 4) {
+            /* We can't write more than 2 64-bit components at once. Limit
+             * the num_components of the write to what we can do and let the next
+             * iteration handle the rest.
+             */
+            num_components = MIN2(2, num_components);
+            write_src = shuffle_64bit_data_for_32bit_write(bld, write_src,
+                                                           num_components);
+         } else if (type_size < 4) {
+            assert(type_size == 2);
+            /* For 16-bit types we pack two consecutive values into a 32-bit
+             * word and use an untyped write message. For single values or not
+             * 32-bit-aligned we need to use byte-scattered writes because
+             * untyped writes works with 32-bit components with 32-bit
+             * alignment. byte_scattered_write messages only support one
+             * 16-bit component at a time.
+             *
+             * For example, if there is a 3-components vector we submit one
+             * untyped-write message of 32-bit (first two components), and one
+             * byte-scattered write message (the last component).
+             */
+
+            if (first_component % 2) {
+               /* If we use a .yz writemask we also need to emit 2
+                * byte-scattered write messages because of y-component not
+                * being aligned to 32-bit.
+                */
+               num_components = 1;
+            } else if (num_components > 2 && (num_components % 2)) {
+               /* If there is an odd number of consecutive components we left
+                * the not paired component for a following emit of length == 1
+                * with byte_scattered_write.
+                */
+               num_components --;
+            }
+            /* For num_components == 1 we are also shuffling the component
+             * because byte scattered writes of 16-bit need values to be dword
+             * aligned. Shuffling only one component would be the same as
+             * striding it.
+             */
+            fs_reg tmp = bld.vgrf(BRW_REGISTER_TYPE_D,
+                                  DIV_ROUND_UP(num_components, 2));
+            shuffle_16bit_data_for_32bit_write(bld, tmp, write_src,
+                                               num_components);
+            write_src = tmp;
+         }
 
          fs_reg offset_reg;
          nir_const_value *const_offset = nir_src_as_const_value(instr->src[2]);
@@ -4069,16 +4172,47 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
                     brw_imm_ud(type_size * first_component));
          }
 
+         if (type_size < 4 && num_components == 1) {
+            assert(type_size == 2);
+            /* Untyped Surface messages have a fixed 32-bit size, so we need
+             * to rely on byte scattered in order to write 16-bit elements.
+             * The byte_scattered_write message needs that every written 16-bit
+             * type to be aligned 32-bits (stride=2).
+             * Additionally, while on Untyped Surface messages the
+             * bits of the execution mask are ANDed with the corresponding
+             * bits of the Pixel/Sample Mask, that is not the case for byte
+             * scattered writes. That is needed to avoid ssbo stores writing
+             * on helper invocations. So when that can affect, we load the
+             * sample mask, and predicate the send message.
+             */
+            brw_predicate pred = BRW_PREDICATE_NONE;
 
-         emit_untyped_write(bld, surf_index, offset_reg,
-                            offset(val_reg, bld, first_component * type_slots),
-                            1 /* dims */, length * type_slots,
-                            BRW_PREDICATE_NONE);
+            if (stage == MESA_SHADER_FRAGMENT) {
+               bld.emit(FS_OPCODE_MOV_DISPATCH_TO_FLAGS);
+               pred = BRW_PREDICATE_NORMAL;
+            }
+
+            emit_byte_scattered_write(bld, surf_index, offset_reg,
+                                      write_src,
+                                      1 /* dims */, 1,
+                                      bit_size,
+                                      pred);
+         } else {
+            assert(num_components * type_size <= 16);
+            assert((num_components * type_size) % 4 == 0);
+            assert((first_component * type_size) % 4 == 0);
+            unsigned num_slots = (num_components * type_size) / 4;
+
+            emit_untyped_write(bld, surf_index, offset_reg,
+                               write_src,
+                               1 /* dims */, num_slots,
+                               BRW_PREDICATE_NONE);
+         }
 
          /* Clear the bits in the writemask that we just wrote, then try
           * again to see if more channels are left.
           */
-         writemask &= (15 << (first_component + length));
+         writemask &= (15 << (first_component + num_components));
       }
       break;
    }
@@ -4751,6 +4885,38 @@ shuffle_32bit_load_result_to_64bit_data(const fs_builder &bld,
    }
 }
 
+void
+shuffle_32bit_load_result_to_16bit_data(const fs_builder &bld,
+                                        const fs_reg &dst,
+                                        const fs_reg &src,
+                                        uint32_t components)
+{
+   assert(type_sz(src.type) == 4);
+   assert(type_sz(dst.type) == 2);
+
+   /* A temporary is used to un-shuffle the 32-bit data of each component in
+    * into a valid 16-bit vector. We can't write directly to dst because it
+    * can be the same register as src and in that case the first MOV in the
+    * loop below would overwrite the data read in the second MOV.
+    */
+   fs_reg tmp = retype(bld.vgrf(src.type), dst.type);
+
+   for (unsigned i = 0; i < components; i++) {
+      const fs_reg component_i =
+         subscript(offset(src, bld, i / 2), dst.type, i % 2);
+
+      bld.MOV(offset(tmp, bld, i % 2), component_i);
+
+      if (i % 2) {
+         bld.MOV(offset(dst, bld, i -1), offset(tmp, bld, 0));
+         bld.MOV(offset(dst, bld, i), offset(tmp, bld, 1));
+      }
+   }
+   if (components % 2) {
+      bld.MOV(offset(dst, bld, components - 1), tmp);
+   }
+}
+
 /**
  * This helper does the inverse operation of
  * SHUFFLE_32BIT_LOAD_RESULT_TO_64BIT_DATA.
@@ -4781,6 +4947,34 @@ shuffle_64bit_data_for_32bit_write(const fs_builder &bld,
    }
 
    return dst;
+}
+
+void
+shuffle_16bit_data_for_32bit_write(const fs_builder &bld,
+                                   const fs_reg &dst,
+                                   const fs_reg &src,
+                                   uint32_t components)
+{
+   assert(type_sz(src.type) == 2);
+   assert(type_sz(dst.type) == 4);
+
+   /* A temporary is used to shuffle the 16-bit data of each component in the
+    * 32-bit data vector. We can't write directly to dst because it can be the
+    * same register as src and in that case the first MOV in the loop below
+    * would overwrite the data read in the second MOV.
+    */
+   fs_reg tmp = bld.vgrf(dst.type);
+
+   for (unsigned i = 0; i < components; i++) {
+      const fs_reg component_i = offset(src, bld, i);
+      bld.MOV(subscript(tmp, src.type, i % 2), component_i);
+      if (i % 2) {
+         bld.MOV(offset(dst, bld, i / 2), tmp);
+      }
+   }
+   if (components % 2) {
+      bld.MOV(offset(dst, bld, components / 2), tmp);
+   }
 }
 
 fs_reg

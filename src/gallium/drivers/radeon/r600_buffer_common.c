@@ -159,7 +159,7 @@ void si_init_resource_fields(struct si_screen *sscreen,
 
 	/* Tiled textures are unmappable. Always put them in VRAM. */
 	if ((res->b.b.target != PIPE_BUFFER && !rtex->surface.is_linear) ||
-	    res->flags & R600_RESOURCE_FLAG_UNMAPPABLE) {
+	    res->b.b.flags & R600_RESOURCE_FLAG_UNMAPPABLE) {
 		res->domains = RADEON_DOMAIN_VRAM;
 		res->flags |= RADEON_FLAG_NO_CPU_ACCESS |
 			 RADEON_FLAG_GTT_WC;
@@ -173,6 +173,9 @@ void si_init_resource_fields(struct si_screen *sscreen,
 
 	if (sscreen->debug_flags & DBG(NO_WC))
 		res->flags &= ~RADEON_FLAG_GTT_WC;
+
+	if (res->b.b.flags & R600_RESOURCE_FLAG_READ_ONLY)
+		res->flags |= RADEON_FLAG_READ_ONLY;
 
 	/* Set expected VRAM and GART usage for the buffer. */
 	res->vram_usage = 0;
@@ -609,6 +612,9 @@ static struct pipe_resource *si_buffer_create(struct pipe_screen *screen,
 {
 	struct si_screen *sscreen = (struct si_screen*)screen;
 	struct r600_resource *rbuffer = r600_alloc_buffer_struct(screen, templ);
+
+	if (templ->flags & PIPE_RESOURCE_FLAG_SPARSE)
+		rbuffer->b.b.flags |= R600_RESOURCE_FLAG_UNMAPPABLE;
 
 	si_init_resource_fields(sscreen, rbuffer, templ->width0, alignment);
 

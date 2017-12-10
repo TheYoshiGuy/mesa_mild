@@ -2983,6 +2983,82 @@ brw_untyped_surface_write(struct brw_codegen *p,
       p, insn, num_channels);
 }
 
+static unsigned
+brw_byte_scattered_data_element_from_bit_size(unsigned bit_size)
+{
+   switch (bit_size) {
+   case 8:
+      return GEN7_BYTE_SCATTERED_DATA_ELEMENT_BYTE;
+   case 16:
+      return GEN7_BYTE_SCATTERED_DATA_ELEMENT_WORD;
+   case 32:
+      return GEN7_BYTE_SCATTERED_DATA_ELEMENT_DWORD;
+   default:
+      unreachable("Unsupported bit_size for byte scattered messages");
+   }
+}
+
+
+void
+brw_byte_scattered_read(struct brw_codegen *p,
+                        struct brw_reg dst,
+                        struct brw_reg payload,
+                        struct brw_reg surface,
+                        unsigned msg_length,
+                        unsigned bit_size)
+{
+   const struct gen_device_info *devinfo = p->devinfo;
+   assert(devinfo->gen > 7 || devinfo->is_haswell);
+   assert(brw_inst_access_mode(devinfo, p->current) == BRW_ALIGN_1);
+   const unsigned sfid =  GEN7_SFID_DATAPORT_DATA_CACHE;
+
+   struct brw_inst *insn = brw_send_indirect_surface_message(
+      p, sfid, dst, payload, surface, msg_length,
+      brw_surface_payload_size(p, 1, true, true),
+      false);
+
+   unsigned msg_control =
+      brw_byte_scattered_data_element_from_bit_size(bit_size) << 2;
+
+   if (brw_inst_exec_size(devinfo, p->current) == BRW_EXECUTE_16)
+      msg_control |= 1; /* SIMD16 mode */
+   else
+      msg_control |= 0; /* SIMD8 mode */
+
+   brw_inst_set_dp_msg_type(devinfo, insn,
+                            HSW_DATAPORT_DC_PORT0_BYTE_SCATTERED_READ);
+   brw_inst_set_dp_msg_control(devinfo, insn, msg_control);
+}
+
+void
+brw_byte_scattered_write(struct brw_codegen *p,
+                         struct brw_reg payload,
+                         struct brw_reg surface,
+                         unsigned msg_length,
+                         unsigned bit_size)
+{
+   const struct gen_device_info *devinfo = p->devinfo;
+   assert(devinfo->gen > 7 || devinfo->is_haswell);
+   assert(brw_inst_access_mode(devinfo, p->current) == BRW_ALIGN_1);
+   const unsigned sfid = GEN7_SFID_DATAPORT_DATA_CACHE;
+
+   struct brw_inst *insn = brw_send_indirect_surface_message(
+      p, sfid, brw_writemask(brw_null_reg(), WRITEMASK_XYZW),
+      payload, surface, msg_length, 0, true);
+
+   unsigned msg_control =
+      brw_byte_scattered_data_element_from_bit_size(bit_size) << 2;
+
+   if (brw_inst_exec_size(devinfo, p->current) == BRW_EXECUTE_16)
+      msg_control |= 1;
+   else
+      msg_control |= 0;
+
+   brw_inst_set_dp_msg_type(devinfo, insn,
+                            HSW_DATAPORT_DC_PORT0_BYTE_SCATTERED_WRITE);
+   brw_inst_set_dp_msg_control(devinfo, insn, msg_control);
+}
+
 static void
 brw_set_dp_typed_atomic_message(struct brw_codegen *p,
                                 struct brw_inst *insn,
@@ -3588,4 +3664,37 @@ brw_WAIT(struct brw_codegen *p)
 
    brw_inst_set_exec_size(devinfo, insn, BRW_EXECUTE_1);
    brw_inst_set_mask_control(devinfo, insn, BRW_MASK_DISABLE);
+}
+
+/**
+ * Changes the floating point rounding mode updating the control register
+ * field defined at cr0.0[5-6] bits. This function supports the changes to
+ * RTNE (00), RU (01), RD (10) and RTZ (11) rounding using bitwise operations.
+ * Only RTNE and RTZ rounding are enabled at nir.
+ */
+void
+brw_rounding_mode(struct brw_codegen *p,
+                  enum brw_rnd_mode mode)
+{
+   const unsigned bits = mode << BRW_CR0_RND_MODE_SHIFT;
+
+   if (bits != BRW_CR0_RND_MODE_MASK) {
+      brw_inst *inst = brw_AND(p, brw_cr0_reg(0), brw_cr0_reg(0),
+                               brw_imm_ud(~BRW_CR0_RND_MODE_MASK));
+
+      /* From the Skylake PRM, Volume 7, page 760:
+       *  "Implementation Restriction on Register Access: When the control
+       *   register is used as an explicit source and/or destination, hardware
+       *   does not ensure execution pipeline coherency. Software must set the
+       *   thread control field to ‘switch’ for an instruction that uses
+       *   control register as an explicit operand."
+       */
+      brw_inst_set_thread_control(p->devinfo, inst, BRW_THREAD_SWITCH);
+    }
+
+   if (bits) {
+      brw_inst *inst = brw_OR(p, brw_cr0_reg(0), brw_cr0_reg(0),
+                              brw_imm_ud(bits));
+      brw_inst_set_thread_control(p->devinfo, inst, BRW_THREAD_SWITCH);
+   }
 }

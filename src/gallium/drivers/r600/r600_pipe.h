@@ -38,7 +38,7 @@
 
 #include "tgsi/tgsi_scan.h"
 
-#define R600_NUM_ATOMS 54
+#define R600_NUM_ATOMS 56
 
 #define R600_MAX_IMAGES 8
 /*
@@ -78,6 +78,7 @@
 /* start driver buffers after user buffers */
 #define R600_BUFFER_INFO_CONST_BUFFER (R600_MAX_USER_CONST_BUFFERS)
 #define R600_UCP_SIZE (4*4*8)
+#define R600_CS_BLOCK_GRID_SIZE (8 * 4)
 #define R600_BUFFER_INFO_OFFSET (R600_UCP_SIZE)
 
 #define R600_LDS_INFO_CONST_BUFFER (R600_MAX_USER_CONST_BUFFERS + 1)
@@ -396,6 +397,7 @@ struct r600_shader_driver_constants_info {
 	bool				vs_ucp_dirty;
 	bool				texture_const_dirty;
 	bool				ps_sample_pos_dirty;
+	bool                            cs_block_grid_size_dirty;
 };
 
 struct r600_constbuf_state
@@ -522,7 +524,9 @@ struct r600_context {
 	struct r600_atomic_buffer_state atomic_buffer_state;
 	/* only have images on fragment shader */
 	struct r600_image_state         fragment_images;
+	struct r600_image_state         compute_images;
 	struct r600_image_state         fragment_buffers;
+	struct r600_image_state         compute_buffers;
 	/* Shaders and shader resources. */
 	struct r600_cso_state		vertex_fetch_shader;
 	struct r600_shader_state        hw_shader_stages[EG_NUM_HW_STAGES];
@@ -573,6 +577,7 @@ struct r600_context {
 	struct r600_isa		*isa;
 	float sample_positions[4 * 16];
 	float tess_state[8];
+	uint32_t cs_block_grid_sizes[8]; /* 3 for grid + 1 pad, 3 for block  + 1 pad*/
 	bool tess_state_dirty;
 	struct r600_pipe_shader_selector *last_ls;
 	struct r600_pipe_shader_selector *last_tcs;
@@ -1021,12 +1026,27 @@ void eg_trace_emit(struct r600_context *rctx);
 void eg_dump_debug_state(struct pipe_context *ctx, FILE *f,
 			 unsigned flags);
 
+struct r600_pipe_shader_selector *r600_create_shader_state_tokens(struct pipe_context *ctx,
+								  const struct tgsi_token *tokens,
+								  unsigned pipe_shader_type);
+int r600_shader_select(struct pipe_context *ctx,
+		       struct r600_pipe_shader_selector* sel,
+		       bool *dirty);
+
+void r600_delete_shader_selector(struct pipe_context *ctx,
+				 struct r600_pipe_shader_selector *sel);
+
 struct r600_shader_atomic;
 bool evergreen_emit_atomic_buffer_setup(struct r600_context *rctx,
+					struct r600_pipe_shader *cs_shader,
 					struct r600_shader_atomic *combined_atomics,
 					uint8_t *atomic_used_mask_p);
 void evergreen_emit_atomic_buffer_save(struct r600_context *rctx,
+				       bool is_compute,
 				       struct r600_shader_atomic *combined_atomics,
 				       uint8_t *atomic_used_mask_p);
+void r600_update_compressed_resource_state(struct r600_context *rctx, bool compute_only);
 
+void eg_setup_buffer_constants(struct r600_context *rctx, int shader_type);
+void r600_update_driver_const_buffers(struct r600_context *rctx, bool compute_only);
 #endif

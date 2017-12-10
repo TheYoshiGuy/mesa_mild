@@ -419,6 +419,7 @@ anv_physical_device_init(struct anv_physical_device *device,
    device->compiler->shader_debug_log = compiler_debug_log;
    device->compiler->shader_perf_log = compiler_perf_log;
    device->compiler->supports_pull_constants = false;
+   device->compiler->constant_buffer_0_is_relative = true;
 
    isl_device_init(&device->isl_dev, &device->info, swizzled);
 
@@ -728,7 +729,7 @@ void anv_GetPhysicalDeviceFeatures2KHR(
       case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VARIABLE_POINTER_FEATURES_KHR: {
          VkPhysicalDeviceVariablePointerFeaturesKHR *features = (void *)ext;
          features->variablePointersStorageBuffer = true;
-         features->variablePointers = false;
+         features->variablePointers = true;
          break;
       }
 
@@ -736,6 +737,19 @@ void anv_GetPhysicalDeviceFeatures2KHR(
          VkPhysicalDeviceSamplerYcbcrConversionFeaturesKHR *features =
             (VkPhysicalDeviceSamplerYcbcrConversionFeaturesKHR *) ext;
          features->samplerYcbcrConversion = true;
+         break;
+      }
+
+      case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES_KHR: {
+         ANV_FROM_HANDLE(anv_physical_device, pdevice, physicalDevice);
+
+         VkPhysicalDevice16BitStorageFeaturesKHR *features =
+            (VkPhysicalDevice16BitStorageFeaturesKHR *)ext;
+
+         features->storageBuffer16BitAccess = false;
+         features->uniformAndStorageBuffer16BitAccess = false;
+         features->storagePushConstant16 = false;
+         features->storageInputOutput16 = false;
          break;
       }
 
@@ -836,7 +850,8 @@ void anv_GetPhysicalDeviceProperties(
       .viewportSubPixelBits                     = 13, /* We take a float? */
       .minMemoryMapAlignment                    = 4096, /* A page */
       .minTexelBufferOffsetAlignment            = 1,
-      .minUniformBufferOffsetAlignment          = 16,
+      /* We need 16 for UBO block reads to work and 32 for push UBOs */
+      .minUniformBufferOffsetAlignment          = 32,
       .minStorageBufferOffsetAlignment          = 4,
       .minTexelOffset                           = -8,
       .maxTexelOffset                           = 7,
@@ -1714,7 +1729,7 @@ VkResult anv_GetMemoryFdPropertiesKHR(
    struct anv_physical_device *pdevice = &device->instance->physicalDevice;
 
    switch (handleType) {
-   case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT_KHR:
+   case VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT:
       /* dma-buf can be imported as any memory type */
       pMemoryFdProperties->memoryTypeBits =
          (1 << pdevice->memory.type_count) - 1;
@@ -1902,8 +1917,15 @@ void anv_GetBufferMemoryRequirements(
          memory_types |= (1u << i);
    }
 
+   /* Base alignment requirement of a cache line */
+   uint32_t alignment = 16;
+
+   /* We need an alignment of 32 for pushing UBOs */
+   if (buffer->usage & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)
+      alignment = MAX2(alignment, 32);
+
    pMemoryRequirements->size = buffer->size;
-   pMemoryRequirements->alignment = 16;
+   pMemoryRequirements->alignment = alignment;
    pMemoryRequirements->memoryTypeBits = memory_types;
 }
 
