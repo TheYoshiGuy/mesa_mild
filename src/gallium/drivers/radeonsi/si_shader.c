@@ -37,6 +37,7 @@
 #include "ac_binary.h"
 #include "ac_llvm_util.h"
 #include "ac_exp_param.h"
+#include "ac_shader_util.h"
 #include "si_shader_internal.h"
 #include "si_pipe.h"
 #include "sid.h"
@@ -977,6 +978,34 @@ static LLVMValueRef get_tcs_tes_buffer_address(struct si_shader_context *ctx,
 	return base_addr;
 }
 
+/* This is a generic helper that can be shared by the NIR and TGSI backends */
+static LLVMValueRef get_tcs_tes_buffer_address_from_generic_indices(
+					struct si_shader_context *ctx,
+					LLVMValueRef vertex_index,
+					LLVMValueRef param_index,
+					unsigned param_base,
+					ubyte *name,
+					ubyte *index,
+					bool is_patch)
+{
+	unsigned param_index_base;
+
+	param_index_base = is_patch ?
+		si_shader_io_get_unique_index_patch(name[param_base], index[param_base]) :
+		si_shader_io_get_unique_index(name[param_base], index[param_base]);
+
+	if (param_index) {
+		param_index = LLVMBuildAdd(ctx->ac.builder, param_index,
+					   LLVMConstInt(ctx->i32, param_index_base, 0),
+					   "");
+	} else {
+		param_index = LLVMConstInt(ctx->i32, param_index_base, 0);
+	}
+
+	return get_tcs_tes_buffer_address(ctx, get_rel_patch_id(ctx),
+					  vertex_index, param_index);
+}
+
 static LLVMValueRef get_tcs_tes_buffer_address_from_reg(
                                        struct si_shader_context *ctx,
                                        const struct tgsi_full_dst_register *dst,
@@ -987,7 +1016,7 @@ static LLVMValueRef get_tcs_tes_buffer_address_from_reg(
 	struct tgsi_full_src_register reg;
 	LLVMValueRef vertex_index = NULL;
 	LLVMValueRef param_index = NULL;
-	unsigned param_index_base, param_base;
+	unsigned param_base;
 
 	reg = src ? *src : tgsi_full_src_register_from_dst(dst);
 
@@ -1025,19 +1054,11 @@ static LLVMValueRef get_tcs_tes_buffer_address_from_reg(
 
 	} else {
 		param_base = reg.Register.Index;
-		param_index = ctx->i32_0;
 	}
 
-	param_index_base = reg.Register.Dimension ?
-		si_shader_io_get_unique_index(name[param_base], index[param_base]) :
-		si_shader_io_get_unique_index_patch(name[param_base], index[param_base]);
-
-	param_index = LLVMBuildAdd(ctx->ac.builder, param_index,
-	                           LLVMConstInt(ctx->i32, param_index_base, 0),
-	                           "");
-
-	return get_tcs_tes_buffer_address(ctx, get_rel_patch_id(ctx),
-					  vertex_index, param_index);
+	return get_tcs_tes_buffer_address_from_generic_indices(ctx, vertex_index,
+							       param_index, param_base,
+							       name, index, !reg.Register.Dimension);
 }
 
 static LLVMValueRef buffer_load(struct lp_build_tgsi_context *bld_base,
@@ -3399,25 +3420,6 @@ struct si_ps_exports {
 	struct ac_export_args args[10];
 };
 
-unsigned si_get_spi_shader_z_format(bool writes_z, bool writes_stencil,
-				    bool writes_samplemask)
-{
-	if (writes_z) {
-		/* Z needs 32 bits. */
-		if (writes_samplemask)
-			return V_028710_SPI_SHADER_32_ABGR;
-		else if (writes_stencil)
-			return V_028710_SPI_SHADER_32_GR;
-		else
-			return V_028710_SPI_SHADER_32_R;
-	} else if (writes_stencil || writes_samplemask) {
-		/* Both stencil and sample mask need only 16 bits. */
-		return V_028710_SPI_SHADER_UINT16_ABGR;
-	} else {
-		return V_028710_SPI_SHADER_ZERO;
-	}
-}
-
 static void si_export_mrt_z(struct lp_build_tgsi_context *bld_base,
 			    LLVMValueRef depth, LLVMValueRef stencil,
 			    LLVMValueRef samplemask, struct si_ps_exports *exp)
@@ -3426,7 +3428,7 @@ static void si_export_mrt_z(struct lp_build_tgsi_context *bld_base,
 	struct lp_build_context *base = &bld_base->base;
 	struct ac_export_args args;
 	unsigned mask = 0;
-	unsigned format = si_get_spi_shader_z_format(depth != NULL,
+	unsigned format = ac_get_spi_shader_z_format(depth != NULL,
 						     stencil != NULL,
 						     samplemask != NULL);
 
@@ -3679,15 +3681,6 @@ static void si_llvm_return_fs_outputs(struct ac_shader_abi *abi,
 	ctx->return_value = ret;
 }
 
-void si_emit_waitcnt(struct si_shader_context *ctx, unsigned simm16)
-{
-	LLVMValueRef args[1] = {
-		LLVMConstInt(ctx->i32, simm16, 0)
-	};
-	lp_build_intrinsic(ctx->ac.builder, "llvm.amdgcn.s.waitcnt",
-			   ctx->voidt, args, 1, 0);
-}
-
 static void membar_emit(
 		const struct lp_build_tgsi_action *action,
 		struct lp_build_tgsi_context *bld_base,
@@ -3710,7 +3703,7 @@ static void membar_emit(
 		waitcnt &= LGKM_CNT;
 
 	if (waitcnt != NOOP_WAITCNT)
-		si_emit_waitcnt(ctx, waitcnt);
+		ac_build_waitcnt(&ctx->ac, waitcnt);
 }
 
 static void clock_emit(
@@ -4196,7 +4189,7 @@ static void si_llvm_emit_barrier(const struct lp_build_tgsi_action *action,
 	 */
 	if (ctx->screen->info.chip_class == SI &&
 	    ctx->type == PIPE_SHADER_TESS_CTRL) {
-		si_emit_waitcnt(ctx, LGKM_CNT & VM_CNT);
+		ac_build_waitcnt(&ctx->ac, LGKM_CNT & VM_CNT);
 		return;
 	}
 

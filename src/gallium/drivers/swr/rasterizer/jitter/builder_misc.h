@@ -117,12 +117,10 @@ Value *VMASK2(Value *mask);
 //////////////////////////////////////////////////////////////////////////
 
 #if USE_SIMD16_BUILDER
-Value *EXTRACT2_F(Value *a2, uint32_t imm);
-Value *EXTRACT2_I(Value *a2, uint32_t imm);
-Value *INSERT2_F(Value *a2, Value *b, uint32_t imm);
-Value *INSERT2_I(Value *a2, Value *b, uint32_t imm);
-
+Value *EXTRACT2(Value *x, uint32_t imm);
+Value *JOIN2(Value *a, Value *b);
 #endif
+
 Value *MASKLOADD(Value* src, Value* mask);
 
 void Gather4(const SWR_FORMAT format, Value* pSrcBase, Value* byteOffsets,
@@ -130,12 +128,15 @@ void Gather4(const SWR_FORMAT format, Value* pSrcBase, Value* byteOffsets,
 
 Value *GATHERPS(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1);
 #if USE_SIMD16_BUILDER
-Value *GATHERPS2(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1);
+Value *GATHERPS_16(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1);
 #endif
 void GATHER4PS(const SWR_FORMAT_INFO &info, Value* pSrcBase, Value* byteOffsets,
                Value* mask, Value* vGatherComponents[], bool bPackedOutput);
 
 Value *GATHERDD(Value* src, Value* pBase, Value* indices, Value* mask, uint8_t scale = 1);
+#if USE_SIMD16_BUILDER
+Value *GATHERDD_16(Value *src, Value *pBase, Value *indices, Value *mask, uint8_t scale = 1);
+#endif
 void GATHER4DD(const SWR_FORMAT_INFO &info, Value* pSrcBase, Value* byteOffsets,
                Value* mask, Value* vGatherComponents[], bool bPackedOutput);
 

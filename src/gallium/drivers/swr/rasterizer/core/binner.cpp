@@ -45,7 +45,8 @@ void BinPostSetupLinesImpl(
     typename SIMD_T::Float recipW[],
     uint32_t primMask,
     typename SIMD_T::Integer const &primID,
-    typename SIMD_T::Integer const &viewportIdx);
+    typename SIMD_T::Integer const &viewportIdx,
+    typename SIMD_T::Integer const &rtIdx);
 
 template <typename SIMD_T, uint32_t SIMD_WIDTH>
 void BinPostSetupPointsImpl(
@@ -55,7 +56,8 @@ void BinPostSetupPointsImpl(
     typename SIMD_T::Vec4 prim[],
     uint32_t primMask,
     typename SIMD_T::Integer const &primID,
-    typename SIMD_T::Integer const &viewportIdx);
+    typename SIMD_T::Integer const &viewportIdx,
+    typename SIMD_T::Integer const &rtIdx);
 
 //////////////////////////////////////////////////////////////////////////
 /// @brief Processes attributes for the backend based on linkage mask and
@@ -212,133 +214,6 @@ INLINE void ProcessAttributes(
     }
 }
 
-//////////////////////////////////////////////////////////////////////////
-/// @brief  Gather scissor rect data based on per-prim viewport indices.
-/// @param pScissorsInFixedPoint - array of scissor rects in 16.8 fixed point.
-/// @param pViewportIndex - array of per-primitive vewport indexes.
-/// @param scisXmin - output vector of per-prmitive scissor rect Xmin data.
-/// @param scisYmin - output vector of per-prmitive scissor rect Ymin data.
-/// @param scisXmax - output vector of per-prmitive scissor rect Xmax data.
-/// @param scisYmax - output vector of per-prmitive scissor rect Ymax data.
-//
-/// @todo:  Look at speeding this up -- weigh against corresponding costs in rasterizer.
-static void GatherScissors(const SWR_RECT *pScissorsInFixedPoint, const uint32_t *pViewportIndex,
-    simdscalari &scisXmin, simdscalari &scisYmin, simdscalari &scisXmax, simdscalari &scisYmax)
-{
-    scisXmin = _simd_set_epi32(
-        pScissorsInFixedPoint[pViewportIndex[0]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[1]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[2]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[3]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[4]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[5]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[6]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[7]].xmin);
-    scisYmin = _simd_set_epi32(
-        pScissorsInFixedPoint[pViewportIndex[0]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[1]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[2]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[3]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[4]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[5]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[6]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[7]].ymin);
-    scisXmax = _simd_set_epi32(
-        pScissorsInFixedPoint[pViewportIndex[0]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[1]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[2]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[3]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[4]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[5]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[6]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[7]].xmax);
-    scisYmax = _simd_set_epi32(
-        pScissorsInFixedPoint[pViewportIndex[0]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[1]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[2]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[3]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[4]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[5]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[6]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[7]].ymax);
-}
-
-static void GatherScissors(const SWR_RECT *pScissorsInFixedPoint, const uint32_t *pViewportIndex,
-    simd16scalari &scisXmin, simd16scalari &scisYmin, simd16scalari &scisXmax, simd16scalari &scisYmax)
-{
-    scisXmin = _simd16_set_epi32(
-        pScissorsInFixedPoint[pViewportIndex[0]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[1]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[2]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[3]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[4]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[5]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[6]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[7]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[8]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[9]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[10]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[11]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[12]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[13]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[14]].xmin,
-        pScissorsInFixedPoint[pViewportIndex[15]].xmin);
-
-    scisYmin = _simd16_set_epi32(
-        pScissorsInFixedPoint[pViewportIndex[0]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[1]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[2]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[3]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[4]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[5]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[6]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[7]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[8]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[9]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[10]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[11]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[12]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[13]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[14]].ymin,
-        pScissorsInFixedPoint[pViewportIndex[15]].ymin);
-
-    scisXmax = _simd16_set_epi32(
-        pScissorsInFixedPoint[pViewportIndex[0]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[1]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[2]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[3]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[4]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[5]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[6]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[7]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[8]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[9]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[10]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[11]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[12]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[13]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[14]].xmax,
-        pScissorsInFixedPoint[pViewportIndex[15]].xmax);
-
-    scisYmax = _simd16_set_epi32(
-        pScissorsInFixedPoint[pViewportIndex[0]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[1]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[2]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[3]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[4]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[5]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[6]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[7]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[8]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[9]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[10]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[11]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[12]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[13]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[14]].ymax,
-        pScissorsInFixedPoint[pViewportIndex[15]].ymax);
-}
-
 typedef void(*PFN_PROCESS_ATTRIBUTES)(DRAW_CONTEXT*, PA_STATE&, uint32_t, uint32_t, float*);
 
 struct ProcessAttributesChooser
@@ -434,9 +309,12 @@ void SIMDCALL BinTrianglesImpl(
     uint32_t workerId,
     typename SIMD_T::Vec4 tri[3],
     uint32_t triMask,
-    typename SIMD_T::Integer const &primID)
+    typename SIMD_T::Integer const &primID,
+    typename SIMD_T::Integer const &viewportIdx,
+    typename SIMD_T::Integer const &rtIdx)
 {
     SWR_CONTEXT *pContext = pDC->pContext;
+    const uint32_t *aRTAI = reinterpret_cast<const uint32_t *>(&rtIdx);
 
     AR_BEGIN(FEBinTriangles, pDC->drawId);
 
@@ -449,27 +327,6 @@ void SIMDCALL BinTrianglesImpl(
     typename SIMD_T::Float vRecipW0 = SIMD_T::set1_ps(1.0f);
     typename SIMD_T::Float vRecipW1 = SIMD_T::set1_ps(1.0f);
     typename SIMD_T::Float vRecipW2 = SIMD_T::set1_ps(1.0f);
-
-    typename SIMD_T::Integer viewportIdx = SIMD_T::setzero_si();
-    typename SIMD_T::Vec4 vpiAttrib[3];
-    typename SIMD_T::Integer vpai = SIMD_T::setzero_si();
-
-    if (state.backendState.readViewportArrayIndex)
-    {
-        pa.Assemble(VERTEX_SGV_SLOT, vpiAttrib);
-
-        vpai = SIMD_T::castps_si(vpiAttrib[0][VERTEX_SGV_VAI_COMP]);
-    }
-
-
-    if (state.backendState.readViewportArrayIndex) // VPAIOffsets are guaranteed 0-15 -- no OOB issues if they are offsets from 0 
-    {
-        // OOB indices => forced to zero.
-        vpai = SIMD_T::max_epi32(vpai, SIMD_T::setzero_si());
-        typename SIMD_T::Integer vNumViewports = SIMD_T::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
-        typename SIMD_T::Integer vClearMask = SIMD_T::cmplt_epi32(vpai, vNumViewports);
-        viewportIdx = SIMD_T::and_si(vClearMask, vpai);
-    }
 
     if (feState.vpTransformDisable)
     {
@@ -498,7 +355,7 @@ void SIMDCALL BinTrianglesImpl(
         tri[2].v[2] = SIMD_T::mul_ps(tri[2].v[2], vRecipW2);
 
         // Viewport transform to screen space coords
-        if (state.backendState.readViewportArrayIndex)
+        if (pa.viewportArrayActive)
         {
             viewportTransform<3>(tri, state.vpMatrices, viewportIdx);
         }
@@ -691,8 +548,8 @@ void SIMDCALL BinTrianglesImpl(
     /// @todo:  Look at speeding this up -- weigh against corresponding costs in rasterizer.
     {
         typename SIMD_T::Integer scisXmin, scisYmin, scisXmax, scisYmax;
+        if (pa.viewportArrayActive)
 
-        if (state.backendState.readViewportArrayIndex)
         {
             GatherScissors(&state.scissorsInFixedPoint[0], pViewportIndex, scisXmin, scisYmin, scisXmax, scisYmax);
         }
@@ -751,21 +608,21 @@ endBinTriangles:
         recipW[0] = vRecipW0;
         recipW[1] = vRecipW1;
 
-        BinPostSetupLinesImpl<SIMD_T, SIMD_WIDTH>(pDC, pa, workerId, line, recipW, triMask, primID, viewportIdx);
+        BinPostSetupLinesImpl<SIMD_T, SIMD_WIDTH>(pDC, pa, workerId, line, recipW, triMask, primID, viewportIdx, rtIdx);
 
         line[0] = tri[1];
         line[1] = tri[2];
         recipW[0] = vRecipW1;
         recipW[1] = vRecipW2;
 
-        BinPostSetupLinesImpl<SIMD_T, SIMD_WIDTH>(pDC, pa, workerId, line, recipW, triMask, primID, viewportIdx);
+        BinPostSetupLinesImpl<SIMD_T, SIMD_WIDTH>(pDC, pa, workerId, line, recipW, triMask, primID, viewportIdx, rtIdx);
 
         line[0] = tri[2];
         line[1] = tri[0];
         recipW[0] = vRecipW2;
         recipW[1] = vRecipW0;
 
-        BinPostSetupLinesImpl<SIMD_T, SIMD_WIDTH>(pDC, pa, workerId, line, recipW, triMask, primID, viewportIdx);
+        BinPostSetupLinesImpl<SIMD_T, SIMD_WIDTH>(pDC, pa, workerId, line, recipW, triMask, primID, viewportIdx, rtIdx);
 
         AR_END(FEBinTriangles, 1);
         return;
@@ -773,9 +630,9 @@ endBinTriangles:
     else if (rastState.fillMode == SWR_FILLMODE_POINT)
     {
         // Bin 3 points
-        BinPostSetupPointsImpl<SIMD_T, SIMD_WIDTH>(pDC, pa, workerId, &tri[0], triMask, primID, viewportIdx);
-        BinPostSetupPointsImpl<SIMD_T, SIMD_WIDTH>(pDC, pa, workerId, &tri[1], triMask, primID, viewportIdx);
-        BinPostSetupPointsImpl<SIMD_T, SIMD_WIDTH>(pDC, pa, workerId, &tri[2], triMask, primID, viewportIdx);
+        BinPostSetupPointsImpl<SIMD_T, SIMD_WIDTH>(pDC, pa, workerId, &tri[0], triMask, primID, viewportIdx, rtIdx);
+        BinPostSetupPointsImpl<SIMD_T, SIMD_WIDTH>(pDC, pa, workerId, &tri[1], triMask, primID, viewportIdx, rtIdx);
+        BinPostSetupPointsImpl<SIMD_T, SIMD_WIDTH>(pDC, pa, workerId, &tri[2], triMask, primID, viewportIdx, rtIdx);
 
         AR_END(FEBinTriangles, 1);
         return;
@@ -805,22 +662,6 @@ endBinTriangles:
     TransposeVertices(vHorizY, tri[0].y, tri[1].y, tri[2].y);
     TransposeVertices(vHorizZ, tri[0].z, tri[1].z, tri[2].z);
     TransposeVertices(vHorizW, vRecipW0, vRecipW1, vRecipW2);
-
-    // store render target array index
-    OSALIGNSIMD16(uint32_t) aRTAI[SIMD_WIDTH];
-    if (state.backendState.readRenderTargetArrayIndex)
-    {
-        typename SIMD_T::Vec4 vRtai[3];
-        pa.Assemble(VERTEX_SGV_SLOT, vRtai);
-        typename SIMD_T::Integer vRtaii;
-        vRtaii = SIMD_T::castps_si(vRtai[0][VERTEX_SGV_RTAI_COMP]);
-        SIMD_T::store_si(reinterpret_cast<typename SIMD_T::Integer *>(aRTAI), vRtaii);
-    }
-    else
-    {
-        SIMD_T::store_si(reinterpret_cast<typename SIMD_T::Integer *>(aRTAI), SIMD_T::setzero_si());
-    }
-
 
     // scan remaining valid triangles and bin each separately
     while (_BitScanForward(&triIndex, triMask))
@@ -909,9 +750,11 @@ void BinTriangles(
     uint32_t workerId,
     simdvector tri[3],
     uint32_t triMask,
-    simdscalari const &primID)
+    simdscalari const &primID,
+    simdscalari const &viewportIdx,
+    simdscalari const &rtIdx)
 {
-    BinTrianglesImpl<SIMD256, KNOB_SIMD_WIDTH, CT>(pDC, pa, workerId, tri, triMask, primID);
+    BinTrianglesImpl<SIMD256, KNOB_SIMD_WIDTH, CT>(pDC, pa, workerId, tri, triMask, primID, viewportIdx, rtIdx);
 }
 
 #if USE_SIMD16_FRONTEND
@@ -922,9 +765,11 @@ void SIMDCALL BinTriangles_simd16(
     uint32_t workerId,
     simd16vector tri[3],
     uint32_t triMask,
-    simd16scalari const &primID)
+    simd16scalari const &primID,
+    simd16scalari const &viewportIdx,
+    simd16scalari const &rtIdx)
 {
-    BinTrianglesImpl<SIMD512, KNOB_SIMD16_WIDTH, CT>(pDC, pa, workerId, tri, triMask, primID);
+    BinTrianglesImpl<SIMD512, KNOB_SIMD16_WIDTH, CT>(pDC, pa, workerId, tri, triMask, primID, viewportIdx, rtIdx);
 }
 
 #endif
@@ -973,7 +818,8 @@ void BinPostSetupPointsImpl(
     typename SIMD_T::Vec4 prim[],
     uint32_t primMask,
     typename SIMD_T::Integer const &primID,
-    typename SIMD_T::Integer const &viewportIdx)
+    typename SIMD_T::Integer const &viewportIdx,
+    typename SIMD_T::Integer const &rtIdx)
 {
     SWR_CONTEXT *pContext = pDC->pContext;
 
@@ -1041,19 +887,8 @@ void BinPostSetupPointsImpl(
         SIMD_T::store_ps(reinterpret_cast<float *>(aZ), primVerts.z);
 
         // store render target array index
-        OSALIGNSIMD16(uint32_t) aRTAI[SIMD_WIDTH];
-        if (state.backendState.readRenderTargetArrayIndex)
-        {
-            typename SIMD_T::Vec4 vRtai;
-            pa.Assemble(VERTEX_SGV_SLOT, &vRtai);
-            typename SIMD_T::Integer vRtaii = SIMD_T::castps_si(vRtai[VERTEX_SGV_RTAI_COMP]);
-            SIMD_T::store_si(reinterpret_cast<typename SIMD_T::Integer *>(aRTAI), vRtaii);
-        }
-        else
-        {
-            SIMD_T::store_si(reinterpret_cast<typename SIMD_T::Integer *>(aRTAI), SIMD_T::setzero_si());
-        }
-
+        const uint32_t *aRTAI = reinterpret_cast<const uint32_t *>(&rtIdx);
+        
         uint32_t *pPrimID = (uint32_t *)&primID;
         DWORD primIndex = 0;
 
@@ -1149,7 +984,7 @@ void BinPostSetupPointsImpl(
         {
             typename SIMD_T::Integer scisXmin, scisYmin, scisXmax, scisYmax;
 
-            if (state.backendState.readViewportArrayIndex)
+            if (pa.viewportArrayActive)
             {
                 GatherScissors(&state.scissorsInFixedPoint[0], pViewportIndex, scisXmin, scisYmin, scisXmax, scisYmax);
             }
@@ -1188,18 +1023,7 @@ void BinPostSetupPointsImpl(
         SIMD_T::store_si(reinterpret_cast<typename SIMD_T::Integer *>(aMTBottom), bbox.ymax);
 
         // store render target array index
-        OSALIGNSIMD16(uint32_t) aRTAI[SIMD_WIDTH];
-        if (state.backendState.readRenderTargetArrayIndex)
-        {
-            typename SIMD_T::Vec4 vRtai[2];
-            pa.Assemble(VERTEX_SGV_SLOT, vRtai);
-            typename SIMD_T::Integer vRtaii = SIMD_T::castps_si(vRtai[0][VERTEX_SGV_RTAI_COMP]);
-            SIMD_T::store_si(reinterpret_cast<typename SIMD_T::Integer *>(aRTAI), vRtaii);
-        }
-        else
-        {
-            SIMD_T::store_si(reinterpret_cast<typename SIMD_T::Integer *>(aRTAI), SIMD_T::setzero_si());
-        }
+        const uint32_t *aRTAI = reinterpret_cast<const uint32_t *>(&rtIdx);
 
         OSALIGNSIMD16(float) aPointSize[SIMD_WIDTH];
         SIMD_T::store_ps(reinterpret_cast<float *>(aPointSize), vPointSize);
@@ -1299,33 +1123,13 @@ void BinPointsImpl(
     uint32_t workerId,
     typename SIMD_T::Vec4 prim[3],
     uint32_t primMask,
-    typename SIMD_T::Integer const &primID)
+    typename SIMD_T::Integer const &primID,
+    typename SIMD_T::Integer const &viewportIdx,
+    typename SIMD_T::Integer const &rtIdx)
 {
     const API_STATE& state = GetApiState(pDC);
     const SWR_FRONTEND_STATE& feState = state.frontendState;
     const SWR_RASTSTATE& rastState = state.rastState;
-
-    // Read back viewport index if required
-    typename SIMD_T::Integer viewportIdx = SIMD_T::setzero_si();
-    typename SIMD_T::Vec4 vpiAttrib[1];
-    typename SIMD_T::Integer vpai = SIMD_T::setzero_si();
-
-    if (state.backendState.readViewportArrayIndex)
-    {
-        pa.Assemble(VERTEX_SGV_SLOT, vpiAttrib);
-
-        vpai = SIMD_T::castps_si(vpiAttrib[0][VERTEX_SGV_VAI_COMP]);
-    }
-
-
-    if (state.backendState.readViewportArrayIndex) // VPAIOffsets are guaranteed 0-15 -- no OOB issues if they are offsets from 0 
-    {
-        // OOB indices => forced to zero.
-        vpai = SIMD_T::max_epi32(vpai, SIMD_T::setzero_si());
-        typename SIMD_T::Integer vNumViewports = SIMD_T::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
-        typename SIMD_T::Integer vClearMask = SIMD_T::cmplt_epi32(vpai, vNumViewports);
-        viewportIdx = SIMD_T::and_si(vClearMask, vpai);
-    }
 
     if (!feState.vpTransformDisable)
     {
@@ -1337,7 +1141,7 @@ void BinPointsImpl(
         prim[0].z = SIMD_T::mul_ps(prim[0].z, vRecipW0);
 
         // viewport transform to screen coords
-        if (state.backendState.readViewportArrayIndex)
+        if (pa.viewportArrayActive)
         {
             viewportTransform<1>(prim, state.vpMatrices, viewportIdx);
         }
@@ -1359,7 +1163,8 @@ void BinPointsImpl(
         prim,
         primMask,
         primID,
-        viewportIdx);
+        viewportIdx,
+        rtIdx);
 }
 
 void BinPoints(
@@ -1368,7 +1173,9 @@ void BinPoints(
     uint32_t workerId,
     simdvector prim[3],
     uint32_t primMask,
-    simdscalari const &primID)
+    simdscalari const &primID,
+    simdscalari const &viewportIdx,
+    simdscalari const &rtIdx)
 {
     BinPointsImpl<SIMD256, KNOB_SIMD_WIDTH>(
         pDC,
@@ -1376,7 +1183,9 @@ void BinPoints(
         workerId,
         prim,
         primMask,
-        primID);
+        primID,
+        viewportIdx,
+        rtIdx);
 }
 
 #if USE_SIMD16_FRONTEND
@@ -1386,7 +1195,9 @@ void SIMDCALL BinPoints_simd16(
     uint32_t workerId,
     simd16vector prim[3],
     uint32_t primMask,
-    simd16scalari const &primID)
+    simd16scalari const &primID,
+    simd16scalari const &viewportIdx,
+    simd16scalari const & rtIdx)
 {
     BinPointsImpl<SIMD512, KNOB_SIMD16_WIDTH>(
         pDC,
@@ -1394,7 +1205,9 @@ void SIMDCALL BinPoints_simd16(
         workerId,
         prim,
         primMask,
-        primID);
+        primID,
+        viewportIdx,
+        rtIdx);
 }
 
 #endif
@@ -1415,9 +1228,11 @@ void BinPostSetupLinesImpl(
     typename SIMD_T::Float recipW[],
     uint32_t primMask,
     typename SIMD_T::Integer const &primID,
-    typename SIMD_T::Integer const &viewportIdx)
+    typename SIMD_T::Integer const &viewportIdx,
+    typename SIMD_T::Integer const &rtIdx)
 {
     SWR_CONTEXT *pContext = pDC->pContext;
+    const uint32_t *aRTAI = reinterpret_cast<const uint32_t *>(&rtIdx);
 
     AR_BEGIN(FEBinLines, pDC->drawId);
 
@@ -1481,7 +1296,7 @@ void BinPostSetupLinesImpl(
     {
         typename SIMD_T::Integer scisXmin, scisYmin, scisXmax, scisYmax;
 
-        if (state.backendState.readViewportArrayIndex)
+        if (pa.viewportArrayActive)
         {
             GatherScissors(&state.scissorsInFixedPoint[0], pViewportIndex, scisXmin, scisYmin, scisXmax, scisYmax);
         }
@@ -1537,20 +1352,6 @@ void BinPostSetupLinesImpl(
     TransposeVertices(vHorizY, prim[0].y, prim[1].y, SIMD_T::setzero_ps());
     TransposeVertices(vHorizZ, prim[0].z, prim[1].z, SIMD_T::setzero_ps());
     TransposeVertices(vHorizW, vRecipW0,  vRecipW1,  SIMD_T::setzero_ps());
-
-    // store render target array index
-    OSALIGNSIMD16(uint32_t) aRTAI[SIMD_WIDTH];
-    if (state.backendState.readRenderTargetArrayIndex)
-    {
-        typename SIMD_T::Vec4 vRtai[2];
-        pa.Assemble(VERTEX_SGV_SLOT, vRtai);
-        typename SIMD_T::Integer vRtaii = SIMD_T::castps_si(vRtai[0][VERTEX_SGV_RTAI_COMP]);
-        SIMD_T::store_si(reinterpret_cast<typename SIMD_T::Integer *>(aRTAI), vRtaii);
-    }
-    else
-    {
-        SIMD_T::store_si(reinterpret_cast<typename SIMD_T::Integer *>(aRTAI), SIMD_T::setzero_si());
-    }
 
     // scan remaining valid prims and bin each separately
     DWORD primIndex;
@@ -1632,34 +1433,15 @@ void SIMDCALL BinLinesImpl(
     uint32_t workerId,
     typename SIMD_T::Vec4 prim[3],
     uint32_t primMask,
-    typename SIMD_T::Integer const &primID)
+    typename SIMD_T::Integer const &primID,
+    typename SIMD_T::Integer const &viewportIdx,
+    typename SIMD_T::Integer const & rtIdx)
 {
     const API_STATE& state = GetApiState(pDC);
     const SWR_RASTSTATE& rastState = state.rastState;
     const SWR_FRONTEND_STATE& feState = state.frontendState;
 
     typename SIMD_T::Float vRecipW[2] = { SIMD_T::set1_ps(1.0f), SIMD_T::set1_ps(1.0f) };
-
-    typename SIMD_T::Integer viewportIdx = SIMD_T::setzero_si();
-    typename SIMD_T::Vec4 vpiAttrib[2];
-    typename SIMD_T::Integer vpai = SIMD_T::setzero_si();
-
-    if (state.backendState.readViewportArrayIndex)
-    {
-        pa.Assemble(VERTEX_SGV_SLOT, vpiAttrib);
-
-        vpai = SIMD_T::castps_si(vpiAttrib[0][VERTEX_SGV_VAI_COMP]);
-    }
-
-
-    if (state.backendState.readViewportArrayIndex) // VPAIOffsets are guaranteed 0-15 -- no OOB issues if they are offsets from 0 
-    {
-        // OOB indices => forced to zero.
-        vpai = SIMD_T::max_epi32(vpai, SIMD_T::setzero_si());
-        typename SIMD_T::Integer vNumViewports = SIMD_T::set1_epi32(KNOB_NUM_VIEWPORTS_SCISSORS);
-        typename SIMD_T::Integer vClearMask = SIMD_T::cmplt_epi32(vpai, vNumViewports);
-        viewportIdx = SIMD_T::and_si(vClearMask, vpai);
-    }
 
     if (!feState.vpTransformDisable)
     {
@@ -1677,7 +1459,7 @@ void SIMDCALL BinLinesImpl(
         prim[1].v[2] = SIMD_T::mul_ps(prim[1].v[2], vRecipW[1]);
 
         // viewport transform to screen coords
-        if (state.backendState.readViewportArrayIndex)
+        if (pa.viewportArrayActive)
         {
             viewportTransform<2>(prim, state.vpMatrices, viewportIdx);
         }
@@ -1704,7 +1486,8 @@ void SIMDCALL BinLinesImpl(
         vRecipW,
         primMask,
         primID,
-        viewportIdx);
+        viewportIdx,
+        rtIdx);
 }
 
 void BinLines(
@@ -1713,9 +1496,11 @@ void BinLines(
     uint32_t workerId,
     simdvector prim[],
     uint32_t primMask,
-    simdscalari const &primID)
+    simdscalari const &primID,
+    simdscalari const &viewportIdx,
+    simdscalari const &rtIdx)
 {
-    BinLinesImpl<SIMD256, KNOB_SIMD_WIDTH>(pDC, pa, workerId, prim, primMask, primID);
+    BinLinesImpl<SIMD256, KNOB_SIMD_WIDTH>(pDC, pa, workerId, prim, primMask, primID, viewportIdx, rtIdx);
 }
 
 #if USE_SIMD16_FRONTEND
@@ -1725,9 +1510,11 @@ void SIMDCALL BinLines_simd16(
     uint32_t workerId,
     simd16vector prim[3],
     uint32_t primMask,
-    simd16scalari const &primID)
+    simd16scalari const &primID,
+    simd16scalari const &viewportIdx,
+    simd16scalari const &rtIdx)
 {
-    BinLinesImpl<SIMD512, KNOB_SIMD16_WIDTH>(pDC, pa, workerId, prim, primMask, primID);
+    BinLinesImpl<SIMD512, KNOB_SIMD16_WIDTH>(pDC, pa, workerId, prim, primMask, primID, viewportIdx, rtIdx);
 }
 
 #endif

@@ -146,7 +146,7 @@ LLVMValueRef si_load_image_desc(struct si_shader_context *ctx,
 	}
 
 	rsrc = ac_build_load_to_sgpr(&ctx->ac, list, index);
-	if (dcc_off)
+	if (desc_type == AC_DESC_IMAGE && dcc_off)
 		rsrc = force_dcc_off(ctx, rsrc);
 	return rsrc;
 }
@@ -567,7 +567,7 @@ static void load_emit(
 	}
 
 	if (inst->Memory.Qualifier & TGSI_MEMORY_VOLATILE)
-		si_emit_waitcnt(ctx, VM_CNT);
+		ac_build_waitcnt(&ctx->ac, VM_CNT);
 
 	can_speculate = !(inst->Memory.Qualifier & TGSI_MEMORY_VOLATILE) &&
 			  is_oneway_access_only(inst, info,
@@ -780,7 +780,7 @@ static void store_emit(
 	}
 
 	if (inst->Memory.Qualifier & TGSI_MEMORY_VOLATILE)
-		si_emit_waitcnt(ctx, VM_CNT);
+		ac_build_waitcnt(&ctx->ac, VM_CNT);
 
 	writeonly_memory = is_oneway_access_only(inst, info,
 						 info->shader_buffers_load |

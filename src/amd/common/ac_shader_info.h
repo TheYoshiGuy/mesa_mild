@@ -42,7 +42,10 @@ struct ac_shader_info {
 		bool uses_input_attachments;
 	} ps;
 	struct {
-		uint8_t grid_components_used;
+		bool uses_grid_size;
+		bool uses_block_id[3];
+		bool uses_thread_id[3];
+		bool uses_local_invocation_idx;
 	} cs;
 };
 
