@@ -3792,6 +3792,11 @@ static void evergreen_dma_copy(struct pipe_context *ctx,
 		goto fallback;
 	}
 
+	if (rctx->cmd_buf_is_compute) {
+		rctx->b.gfx.flush(rctx, PIPE_FLUSH_ASYNC, NULL);
+		rctx->cmd_buf_is_compute = false;
+	}
+
 	if (dst->target == PIPE_BUFFER && src->target == PIPE_BUFFER) {
 		evergreen_dma_copy_buffer(rctx, dst, src, dst_x, src_box->x, src_box->width);
 		return;
@@ -4066,6 +4071,8 @@ static void evergreen_set_shader_images(struct pipe_context *ctx,
 		if (!images || !images[idx].resource) {
 			pipe_resource_reference((struct pipe_resource **)&rview->base.resource, NULL);
 			istate->enabled_mask &= ~(1 << i);
+			istate->compressed_colortex_mask &= ~(1 << i);
+			istate->compressed_depthtex_mask &= ~(1 << i);
 			continue;
 		}
 
@@ -4707,7 +4714,6 @@ bool evergreen_emit_atomic_buffer_setup(struct r600_context *rctx,
 					struct r600_shader_atomic *combined_atomics,
 					uint8_t *atomic_used_mask_p)
 {
-	struct radeon_winsys_cs *cs = rctx->b.gfx.cs;
 	struct r600_atomic_buffer_state *astate = &rctx->atomic_buffer_state;
 	unsigned pkt_flags = 0;
 	uint8_t atomic_used_mask = 0;

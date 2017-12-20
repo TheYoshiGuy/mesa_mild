@@ -27,6 +27,7 @@
  */
 
 #include "freedreno_context.h"
+#include "freedreno_blitter.h"
 #include "freedreno_draw.h"
 #include "freedreno_fence.h"
 #include "freedreno_program.h"
@@ -155,9 +156,10 @@ fd_context_destroy(struct pipe_context *pctx)
 	fd_pipe_del(ctx->pipe);
 
 	if (fd_mesa_debug & (FD_DBG_BSTAT | FD_DBG_MSGS)) {
-		printf("batch_total=%u, batch_sysmem=%u, batch_gmem=%u, batch_restore=%u\n",
+		printf("batch_total=%u, batch_sysmem=%u, batch_gmem=%u, batch_nondraw=%u, batch_restore=%u\n",
 			(uint32_t)ctx->stats.batch_total, (uint32_t)ctx->stats.batch_sysmem,
-			(uint32_t)ctx->stats.batch_gmem, (uint32_t)ctx->stats.batch_restore);
+			(uint32_t)ctx->stats.batch_gmem, (uint32_t)ctx->stats.batch_nondraw,
+			(uint32_t)ctx->stats.batch_restore);
 	}
 
 	FREE(ctx);
@@ -257,10 +259,19 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 {
 	struct fd_screen *screen = fd_screen(pscreen);
 	struct pipe_context *pctx;
+	unsigned prio = 1;
 	int i;
 
+	/* lower numerical value == higher priority: */
+	if (fd_mesa_debug & FD_DBG_HIPRIO)
+		prio = 0;
+	else if (flags & PIPE_CONTEXT_HIGH_PRIORITY)
+		prio = 0;
+	else if (flags & PIPE_CONTEXT_LOW_PRIORITY)
+		prio = 2;
+
 	ctx->screen = screen;
-	ctx->pipe = fd_pipe_new(screen->dev, FD_PIPE_3D);
+	ctx->pipe = fd_pipe_new2(screen->dev, FD_PIPE_3D, prio);
 
 	ctx->primtypes = primtypes;
 	ctx->primtype_mask = 0;
@@ -291,6 +302,9 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 	ctx->batch = fd_bc_alloc_batch(&screen->batch_cache, ctx);
 
 	slab_create_child(&ctx->transfer_pool, &screen->transfer_pool);
+
+	if (!ctx->blit)
+		ctx->blit = fd_blitter_blit;
 
 	fd_draw_init(pctx);
 	fd_resource_context_init(pctx);

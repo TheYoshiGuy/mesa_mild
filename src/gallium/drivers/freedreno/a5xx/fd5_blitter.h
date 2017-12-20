@@ -1,5 +1,5 @@
 /*
- * Copyright 2012 Advanced Micro Devices, Inc.
+ * Copyright (C) 2017 Rob Clark <robclark@freedesktop.org>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -16,27 +16,21 @@
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
  * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ * Authors:
+ *    Rob Clark <robclark@freedesktop.org>
  */
 
-#ifndef AC_SHADER_UTIL_H
-#define AC_SHADER_UTIL_H
+#ifndef FD5_BLIT_H_
+#define FD5_BLIT_H_
 
-#include <stdbool.h>
-#include <stdint.h>
+#include "pipe/p_state.h"
 
-#include "amd_family.h"
+#include "freedreno_context.h"
 
-unsigned
-ac_get_spi_shader_z_format(bool writes_z, bool writes_stencil,
-			   bool writes_samplemask);
+void fd5_blitter_blit(struct fd_context *ctx, const struct pipe_blit_info *info);
 
-unsigned
-ac_get_cb_shader_mask(unsigned spi_shader_col_format);
-
-uint32_t
-ac_vgt_gs_mode(unsigned gs_max_vert_out, enum chip_class chip_class);
-
-#endif
+#endif /* FD5_BLIT_H_ */

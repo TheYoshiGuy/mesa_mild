@@ -947,7 +947,7 @@ dep_libdrm_nouveau = []
 dep_libdrm_etnaviv = []
 dep_libdrm_freedreno = []
 if with_amd_vk or with_gallium_radeonsi
-  dep_libdrm_amdgpu = dependency('libdrm_amdgpu', version : '>= 2.4.88')
+  dep_libdrm_amdgpu = dependency('libdrm_amdgpu', version : '>= 2.4.89')
 endif
 if (with_gallium_radeonsi or with_dri_r100 or with_dri_r200 or
     with_gallium_r300 or with_gallium_r600)
@@ -960,7 +960,7 @@ if with_gallium_etnaviv
   dep_libdrm_etnaviv = dependency('libdrm_etnaviv', version : '>= 2.4.82')
 endif
 if with_gallium_freedreno
-  dep_libdrm_freedreno = dependency('libdrm_freedreno', version : '>= 2.4.74')
+  dep_libdrm_freedreno = dependency('libdrm_freedreno', version : '>= 2.4.89')
 endif
 
 llvm_modules = ['bitwriter', 'engine', 'mcdisassembler', 'mcjit']

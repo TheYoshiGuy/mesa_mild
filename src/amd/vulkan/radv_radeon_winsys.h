@@ -274,8 +274,17 @@ struct radeon_winsys {
 	int (*create_syncobj)(struct radeon_winsys *ws, uint32_t *handle);
 	void (*destroy_syncobj)(struct radeon_winsys *ws, uint32_t handle);
 
+	void (*reset_syncobj)(struct radeon_winsys *ws, uint32_t handle);
+	void (*signal_syncobj)(struct radeon_winsys *ws, uint32_t handle);
+	bool (*wait_syncobj)(struct radeon_winsys *ws, uint32_t handle, uint64_t timeout);
+
 	int (*export_syncobj)(struct radeon_winsys *ws, uint32_t syncobj, int *fd);
 	int (*import_syncobj)(struct radeon_winsys *ws, int fd, uint32_t *syncobj);
+
+	int (*export_syncobj_to_sync_file)(struct radeon_winsys *ws, uint32_t syncobj, int *fd);
+
+	/* Note that this, unlike the normal import, uses an existing syncobj. */
+	int (*import_syncobj_from_sync_file)(struct radeon_winsys *ws, uint32_t syncobj, int fd);
 
 };
 

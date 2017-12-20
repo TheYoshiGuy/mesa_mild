@@ -827,8 +827,47 @@ ir3_emit_vs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *rin
 			}
 
 			fd_wfi(ctx->batch, ring);
-			ctx->emit_const(ring, SHADER_VERTEX, offset * 4, 0,
-					vertex_params_size, vertex_params, NULL);
+
+			bool needs_vtxid_base =
+				ir3_find_sysval_regid(v, SYSTEM_VALUE_VERTEX_ID_ZERO_BASE) != regid(63, 0);
+
+			/* for indirect draw, we need to copy VTXID_BASE from
+			 * indirect-draw parameters buffer.. which is annoying
+			 * and means we can't easily emit these consts in cmd
+			 * stream so need to copy them to bo.
+			 */
+			if (info->indirect && needs_vtxid_base) {
+				struct pipe_draw_indirect_info *indirect = info->indirect;
+				struct pipe_resource *vertex_params_rsc =
+					pipe_buffer_create(&ctx->screen->base,
+						PIPE_BIND_CONSTANT_BUFFER, PIPE_USAGE_STREAM,
+						vertex_params_size * 4);
+				unsigned src_off = info->indirect->offset;;
+				void *ptr;
+
+				ptr = fd_bo_map(fd_resource(vertex_params_rsc)->bo);
+				memcpy(ptr, vertex_params, vertex_params_size * 4);
+
+				if (info->index_size) {
+					/* indexed draw, index_bias is 4th field: */
+					src_off += 3 * 4;
+				} else {
+					/* non-indexed draw, start is 3rd field: */
+					src_off += 2 * 4;
+				}
+
+				/* copy index_bias or start from draw params: */
+				ctx->mem_to_mem(ring, vertex_params_rsc, 0,
+						indirect->buffer, src_off, 1);
+
+				ctx->emit_const(ring, SHADER_VERTEX, offset * 4, 0,
+						vertex_params_size, NULL, vertex_params_rsc);
+
+				pipe_resource_reference(&vertex_params_rsc, NULL);
+			} else {
+				ctx->emit_const(ring, SHADER_VERTEX, offset * 4, 0,
+						vertex_params_size, vertex_params, NULL);
+			}
 
 			/* if needed, emit stream-out buffer addresses: */
 			if (vertex_params[IR3_DP_VTXCNT_MAX] > 0) {
@@ -879,20 +918,8 @@ ir3_emit_cs_consts(const struct ir3_shader_variant *v, struct fd_ringbuffer *rin
 					0x1000);
 				indirect_offset = 0;
 
-				if (is_a5xx(ctx->screen)) {
-					struct fd_bo *src = fd_resource(info->indirect)->bo;
-					struct fd_bo *dst = fd_resource(indirect)->bo;
-					for (unsigned i = 0; i < 3; i++) {
-						unsigned dst_off = i * 4;
-						unsigned src_off = (i * 4) + info->indirect_offset;
-						OUT_PKT7(ring, CP_MEM_TO_MEM, 5);
-						OUT_RING(ring, 0x00000000);
-						OUT_RELOCW(ring, dst, dst_off, 0, 0);
-						OUT_RELOC (ring, src, src_off, 0, 0);
-					}
-				} else {
-					assert(0);
-				}
+				ctx->mem_to_mem(ring, indirect, 0, info->indirect,
+						info->indirect_offset, 3);
 			} else {
 				pipe_resource_reference(&indirect, info->indirect);
 				indirect_offset = info->indirect_offset;

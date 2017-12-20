@@ -27,7 +27,9 @@
 #include "util/u_format.h"
 #include "util/u_inlines.h"
 #include "util/u_surface.h"
+#include "util/u_transfer_helper.h"
 #include "util/u_upload_mgr.h"
+#include "util/u_format_zs.h"
 
 #include "drm_fourcc.h"
 #include "vc5_screen.h"
@@ -122,15 +124,8 @@ vc5_resource_transfer_unmap(struct pipe_context *pctx,
         struct vc5_transfer *trans = vc5_transfer(ptrans);
 
         if (trans->map) {
-                struct vc5_resource *rsc;
-                struct vc5_resource_slice *slice;
-                if (trans->ss_resource) {
-                        rsc = vc5_resource(trans->ss_resource);
-                        slice = &rsc->slices[0];
-                } else {
-                        rsc = vc5_resource(ptrans->resource);
-                        slice = &rsc->slices[ptrans->level];
-                }
+                struct vc5_resource *rsc = vc5_resource(ptrans->resource);
+                struct vc5_resource_slice *slice = &rsc->slices[ptrans->level];
 
                 if (ptrans->usage & PIPE_TRANSFER_WRITE) {
                         vc5_store_tiled_image(rsc->bo->map + slice->offset +
@@ -144,49 +139,8 @@ vc5_resource_transfer_unmap(struct pipe_context *pctx,
                 free(trans->map);
         }
 
-        if (trans->ss_resource && (ptrans->usage & PIPE_TRANSFER_WRITE)) {
-                struct pipe_blit_info blit;
-                memset(&blit, 0, sizeof(blit));
-
-                blit.src.resource = trans->ss_resource;
-                blit.src.format = trans->ss_resource->format;
-                blit.src.box.width = trans->ss_box.width;
-                blit.src.box.height = trans->ss_box.height;
-                blit.src.box.depth = 1;
-
-                blit.dst.resource = ptrans->resource;
-                blit.dst.format = ptrans->resource->format;
-                blit.dst.level = ptrans->level;
-                blit.dst.box = trans->ss_box;
-
-                blit.mask = util_format_get_mask(ptrans->resource->format);
-                blit.filter = PIPE_TEX_FILTER_NEAREST;
-
-                pctx->blit(pctx, &blit);
-
-                pipe_resource_reference(&trans->ss_resource, NULL);
-        }
-
         pipe_resource_reference(&ptrans->resource, NULL);
         slab_free(&vc5->transfer_pool, ptrans);
-}
-
-static struct pipe_resource *
-vc5_get_temp_resource(struct pipe_context *pctx,
-                      struct pipe_resource *prsc,
-                      const struct pipe_box *box)
-{
-        struct pipe_resource temp_setup;
-
-        memset(&temp_setup, 0, sizeof(temp_setup));
-        temp_setup.target = prsc->target;
-        temp_setup.format = prsc->format;
-        temp_setup.width0 = box->width;
-        temp_setup.height0 = box->height;
-        temp_setup.depth0 = 1;
-        temp_setup.array_size = 1;
-
-        return pctx->screen->resource_create(pctx->screen, &temp_setup);
 }
 
 static void *
@@ -202,6 +156,9 @@ vc5_resource_transfer_map(struct pipe_context *pctx,
         struct pipe_transfer *ptrans;
         enum pipe_format format = prsc->format;
         char *buf;
+
+        /* MSAA maps should have been handled by u_transfer_helper. */
+        assert(prsc->nr_samples <= 1);
 
         /* Upgrade DISCARD_RANGE to WHOLE_RESOURCE if the whole resource is
          * being mapped.
@@ -265,50 +222,6 @@ vc5_resource_transfer_map(struct pipe_context *pctx,
         ptrans->usage = usage;
         ptrans->box = *box;
 
-        /* If the resource is multisampled, we need to resolve to single
-         * sample.  This seems like it should be handled at a higher layer.
-         */
-        if (prsc->nr_samples > 1) {
-                trans->ss_resource = vc5_get_temp_resource(pctx, prsc, box);
-                if (!trans->ss_resource)
-                        goto fail;
-                assert(!trans->ss_resource->nr_samples);
-
-                /* The ptrans->box gets modified for tile alignment, so save
-                 * the original box for unmap time.
-                 */
-                trans->ss_box = *box;
-
-                if (usage & PIPE_TRANSFER_READ) {
-                        struct pipe_blit_info blit;
-                        memset(&blit, 0, sizeof(blit));
-
-                        blit.src.resource = ptrans->resource;
-                        blit.src.format = ptrans->resource->format;
-                        blit.src.level = ptrans->level;
-                        blit.src.box = trans->ss_box;
-
-                        blit.dst.resource = trans->ss_resource;
-                        blit.dst.format = trans->ss_resource->format;
-                        blit.dst.box.width = trans->ss_box.width;
-                        blit.dst.box.height = trans->ss_box.height;
-                        blit.dst.box.depth = 1;
-
-                        blit.mask = util_format_get_mask(prsc->format);
-                        blit.filter = PIPE_TEX_FILTER_NEAREST;
-
-                        pctx->blit(pctx, &blit);
-                        vc5_flush_jobs_writing_resource(vc5, blit.dst.resource);
-                }
-
-                /* The rest of the mapping process should use our temporary. */
-                prsc = trans->ss_resource;
-                rsc = vc5_resource(prsc);
-                ptrans->box.x = 0;
-                ptrans->box.y = 0;
-                ptrans->box.z = 0;
-        }
-
         /* Note that the current kernel implementation is synchronous, so no
          * need to do syncing stuff here yet.
          */
@@ -368,6 +281,7 @@ vc5_resource_destroy(struct pipe_screen *pscreen,
                      struct pipe_resource *prsc)
 {
         struct vc5_resource *rsc = vc5_resource(prsc);
+
         vc5_bo_unreference(&rsc->bo);
         free(rsc);
 }
@@ -607,6 +521,8 @@ vc5_resource_create_with_modifiers(struct pipe_screen *pscreen,
                 return NULL;
         }
 
+        rsc->internal_format = prsc->format;
+
         vc5_setup_slices(rsc);
         if (!vc5_resource_bo_alloc(rsc))
                 goto fail;
@@ -719,6 +635,10 @@ vc5_create_surface(struct pipe_context *pctx,
         unsigned level = surf_tmpl->u.tex.level;
         struct vc5_resource_slice *slice = &rsc->slices[level];
 
+        struct vc5_resource_slice *separate_stencil_slice = NULL;
+        if (rsc->separate_stencil)
+                separate_stencil_slice = &rsc->separate_stencil->slices[level];
+
         pipe_reference_init(&psurf->reference, 1);
         pipe_resource_reference(&psurf->texture, ptex);
 
@@ -733,6 +653,15 @@ vc5_create_surface(struct pipe_context *pctx,
         surface->offset = (slice->offset +
                            psurf->u.tex.first_layer * rsc->cube_map_stride);
         surface->tiling = slice->tiling;
+        if (separate_stencil_slice) {
+                surface->separate_stencil_offset =
+                        (separate_stencil_slice->offset +
+                         psurf->u.tex.first_layer *
+                         rsc->separate_stencil->cube_map_stride);
+                surface->separate_stencil_tiling =
+                        separate_stencil_slice->tiling;
+        }
+
         surface->format = vc5_get_rt_format(psurf->format);
 
         if (util_format_is_depth_or_stencil(psurf->format)) {
@@ -760,6 +689,13 @@ vc5_create_surface(struct pipe_context *pctx,
                 surface->padded_height_of_output_image_in_uif_blocks =
                         ((slice->size / slice->stride) /
                          (2 * vc5_utile_height(rsc->cpp)));
+
+                if (separate_stencil_slice) {
+                        surface->separate_stencil_padded_height_of_output_image_in_uif_blocks =
+                        ((separate_stencil_slice->size /
+                          separate_stencil_slice->stride) /
+                         (2 * vc5_utile_height(rsc->separate_stencil->cpp)));
+                }
         }
 
         return &surface->base;
@@ -780,23 +716,57 @@ vc5_flush_resource(struct pipe_context *pctx, struct pipe_resource *resource)
          */
 }
 
+static enum pipe_format
+vc5_resource_get_internal_format(struct pipe_resource *prsc)
+{
+        return vc5_resource(prsc)->internal_format;
+}
+
+static void
+vc5_resource_set_stencil(struct pipe_resource *prsc,
+                         struct pipe_resource *stencil)
+{
+        vc5_resource(prsc)->separate_stencil = vc5_resource(stencil);
+}
+
+static struct pipe_resource *
+vc5_resource_get_stencil(struct pipe_resource *prsc)
+{
+        struct vc5_resource *rsc = vc5_resource(prsc);
+
+        return &rsc->separate_stencil->base;
+}
+
+static const struct u_transfer_vtbl transfer_vtbl = {
+        .resource_create          = vc5_resource_create,
+        .resource_destroy         = vc5_resource_destroy,
+        .transfer_map             = vc5_resource_transfer_map,
+        .transfer_unmap           = vc5_resource_transfer_unmap,
+        .transfer_flush_region    = u_default_transfer_flush_region,
+        .get_internal_format      = vc5_resource_get_internal_format,
+        .set_stencil              = vc5_resource_set_stencil,
+        .get_stencil              = vc5_resource_get_stencil,
+};
+
 void
 vc5_resource_screen_init(struct pipe_screen *pscreen)
 {
         pscreen->resource_create_with_modifiers =
                 vc5_resource_create_with_modifiers;
-        pscreen->resource_create = vc5_resource_create;
+        pscreen->resource_create = u_transfer_helper_resource_create;
         pscreen->resource_from_handle = vc5_resource_from_handle;
         pscreen->resource_get_handle = vc5_resource_get_handle;
-        pscreen->resource_destroy = vc5_resource_destroy;
+        pscreen->resource_destroy = u_transfer_helper_resource_destroy;
+        pscreen->transfer_helper = u_transfer_helper_create(&transfer_vtbl,
+                                                            true, true, true);
 }
 
 void
 vc5_resource_context_init(struct pipe_context *pctx)
 {
-        pctx->transfer_map = vc5_resource_transfer_map;
-        pctx->transfer_flush_region = u_default_transfer_flush_region;
-        pctx->transfer_unmap = vc5_resource_transfer_unmap;
+        pctx->transfer_map = u_transfer_helper_transfer_map;
+        pctx->transfer_flush_region = u_transfer_helper_transfer_flush_region;
+        pctx->transfer_unmap = u_transfer_helper_transfer_unmap;
         pctx->buffer_subdata = u_default_buffer_subdata;
         pctx->texture_subdata = u_default_texture_subdata;
         pctx->create_surface = vc5_create_surface;

@@ -215,7 +215,8 @@ struct fd_context {
 		uint64_t prims_emitted;
 		uint64_t prims_generated;
 		uint64_t draw_calls;
-		uint64_t batch_total, batch_sysmem, batch_gmem, batch_restore;
+		uint64_t batch_total, batch_sysmem, batch_gmem, batch_nondraw, batch_restore;
+		uint64_t staging_uploads, shadow_uploads;
 	} stats;
 
 	/* Current batch.. the rule here is that you can deref ctx->batch
@@ -303,7 +304,7 @@ struct fd_context {
 
 	/* draw: */
 	bool (*draw_vbo)(struct fd_context *ctx, const struct pipe_draw_info *info,
-                         unsigned index_offset);
+			unsigned index_offset);
 	bool (*clear)(struct fd_context *ctx, unsigned buffers,
 			const union pipe_color_union *color, double depth, unsigned stencil);
 
@@ -327,6 +328,14 @@ struct fd_context {
 	void (*query_prepare_tile)(struct fd_batch *batch, uint32_t n,
 			struct fd_ringbuffer *ring);
 	void (*query_set_stage)(struct fd_batch *batch, enum fd_render_stage stage);
+
+	/* blit: */
+	void (*blit)(struct fd_context *ctx, const struct pipe_blit_info *info);
+
+	/* simple gpu "memcpy": */
+	void (*mem_to_mem)(struct fd_ringbuffer *ring, struct pipe_resource *dst,
+			unsigned dst_off, struct pipe_resource *src, unsigned src_off,
+			unsigned sizedwords);
 
 	/*
 	 * Common pre-cooked VBO state (used for a3xx and later):
