@@ -214,7 +214,7 @@ void vi_dcc_clear_level(struct si_context *sctx,
 		assert(rtex->resource.b.b.nr_samples <= 1);
 		clear_size = rtex->surface.dcc_size;
 	} else {
-		unsigned num_layers = util_max_layer(&rtex->resource.b.b, level) + 1;
+		unsigned num_layers = util_num_layers(&rtex->resource.b.b, level);
 
 		/* If this is 0, fast clear isn't possible. (can occur with MSAA) */
 		assert(rtex->surface.u.legacy.level[level].dcc_fast_clear_size);
@@ -425,12 +425,11 @@ static void si_do_fast_color_clear(struct si_context *sctx,
 		 * the eliminate pass can be higher than the benefit of fast
 		 * clear. The closed driver does this, but the numbers may differ.
 		 *
-		 * Always use fast clear on APUs.
+		 * This helps on both dGPUs and APUs, even small APUs like Mullins.
 		 */
-		bool too_small = sctx->screen->info.has_dedicated_vram &&
-				 tex->resource.b.b.nr_samples <= 1 &&
-				 tex->resource.b.b.width0 <= 256 &&
-				 tex->resource.b.b.height0 <= 256;
+		bool too_small = tex->resource.b.b.nr_samples <= 1 &&
+				 tex->resource.b.b.width0 *
+				 tex->resource.b.b.height0 <= 512 * 512;
 
 		/* Try to clear DCC first, otherwise try CMASK. */
 		if (vi_dcc_enabled(tex, 0)) {

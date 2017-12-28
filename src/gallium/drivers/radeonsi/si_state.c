@@ -896,7 +896,7 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 
 	si_pm4_set_reg(pm4, R_0286D4_SPI_INTERP_CONTROL_0,
 		S_0286D4_FLAT_SHADE_ENA(1) |
-		S_0286D4_PNT_SPRITE_ENA(1) |
+		S_0286D4_PNT_SPRITE_ENA(state->point_quad_rasterization) |
 		S_0286D4_PNT_SPRITE_OVRD_X(V_0286D4_SPI_PNT_SPRITE_SEL_S) |
 		S_0286D4_PNT_SPRITE_OVRD_Y(V_0286D4_SPI_PNT_SPRITE_SEL_T) |
 		S_0286D4_PNT_SPRITE_OVRD_Z(V_0286D4_SPI_PNT_SPRITE_SEL_0) |
@@ -2450,16 +2450,25 @@ static void si_initialize_color_surface(struct si_context *sctx,
 	}
 
 	if (sctx->b.chip_class >= VI) {
-		unsigned max_uncompressed_block_size = 2;
+		unsigned max_uncompressed_block_size = V_028C78_MAX_BLOCK_SIZE_256B;
+		unsigned min_compressed_block_size = V_028C78_MIN_BLOCK_SIZE_32B;
+
+		/* amdvlk: [min-compressed-block-size] should be set to 32 for dGPU and
+		   64 for APU because all of our APUs to date use DIMMs which have
+		   a request granularity size of 64B while all other chips have a
+		   32B request size */
+		if (!sctx->screen->info.has_dedicated_vram)
+			min_compressed_block_size = V_028C78_MIN_BLOCK_SIZE_64B;
 
 		if (rtex->resource.b.b.nr_samples > 1) {
 			if (rtex->surface.bpe == 1)
-				max_uncompressed_block_size = 0;
+				max_uncompressed_block_size = V_028C78_MAX_BLOCK_SIZE_64B;
 			else if (rtex->surface.bpe == 2)
-				max_uncompressed_block_size = 1;
+				max_uncompressed_block_size = V_028C78_MAX_BLOCK_SIZE_128B;
 		}
 
 		surf->cb_dcc_control = S_028C78_MAX_UNCOMPRESSED_BLOCK_SIZE(max_uncompressed_block_size) |
+				       S_028C78_MIN_COMPRESSED_BLOCK_SIZE(min_compressed_block_size) |
 		                       S_028C78_INDEPENDENT_64B_BLOCKS(1);
 	}
 
