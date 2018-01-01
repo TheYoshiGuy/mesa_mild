@@ -344,6 +344,7 @@ static const struct debug_control radv_perftest_options[] = {
 	{"nobatchchain", RADV_PERFTEST_NO_BATCHCHAIN},
 	{"sisched", RADV_PERFTEST_SISCHED},
 	{"localbos", RADV_PERFTEST_LOCAL_BOS},
+	{"binning", RADV_PERFTEST_BINNING},
 	{NULL, 0}
 };
 
@@ -1079,6 +1080,13 @@ VkResult radv_CreateDevice(
 				goto fail;
 		}
 	}
+
+	device->pbb_allowed = device->physical_device->rad_info.chip_class >= GFX9 &&
+	                      (device->instance->perftest_flags & RADV_PERFTEST_BINNING);
+
+	/* Disabled and not implemented for now. */
+	device->dfsm_allowed = device->pbb_allowed && false;
+
 
 #if HAVE_LLVM < 0x0400
 	device->llvm_supports_spill = false;
@@ -3181,7 +3189,8 @@ radv_initialise_color_surface(struct radv_device *device,
 				max_uncompressed_block_size = V_028C78_MAX_BLOCK_SIZE_128B;
 		}
 
-		if (iview->image->usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)) {
+		if (iview->image->usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+		                           VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)) {
 			independent_64b_blocks = 1;
 			max_compressed_block_size = V_028C78_MAX_BLOCK_SIZE_64B;
 		} else
