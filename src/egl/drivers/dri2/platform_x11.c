@@ -75,6 +75,7 @@ swrastCreateDrawable(struct dri2_egl_display * dri2_dpy,
    xcb_create_gc(dri2_dpy->conn, dri2_surf->swapgc, dri2_surf->drawable, mask, valgc);
    switch (dri2_surf->depth) {
       case 32:
+      case 30:
       case 24:
          dri2_surf->bytes_per_pixel = 4;
          break;
@@ -782,13 +783,14 @@ dri2_x11_add_configs_for_visuals(struct dri2_egl_display *dri2_dpy,
                   config_count++;
 
             /* Allow a 24-bit RGB visual to match a 32-bit RGBA EGLConfig.
+             * Ditto for 30-bit RGB visuals to match a 32-bit RGBA EGLConfig.
              * Otherwise it will only match a 32-bit RGBA visual.  On a
              * composited window manager on X11, this will make all of the
              * EGLConfigs with destination alpha get blended by the
              * compositor.  This is probably not what the application
              * wants... especially on drivers that only have 32-bit RGBA
              * EGLConfigs! */
-            if (d.data->depth == 24) {
+            if (d.data->depth == 24 || d.data->depth == 30) {
                rgba_masks[3] =
                   ~(rgba_masks[0] | rgba_masks[1] | rgba_masks[2]);
                dri2_conf = dri2_add_config(disp, config, config_count + 1,
@@ -1046,6 +1048,9 @@ dri2_create_image_khr_pixmap(_EGLDisplay *disp, _EGLContext *ctx,
       break;
    case 24:
       format = __DRI_IMAGE_FORMAT_XRGB8888;
+      break;
+   case 30:
+      format = __DRI_IMAGE_FORMAT_XRGB2101010;
       break;
    case 32:
       format = __DRI_IMAGE_FORMAT_ARGB8888;

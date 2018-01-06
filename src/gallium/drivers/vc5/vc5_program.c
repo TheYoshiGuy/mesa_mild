@@ -273,7 +273,8 @@ vc5_setup_shared_key(struct vc5_context *vc5, struct v3d_key *key,
                         continue;
 
                 key->tex[i].return_size =
-                        vc5_get_tex_return_size(sampler->format);
+                        vc5_get_tex_return_size(sampler->format,
+                                                sampler_state->compare_mode);
 
                 /* For 16-bit, we set up the sampler to always return 2
                  * channels (meaning no recompiles for most statechanges),
@@ -286,7 +287,7 @@ vc5_setup_shared_key(struct vc5_context *vc5, struct v3d_key *key,
                                 vc5_get_tex_return_channels(sampler->format);
                 }
 
-                if (vc5_get_tex_return_size(sampler->format) == 32) {
+                if (key->tex[i].return_size == 32) {
                         memcpy(key->tex[i].swizzle,
                                vc5_sampler->swizzle,
                                sizeof(vc5_sampler->swizzle));
@@ -389,6 +390,7 @@ vc5_update_compiled_fs(struct vc5_context *vc5, uint8_t prim_mode)
         }
 
         key->light_twoside = vc5->rasterizer->base.light_twoside;
+        key->shade_model_flat = vc5->rasterizer->base.flatshade;
 
         struct vc5_compiled_shader *old_fs = vc5->prog.fs;
         vc5->prog.fs = vc5_get_compiled_shader(vc5, &key->base);
@@ -398,11 +400,8 @@ vc5_update_compiled_fs(struct vc5_context *vc5, uint8_t prim_mode)
         vc5->dirty |= VC5_DIRTY_COMPILED_FS;
 
         if (old_fs &&
-            (vc5->prog.fs->prog_data.fs->flat_shade_flags !=
-             old_fs->prog_data.fs->flat_shade_flags ||
-             (vc5->rasterizer->base.flatshade &&
-              vc5->prog.fs->prog_data.fs->shade_model_flags !=
-              old_fs->prog_data.fs->shade_model_flags))) {
+            vc5->prog.fs->prog_data.fs->flat_shade_flags !=
+            old_fs->prog_data.fs->flat_shade_flags) {
                 vc5->dirty |= VC5_DIRTY_FLAT_SHADE_FLAGS;
         }
 

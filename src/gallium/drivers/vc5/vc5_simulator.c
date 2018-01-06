@@ -54,6 +54,7 @@
 #include "util/set.h"
 #include "util/u_memory.h"
 #include "util/u_mm.h"
+#include "vc5_simulator_wrapper.h"
 
 #define HW_REGISTER_RO(x) (x)
 #define HW_REGISTER_RW(x) (x)
@@ -61,12 +62,6 @@
 
 #include "vc5_screen.h"
 #include "vc5_context.h"
-#define V3D_TECH_VERSION 3
-#define V3D_REVISION 3
-#define V3D_SUB_REV 0
-#define V3D_HIDDEN_REV 0
-#undef unreachable
-#include "v3d_hw_auto.h"
 
 /** Global (across GEM fds) state for the simulator */
 static struct vc5_simulator_state {
@@ -667,6 +662,20 @@ vc5_simulator_ioctl(int fd, unsigned long request, void *args)
 }
 
 static void
+vc5_simulator_init_regs(void)
+{
+        /* Set OVRTMUOUT to match kernel behavior.
+         *
+         * This means that the texture sampler uniform configuration's tmu
+         * output type field is used, instead of using the hardware default
+         * behavior based on the texture type.  If you want the default
+         * behavior, you can still put "2" in the indirect texture state's
+         * output_type field.
+         */
+        V3D_WRITE(V3D_CTL_0_MISCCFG, V3D_CTL_1_MISCCFG_OVRTMUOUT_SET);
+}
+
+static void
 vc5_simulator_init_global(void)
 {
         mtx_lock(&sim_state.mutex);
@@ -695,6 +704,8 @@ vc5_simulator_init_global(void)
                 _mesa_hash_table_create(NULL,
                                         _mesa_hash_pointer,
                                         _mesa_key_pointer_equal);
+
+        vc5_simulator_init_regs();
 }
 
 void

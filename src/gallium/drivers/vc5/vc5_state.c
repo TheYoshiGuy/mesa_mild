@@ -165,8 +165,10 @@ vc5_create_depth_stencil_alpha_state(struct pipe_context *pctx,
                           cso->depth.func == PIPE_FUNC_LEQUAL) &&
                          (!cso->stencil[0].enabled ||
                           (cso->stencil[0].zfail_op == PIPE_STENCIL_OP_KEEP &&
+                           cso->stencil[0].func == PIPE_FUNC_ALWAYS &&
                            (!cso->stencil[1].enabled ||
-                            cso->stencil[1].zfail_op == PIPE_STENCIL_OP_KEEP))));
+                            (cso->stencil[1].zfail_op == PIPE_STENCIL_OP_KEEP &&
+                             cso->stencil[1].func == PIPE_FUNC_ALWAYS)))));
         }
 
         const struct pipe_stencil_state *front = &cso->stencil[0];
@@ -272,13 +274,6 @@ static void
 vc5_rasterizer_state_bind(struct pipe_context *pctx, void *hwcso)
 {
         struct vc5_context *vc5 = vc5_context(pctx);
-        struct vc5_rasterizer_state *rast = hwcso;
-
-        if (vc5->rasterizer && rast &&
-            vc5->rasterizer->base.flatshade != rast->base.flatshade) {
-                vc5->dirty |= VC5_DIRTY_FLAT_SHADE_FLAGS;
-        }
-
         vc5->rasterizer = hwcso;
         vc5->dirty |= VC5_DIRTY_RASTERIZER;
 }
@@ -556,24 +551,6 @@ vc5_sampler_states_bind(struct pipe_context *pctx,
         stage_tex->num_samplers = new_nr;
 }
 
-static uint32_t
-translate_swizzle(unsigned char pipe_swizzle)
-{
-        switch (pipe_swizzle) {
-        case PIPE_SWIZZLE_0:
-                return 0;
-        case PIPE_SWIZZLE_1:
-                return 1;
-        case PIPE_SWIZZLE_X:
-        case PIPE_SWIZZLE_Y:
-        case PIPE_SWIZZLE_Z:
-        case PIPE_SWIZZLE_W:
-                return 2 + pipe_swizzle;
-        default:
-                unreachable("unknown swizzle");
-        }
-}
-
 static struct pipe_sampler_view *
 vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                         const struct pipe_sampler_view *cso)
@@ -587,19 +564,6 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
         so->base = *cso;
 
         pipe_reference(NULL, &prsc->reference);
-
-        v3dx_pack(&so->p1, TEXTURE_UNIFORM_PARAMETER_1_CFG_MODE1, p1) {
-                p1.return_word_0_of_texture_data = true;
-                if (vc5_get_tex_return_size(cso->format) == 16) {
-                        p1.return_word_1_of_texture_data = true;
-                } else {
-                        int chans = vc5_get_tex_return_channels(cso->format);
-
-                        p1.return_word_1_of_texture_data = chans > 1;
-                        p1.return_word_2_of_texture_data = chans > 2;
-                        p1.return_word_3_of_texture_data = chans > 3;
-                }
-        }
 
         /* Compute the sampler view's swizzle up front. This will be plugged
          * into either the sampler (for 16-bit returns) or the shader's
@@ -655,10 +619,10 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                                                                     &internal_bpp);
 
                         switch (internal_type) {
-                        case INTERNAL_TYPE_8:
+                        case V3D_INTERNAL_TYPE_8:
                                 tex.texture_type = TEXTURE_DATA_FORMAT_RGBA8;
                                 break;
-                        case INTERNAL_TYPE_16F:
+                        case V3D_INTERNAL_TYPE_16F:
                                 tex.texture_type = TEXTURE_DATA_FORMAT_RGBA16F;
                                 break;
                         default:
@@ -674,23 +638,6 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                         tex.srgb = false;
                 } else {
                         tex.texture_type = vc5_get_tex_format(cso->format);
-                }
-
-                /* Note: Contrary to the docs, the swizzle still applies even
-                 * if the return size is 32.  It's just that you probably want
-                 * to swizzle in the shader, because you need the Y/Z/W
-                 * channels to be defined.
-                 */
-                if (vc5_get_tex_return_size(cso->format) != 32) {
-                        tex.swizzle_r = translate_swizzle(so->swizzle[0]);
-                        tex.swizzle_g = translate_swizzle(so->swizzle[1]);
-                        tex.swizzle_b = translate_swizzle(so->swizzle[2]);
-                        tex.swizzle_a = translate_swizzle(so->swizzle[3]);
-                } else {
-                        tex.swizzle_r = translate_swizzle(PIPE_SWIZZLE_X);
-                        tex.swizzle_g = translate_swizzle(PIPE_SWIZZLE_Y);
-                        tex.swizzle_b = translate_swizzle(PIPE_SWIZZLE_Z);
-                        tex.swizzle_a = translate_swizzle(PIPE_SWIZZLE_W);
                 }
 
                 tex.uif_xor_disable = (rsc->slices[0].tiling ==

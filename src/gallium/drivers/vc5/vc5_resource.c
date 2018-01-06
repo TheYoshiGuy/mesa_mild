@@ -133,7 +133,8 @@ vc5_resource_transfer_unmap(struct pipe_context *pctx,
                                               slice->stride,
                                               trans->map, ptrans->stride,
                                               slice->tiling, rsc->cpp,
-                                              rsc->base.height0,
+                                              u_minify(rsc->base.height0,
+                                                       ptrans->level),
                                               &ptrans->box);
                 }
                 free(trans->map);
@@ -237,6 +238,14 @@ vc5_resource_transfer_map(struct pipe_context *pctx,
 
         *pptrans = ptrans;
 
+        /* Our load/store routines work on entire compressed blocks. */
+        ptrans->box.x /= util_format_get_blockwidth(format);
+        ptrans->box.y /= util_format_get_blockheight(format);
+        ptrans->box.width = DIV_ROUND_UP(ptrans->box.width,
+                                         util_format_get_blockwidth(format));
+        ptrans->box.height = DIV_ROUND_UP(ptrans->box.height,
+                                          util_format_get_blockheight(format));
+
         struct vc5_resource_slice *slice = &rsc->slices[level];
         if (rsc->tiled) {
                 /* No direct mappings of tiled, since we need to manually
@@ -265,8 +274,8 @@ vc5_resource_transfer_map(struct pipe_context *pctx,
                 ptrans->layer_stride = ptrans->stride;
 
                 return buf + slice->offset +
-                        ptrans->box.y / util_format_get_blockheight(format) * ptrans->stride +
-                        ptrans->box.x / util_format_get_blockwidth(format) * rsc->cpp +
+                        ptrans->box.y * ptrans->stride +
+                        ptrans->box.x * rsc->cpp +
                         ptrans->box.z * rsc->cube_map_stride;
         }
 
@@ -331,6 +340,8 @@ vc5_setup_slices(struct vc5_resource *rsc)
         uint32_t utile_h = vc5_utile_height(rsc->cpp);
         uint32_t uif_block_w = utile_w * 2;
         uint32_t uif_block_h = utile_h * 2;
+        uint32_t block_width = util_format_get_blockwidth(prsc->format);
+        uint32_t block_height = util_format_get_blockheight(prsc->format);
         bool msaa = prsc->nr_samples > 1;
         /* MSAA textures/renderbuffers are always laid out as single-level
          * UIF.
@@ -353,6 +364,9 @@ vc5_setup_slices(struct vc5_resource *rsc)
                         level_width *= 2;
                         level_height *= 2;
                 }
+
+                level_width = DIV_ROUND_UP(level_width, block_width);
+                level_height = DIV_ROUND_UP(level_height, block_height);
 
                 if (!rsc->tiled) {
                         slice->tiling = VC5_TILING_RASTER;
@@ -443,13 +457,13 @@ vc5_resource_setup(struct pipe_screen *pscreen,
                                                             &internal_type,
                                                             &internal_bpp);
                 switch (internal_bpp) {
-                case INTERNAL_BPP_32:
+                case V3D_INTERNAL_BPP_32:
                         rsc->cpp = 4;
                         break;
-                case INTERNAL_BPP_64:
+                case V3D_INTERNAL_BPP_64:
                         rsc->cpp = 8;
                         break;
-                case INTERNAL_BPP_128:
+                case V3D_INTERNAL_BPP_128:
                         rsc->cpp = 16;
                         break;
                 }
@@ -667,14 +681,14 @@ vc5_create_surface(struct pipe_context *pctx,
         if (util_format_is_depth_or_stencil(psurf->format)) {
                 switch (psurf->format) {
                 case PIPE_FORMAT_Z16_UNORM:
-                        surface->internal_type = INTERNAL_TYPE_DEPTH_16;
+                        surface->internal_type = V3D_INTERNAL_TYPE_DEPTH_16;
                         break;
                 case PIPE_FORMAT_Z32_FLOAT:
                 case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
-                        surface->internal_type = INTERNAL_TYPE_DEPTH_32F;
+                        surface->internal_type = V3D_INTERNAL_TYPE_DEPTH_32F;
                         break;
                 default:
-                        surface->internal_type = INTERNAL_TYPE_DEPTH_24;
+                        surface->internal_type = V3D_INTERNAL_TYPE_DEPTH_24;
                 }
         } else {
                 uint32_t bpp, type;

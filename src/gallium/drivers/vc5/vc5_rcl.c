@@ -152,6 +152,14 @@ vc5_rcl_emit_generic_per_tile_list(struct vc5_job *job, int last_cbuf)
          */
         cl_emit(cl, TILE_COORDINATES_IMPLICIT, coords);
 
+        /* The binner starts out writing tiles assuming that the initial mode
+         * is triangles, so make sure that's the case.
+         */
+        cl_emit(cl, PRIMITIVE_LIST_FORMAT, fmt) {
+                fmt.data_type = LIST_INDEXED;
+                fmt.primitive_type = LIST_TRIANGLES;
+        }
+
         cl_emit(cl, BRANCH_TO_IMPLICIT_TILE_LIST, branch);
 
         bool needs_color_clear = job->cleared & pipe_clear_color_buffers;
@@ -326,7 +334,7 @@ vc5_emit_rcl(struct vc5_job *job)
                         clear.render_target_number = i;
                 };
 
-                if (surf->internal_bpp >= INTERNAL_BPP_64) {
+                if (surf->internal_bpp >= V3D_INTERNAL_BPP_64) {
                         cl_emit(&job->rcl, TILE_RENDERING_MODE_CONFIGURATION_CLEAR_COLORS_PART2,
                                 clear) {
                                 clear.clear_color_mid_low_32_bits =
@@ -339,7 +347,7 @@ vc5_emit_rcl(struct vc5_job *job)
                         };
                 }
 
-                if (surf->internal_bpp >= INTERNAL_BPP_128 || clear_pad) {
+                if (surf->internal_bpp >= V3D_INTERNAL_BPP_128 || clear_pad) {
                         cl_emit(&job->rcl, TILE_RENDERING_MODE_CONFIGURATION_CLEAR_COLORS_PART3,
                                 clear) {
                                 clear.uif_padded_height_in_uif_blocks = clear_pad;

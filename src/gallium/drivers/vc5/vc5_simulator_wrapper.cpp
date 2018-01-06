@@ -1,5 +1,5 @@
 /*
- * Copyright © 2017 Red Hat
+ * Copyright © 2017 Broadcom
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,42 +21,61 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef AC_SHADER_INFO_H
-#define AC_SHADER_INFO_H
-
-struct nir_shader;
-struct ac_nir_compiler_options;
-
-struct ac_shader_info {
-	bool needs_push_constants;
-	uint32_t desc_set_used_mask;
-	bool needs_multiview_view_index;
-	bool uses_invocation_id;
-	bool uses_prim_id;
-	struct {
-		bool has_vertex_buffers; /* needs vertex buffers and base/start */
-		bool needs_draw_id;
-		bool needs_instance_id;
-	} vs;
-	struct {
-		bool force_persample;
-		bool needs_sample_positions;
-		bool uses_input_attachments;
-	} ps;
-	struct {
-		bool uses_grid_size;
-		bool uses_block_id[3];
-		bool uses_thread_id[3];
-		bool uses_local_invocation_idx;
-	} cs;
-};
-
-/* A NIR pass to gather all the info needed to optimise the allocation patterns
- * for the RADV user sgprs
+/** @file
+ *
+ * Wraps bits of the V3D simulator interface in a C interface for the
+ * vc5_simulator.c code to use.
  */
-void
-ac_nir_shader_info_pass(struct nir_shader *nir,
-			const struct ac_nir_compiler_options *options,
-			struct ac_shader_info *info);
 
-#endif
+#ifdef USE_VC5_SIMULATOR
+
+#include "vc5_simulator_wrapper.h"
+
+#define V3D_TECH_VERSION 3
+#define V3D_REVISION 3
+#define V3D_SUB_REV 0
+#define V3D_HIDDEN_REV 0
+#define V3D_COMPAT_REV 0
+#include "v3d_hw_auto.h"
+
+extern "C" {
+
+struct v3d_hw *v3d_hw_auto_new(void *in_params)
+{
+        return v3d_hw_auto_make_unique().release();
+}
+
+
+uint32_t v3d_hw_get_mem(const struct v3d_hw *hw, size_t *size, void **p)
+{
+        return hw->get_mem(size, p);
+}
+
+bool v3d_hw_alloc_mem(struct v3d_hw *hw, size_t min_size)
+{
+        return hw->alloc_mem(min_size) == V3D_HW_ALLOC_SUCCESS;
+}
+
+bool v3d_hw_has_gca(struct v3d_hw *hw)
+{
+        return hw->has_gca();
+}
+
+uint32_t v3d_hw_read_reg(struct v3d_hw *hw, uint32_t reg)
+{
+        return hw->read_reg(reg);
+}
+
+void v3d_hw_write_reg(struct v3d_hw *hw, uint32_t reg, uint32_t val)
+{
+        hw->write_reg(reg, val);
+}
+
+void v3d_hw_tick(struct v3d_hw *hw)
+{
+        return hw->tick();
+}
+
+}
+
+#endif /* USE_VC5_SIMULATOR */
