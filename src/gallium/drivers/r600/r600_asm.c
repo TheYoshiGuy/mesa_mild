@@ -1008,6 +1008,7 @@ static int r600_bytecode_alloc_inst_kcache_lines(struct r600_bytecode *bc,
 			continue;
 
 		bank = alu->src[i].kc_bank;
+		assert(bank < R600_MAX_HW_CONST_BUFFERS);
 		line = (sel-512)>>4;
 		index_mode = alu->src[i].kc_rel ? 1 : 0; // V_SQ_CF_INDEX_0 / V_SQ_CF_INDEX_NONE
 
@@ -1509,7 +1510,8 @@ int cm_bytecode_add_cf_end(struct r600_bytecode *bc)
 /* common to all 3 families */
 static int r600_bytecode_vtx_build(struct r600_bytecode *bc, struct r600_bytecode_vtx *vtx, unsigned id)
 {
-	bc->bytecode[id] = S_SQ_VTX_WORD0_BUFFER_ID(vtx->buffer_id) |
+	bc->bytecode[id] = S_SQ_VTX_WORD0_VTX_INST(vtx->op) |
+			S_SQ_VTX_WORD0_BUFFER_ID(vtx->buffer_id) |
 			S_SQ_VTX_WORD0_FETCH_TYPE(vtx->fetch_type) |
 			S_SQ_VTX_WORD0_SRC_GPR(vtx->src_gpr) |
 			S_SQ_VTX_WORD0_SRC_SEL_X(vtx->src_sel_x);

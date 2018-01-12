@@ -141,12 +141,6 @@ static bool r600_query_sw_begin(struct r600_common_context *rctx,
 	case R600_QUERY_NUM_DB_CACHE_FLUSHES:
 		query->begin_result = rctx->num_db_cache_flushes;
 		break;
-	case R600_QUERY_NUM_L2_INVALIDATES:
-		query->begin_result = rctx->num_L2_invalidates;
-		break;
-	case R600_QUERY_NUM_L2_WRITEBACKS:
-		query->begin_result = rctx->num_L2_writebacks;
-		break;
 	case R600_QUERY_NUM_RESIDENT_HANDLES:
 		query->begin_result = rctx->num_resident_handles;
 		break;
@@ -298,12 +292,6 @@ static bool r600_query_sw_end(struct r600_common_context *rctx,
 		break;
 	case R600_QUERY_NUM_DB_CACHE_FLUSHES:
 		query->end_result = rctx->num_db_cache_flushes;
-		break;
-	case R600_QUERY_NUM_L2_INVALIDATES:
-		query->end_result = rctx->num_L2_invalidates;
-		break;
-	case R600_QUERY_NUM_L2_WRITEBACKS:
-		query->end_result = rctx->num_L2_writebacks;
 		break;
 	case R600_QUERY_NUM_RESIDENT_HANDLES:
 		query->end_result = rctx->num_resident_handles;
@@ -1830,12 +1818,31 @@ void r600_query_fix_enabled_rb_mask(struct r600_common_screen *rscreen)
 	struct r600_resource *buffer;
 	uint32_t *results;
 	unsigned i, mask = 0;
-	unsigned max_rbs = ctx->screen->info.num_render_backends;
+	unsigned max_rbs;
+	
+	if (ctx->family == CHIP_JUNIPER) {
+		/*
+		 * Fix for predication lockups - the chip can only ever have
+		 * 4 RBs, however it looks like the predication logic assumes
+		 * there's 8, trying to read results from query buffers never
+		 * written to. By increasing this number we'll write the
+		 * status bit for these as per the normal disabled rb logic.
+		 */
+		ctx->screen->info.num_render_backends = 8;
+	}
+	max_rbs = ctx->screen->info.num_render_backends;
 
 	assert(rscreen->chip_class <= CAYMAN);
 
-	/* if backend_map query is supported by the kernel */
-	if (rscreen->info.r600_gb_backend_map_valid) {
+	/*
+	 * if backend_map query is supported by the kernel.
+	 * Note the kernel drm driver for a long time never filled in the
+	 * associated data on eg/cm, only on r600/r700, hence ignore the valid
+	 * bit there if the map is zero.
+	 * (Albeit some chips with just one active rb can have a valid 0 map.)
+	 */ 
+	if (rscreen->info.r600_gb_backend_map_valid &&
+	    (ctx->chip_class < EVERGREEN || rscreen->info.r600_gb_backend_map != 0)) {
 		unsigned num_tile_pipes = rscreen->info.num_tile_pipes;
 		unsigned backend_map = rscreen->info.r600_gb_backend_map;
 		unsigned item_width, item_mask;
@@ -1895,8 +1902,13 @@ void r600_query_fix_enabled_rb_mask(struct r600_common_screen *rscreen)
 
 	r600_resource_reference(&buffer, NULL);
 
-	if (mask)
+	if (mask) {
+		if (rscreen->debug_flags & DBG_INFO &&
+		    mask != rscreen->info.enabled_rb_mask) {
+			printf("enabled_rb_mask (fixed) = 0x%x\n", mask);
+		}
 		rscreen->info.enabled_rb_mask = mask;
+	}
 }
 
 #define XFULL(name_, query_type_, type_, result_type_, group_id_) \
@@ -1932,8 +1944,6 @@ static struct pipe_driver_query_info r600_driver_query_list[] = {
 	X("num-cs-flushes",		NUM_CS_FLUSHES,		UINT64, AVERAGE),
 	X("num-CB-cache-flushes",	NUM_CB_CACHE_FLUSHES,	UINT64, AVERAGE),
 	X("num-DB-cache-flushes",	NUM_DB_CACHE_FLUSHES,	UINT64, AVERAGE),
-	X("num-L2-invalidates",		NUM_L2_INVALIDATES,	UINT64, AVERAGE),
-	X("num-L2-writebacks",		NUM_L2_WRITEBACKS,	UINT64, AVERAGE),
 	X("num-resident-handles",	NUM_RESIDENT_HANDLES,	UINT64, AVERAGE),
 	X("tc-offloaded-slots",		TC_OFFLOADED_SLOTS,     UINT64, AVERAGE),
 	X("tc-direct-slots",		TC_DIRECT_SLOTS,	UINT64, AVERAGE),

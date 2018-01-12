@@ -228,13 +228,11 @@ VkResult radv_CreatePipelineLayout(
 
 	layout->dynamic_offset_count = dynamic_offset_count;
 	layout->push_constant_size = 0;
-	layout->push_constant_stages = 0;
 
 	for (unsigned i = 0; i < pCreateInfo->pushConstantRangeCount; ++i) {
 		const VkPushConstantRange *range = pCreateInfo->pPushConstantRanges + i;
 		layout->push_constant_size = MAX2(layout->push_constant_size,
 						  range->offset + range->size);
-		layout->push_constant_stages |= range->stageFlags;
 	}
 
 	layout->push_constant_size = align(layout->push_constant_size, 16);
@@ -454,8 +452,10 @@ VkResult radv_CreateDescriptorPool(
 	}
 
 	if (bo_size) {
-		pool->bo = device->ws->buffer_create(device->ws, bo_size,
-							32, RADEON_DOMAIN_VRAM, RADEON_FLAG_NO_INTERPROCESS_SHARING);
+		pool->bo = device->ws->buffer_create(device->ws, bo_size, 32,
+						     RADEON_DOMAIN_VRAM,
+						     RADEON_FLAG_NO_INTERPROCESS_SHARING |
+						     RADEON_FLAG_READ_ONLY);
 		pool->mapped_ptr = (uint8_t*)device->ws->buffer_map(pool->bo);
 	}
 	pool->size = bo_size;

@@ -977,10 +977,30 @@ genX(BeginCommandBuffer)(
          anv_render_pass_from_handle(pBeginInfo->pInheritanceInfo->renderPass);
       cmd_buffer->state.subpass =
          &cmd_buffer->state.pass->subpasses[pBeginInfo->pInheritanceInfo->subpass];
-      cmd_buffer->state.framebuffer = NULL;
+
+      /* This is optional in the inheritance info. */
+      cmd_buffer->state.framebuffer =
+         anv_framebuffer_from_handle(pBeginInfo->pInheritanceInfo->framebuffer);
 
       result = genX(cmd_buffer_setup_attachments)(cmd_buffer,
                                                   cmd_buffer->state.pass, NULL);
+
+      /* Record that HiZ is enabled if we can. */
+      if (cmd_buffer->state.framebuffer) {
+         const struct anv_image_view * const iview =
+            anv_cmd_buffer_get_depth_stencil_view(cmd_buffer);
+
+         if (iview) {
+            VkImageLayout layout =
+                cmd_buffer->state.subpass->depth_stencil_attachment.layout;
+
+            enum isl_aux_usage aux_usage =
+               anv_layout_to_aux_usage(&cmd_buffer->device->info, iview->image,
+                                       VK_IMAGE_ASPECT_DEPTH_BIT, layout);
+
+            cmd_buffer->state.hiz_enabled = aux_usage == ISL_AUX_USAGE_HIZ;
+         }
+      }
 
       cmd_buffer->state.dirty |= ANV_CMD_DIRTY_RENDER_TARGETS;
    }
@@ -1057,6 +1077,15 @@ genX(CmdExecuteCommands)(
 
       anv_cmd_buffer_add_secondary(primary, secondary);
    }
+
+   /* The secondary may have selected a different pipeline (3D or compute) and
+    * may have changed the current L3$ configuration.  Reset our tracking
+    * variables to invalid values to ensure that we re-emit these in the case
+    * where we do any draws or compute dispatches from the primary after the
+    * secondary has returned.
+    */
+   primary->state.current_pipeline = UINT32_MAX;
+   primary->state.current_l3_config = NULL;
 
    /* Each of the secondary command buffers will use its own state base
     * address.  We need to re-emit state base address for the primary after
@@ -2714,6 +2743,8 @@ static void
 genX(flush_pipeline_select)(struct anv_cmd_buffer *cmd_buffer,
                             uint32_t pipeline)
 {
+   UNUSED const struct gen_device_info *devinfo = &cmd_buffer->device->info;
+
    if (cmd_buffer->state.current_pipeline == pipeline)
       return;
 
@@ -2763,6 +2794,25 @@ genX(flush_pipeline_select)(struct anv_cmd_buffer *cmd_buffer,
 #endif
       ps.PipelineSelection = pipeline;
    }
+
+#if GEN_GEN == 9
+   if (devinfo->is_geminilake) {
+      /* Project: DevGLK
+       *
+       * "This chicken bit works around a hardware issue with barrier logic
+       *  encountered when switching between GPGPU and 3D pipelines.  To
+       *  workaround the issue, this mode bit should be set after a pipeline
+       *  is selected."
+       */
+      uint32_t scec;
+      anv_pack_struct(&scec, GENX(SLICE_COMMON_ECO_CHICKEN1),
+                      .GLKBarrierMode =
+                          pipeline == GPGPU ? GLK_BARRIER_MODE_GPGPU
+                                            : GLK_BARRIER_MODE_3D_HULL,
+                      .GLKBarrierModeMask = 1);
+      emit_lri(&cmd_buffer->batch, GENX(SLICE_COMMON_ECO_CHICKEN1_num), scec);
+   }
+#endif
 
    cmd_buffer->state.current_pipeline = pipeline;
 }

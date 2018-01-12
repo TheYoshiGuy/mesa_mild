@@ -263,6 +263,12 @@ radv_physical_device_init(struct radv_physical_device *device,
 	 */
 	device->has_clear_state = device->rad_info.chip_class >= CIK;
 
+	device->cpdma_prefetch_writes_memory = device->rad_info.chip_class <= VI;
+
+	/* Vega10/Raven need a special workaround for a hardware bug. */
+	device->has_scissor_bug = device->rad_info.family == CHIP_VEGA10 ||
+				  device->rad_info.family == CHIP_RAVEN;
+
 	radv_physical_device_init_mem_types(device);
 
 	result = radv_init_wsi(device);
@@ -621,8 +627,8 @@ void radv_GetPhysicalDeviceProperties(
 	 * there is no set limit, so we just set a pipeline limit. I don't think
 	 * any app is going to hit this soon. */
 	size_t max_descriptor_set_size = ((1ull << 31) - 16 * MAX_DYNAMIC_BUFFERS) /
-	          (32 /* uniform buffer, 32 due to potential space wasted on alignement */ +
-	           32 /* storage buffer, 32 due to potential space wasted on alignement */ +
+	          (32 /* uniform buffer, 32 due to potential space wasted on alignment */ +
+	           32 /* storage buffer, 32 due to potential space wasted on alignment */ +
 	           32 /* sampler, largest when combined with image */ +
 	           64 /* sampled image */ +
 	           64 /* storage image */);
@@ -786,6 +792,12 @@ void radv_GetPhysicalDeviceProperties2KHR(
 			VkPhysicalDevicePointClippingPropertiesKHR *properties =
 			    (VkPhysicalDevicePointClippingPropertiesKHR*)ext;
 			properties->pointClippingBehavior = VK_POINT_CLIPPING_BEHAVIOR_ALL_CLIP_PLANES_KHR;
+			break;
+		}
+		case  VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DISCARD_RECTANGLE_PROPERTIES_EXT: {
+			VkPhysicalDeviceDiscardRectanglePropertiesEXT *properties =
+			    (VkPhysicalDeviceDiscardRectanglePropertiesEXT*)ext;
+			properties->maxDiscardRectangles = MAX_DISCARD_RECTANGLES;
 			break;
 		}
 		default:
@@ -1603,7 +1615,9 @@ radv_get_preamble_cs(struct radv_queue *queue,
 		                                                 size,
 		                                                 4096,
 		                                                 RADEON_DOMAIN_VRAM,
-		                                                 RADEON_FLAG_CPU_ACCESS|RADEON_FLAG_NO_INTERPROCESS_SHARING);
+		                                                 RADEON_FLAG_CPU_ACCESS |
+								 RADEON_FLAG_NO_INTERPROCESS_SHARING |
+								 RADEON_FLAG_READ_ONLY);
 		if (!descriptor_bo)
 			goto fail;
 	} else
@@ -3801,6 +3815,14 @@ VkResult radv_GetSemaphoreFdKHR(VkDevice _device,
 		break;
 	case VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT_KHR:
 		ret = device->ws->export_syncobj_to_sync_file(device->ws, syncobj_handle, pFd);
+		if (!ret) {
+			if (sem->temp_syncobj) {
+				close (sem->temp_syncobj);
+				sem->temp_syncobj = 0;
+			} else {
+				device->ws->reset_syncobj(device->ws, syncobj_handle);
+			}
+		}
 		break;
 	default:
 		unreachable("Unhandled semaphore handle type");
@@ -3882,6 +3904,14 @@ VkResult radv_GetFenceFdKHR(VkDevice _device,
 		break;
 	case VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT_KHR:
 		ret = device->ws->export_syncobj_to_sync_file(device->ws, syncobj_handle, pFd);
+		if (!ret) {
+			if (fence->temp_syncobj) {
+				close (fence->temp_syncobj);
+				fence->temp_syncobj = 0;
+			} else {
+				device->ws->reset_syncobj(device->ws, syncobj_handle);
+			}
+		}
 		break;
 	default:
 		unreachable("Unhandled fence handle type");

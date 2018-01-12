@@ -30,8 +30,10 @@ es2_glapi_mapi_tmp_h = custom_target(
 libgles2 = shared_library(
   'GLESv2',
   ['../entry.c', es2_glapi_mapi_tmp_h],
-  c_args : [c_msvc_compat_args, c_vis_args, '-DMAPI_MODE_BRIDGE',
-            '-DMAPI_ABI_HEADER="@0@"'.format(es2_glapi_mapi_tmp_h.full_path())],
+  c_args : [
+    c_msvc_compat_args, c_vis_args, '-DMAPI_MODE_BRIDGE',
+    '-DMAPI_ABI_HEADER="@0@"'.format(es2_glapi_mapi_tmp_h.full_path()),
+  ],
   link_args : [ld_args_gc_sections],
   include_directories : [inc_src, inc_include, inc_mapi],
   link_with : libglapi,
@@ -50,7 +52,8 @@ pkg.generate(
 )
 
 if with_tests
-  test('es2-ABI-check',
+  test(
+    'es2-ABI-check',
     find_program('ABI-check'),
     args : libgles2
   )

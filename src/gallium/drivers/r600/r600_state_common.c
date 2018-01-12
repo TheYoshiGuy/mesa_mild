@@ -1230,6 +1230,7 @@ void r600_update_driver_const_buffers(struct r600_context *rctx, bool compute_on
 		if (!info->vs_ucp_dirty &&
 		    !info->texture_const_dirty &&
 		    !info->ps_sample_pos_dirty &&
+		    !info->tcs_default_levels_dirty &&
 		    !info->cs_block_grid_size_dirty)
 			continue;
 
@@ -1246,7 +1247,7 @@ void r600_update_driver_const_buffers(struct r600_context *rctx, bool compute_on
 			info->vs_ucp_dirty = false;
 		}
 
-		if (info->ps_sample_pos_dirty) {
+		else if (info->ps_sample_pos_dirty) {
 			assert(sh == PIPE_SHADER_FRAGMENT);
 			if (!size) {
 				ptr = rctx->sample_positions;
@@ -1257,7 +1258,7 @@ void r600_update_driver_const_buffers(struct r600_context *rctx, bool compute_on
 			info->ps_sample_pos_dirty = false;
 		}
 
-		if (info->cs_block_grid_size_dirty) {
+		else if (info->cs_block_grid_size_dirty) {
 			assert(sh == PIPE_SHADER_COMPUTE);
 			if (!size) {
 				ptr = rctx->cs_block_grid_sizes;
@@ -1266,6 +1267,20 @@ void r600_update_driver_const_buffers(struct r600_context *rctx, bool compute_on
 				memcpy(ptr, rctx->cs_block_grid_sizes, R600_CS_BLOCK_GRID_SIZE);
 			}
 			info->cs_block_grid_size_dirty = false;
+		}
+
+		else if (info->tcs_default_levels_dirty) {
+			/*
+			 * We'd only really need this for default tcs shader.
+			 */
+			assert(sh == PIPE_SHADER_TESS_CTRL);
+			if (!size) {
+				ptr = rctx->tess_state;
+				size = R600_TCS_DEFAULT_LEVELS_SIZE;
+			} else {
+				memcpy(ptr, rctx->tess_state, R600_TCS_DEFAULT_LEVELS_SIZE);
+			}
+			info->tcs_default_levels_dirty = false;
 		}
 
 		if (info->texture_const_dirty) {
@@ -1277,6 +1292,8 @@ void r600_update_driver_const_buffers(struct r600_context *rctx, bool compute_on
 				memcpy(ptr, rctx->sample_positions, R600_UCP_SIZE);
 			if (sh == PIPE_SHADER_COMPUTE)
 				memcpy(ptr, rctx->cs_block_grid_sizes, R600_CS_BLOCK_GRID_SIZE);
+			if (sh == PIPE_SHADER_TESS_CTRL)
+				memcpy(ptr, rctx->tess_state, R600_TCS_DEFAULT_LEVELS_SIZE);
 		}
 		info->texture_const_dirty = false;
 
@@ -1357,14 +1374,12 @@ static void r600_setup_buffer_constants(struct r600_context *rctx, int shader_ty
 }
 
 /* On evergreen we store one value
- * 1. buffer size for TXQ or
- * 2. number of cube layers in a cube map array.
+ * 1. number of cube layers in a cube map array.
  */
 void eg_setup_buffer_constants(struct r600_context *rctx, int shader_type)
 {
 	struct r600_textures_info *samplers = &rctx->samplers[shader_type];
 	struct r600_image_state *images = NULL;
-	struct r600_image_state *buffers = NULL;
 	int bits, sview_bits, img_bits;
 	uint32_t array_size;
 	int i;
@@ -1373,29 +1388,23 @@ void eg_setup_buffer_constants(struct r600_context *rctx, int shader_type)
 
 	if (shader_type == PIPE_SHADER_FRAGMENT) {
 		images = &rctx->fragment_images;
-		buffers = &rctx->fragment_buffers;
 	} else if (shader_type == PIPE_SHADER_COMPUTE) {
 		images = &rctx->compute_images;
-		buffers = &rctx->compute_buffers;
 	}
 
 	if (!samplers->views.dirty_buffer_constants &&
-	    (images && !images->dirty_buffer_constants) &&
-	    (buffers && !buffers->dirty_buffer_constants))
+	    !(images && images->dirty_buffer_constants))
 		return;
 
 	if (images)
 		images->dirty_buffer_constants = FALSE;
-	if (buffers)
-		buffers->dirty_buffer_constants = FALSE;
 	samplers->views.dirty_buffer_constants = FALSE;
 
 	bits = sview_bits = util_last_bit(samplers->views.enabled_mask);
 	if (images)
 		bits += util_last_bit(images->enabled_mask);
 	img_bits = bits;
-	if (buffers)
-		bits += util_last_bit(buffers->enabled_mask);
+
 	array_size = bits * sizeof(uint32_t);
 
 	constants = r600_alloc_buf_consts(rctx, shader_type, array_size,
@@ -1404,12 +1413,7 @@ void eg_setup_buffer_constants(struct r600_context *rctx, int shader_type)
 	for (i = 0; i < sview_bits; i++) {
 		if (samplers->views.enabled_mask & (1 << i)) {
 			uint32_t offset = (base_offset / 4) + i;
-			if (samplers->views.views[i]->base.target == PIPE_BUFFER) {
-				constants[offset] = samplers->views.views[i]->base.u.buf.size /
-					        util_format_get_blocksize(samplers->views.views[i]->base.format);
-			} else {
-				constants[offset] = samplers->views.views[i]->base.texture->array_size / 6;
-			}
+			constants[offset] = samplers->views.views[i]->base.texture->array_size / 6;
 		}
 	}
 	if (images) {
@@ -1417,23 +1421,7 @@ void eg_setup_buffer_constants(struct r600_context *rctx, int shader_type)
 			int idx = i - sview_bits;
 			if (images->enabled_mask & (1 << idx)) {
 				uint32_t offset = (base_offset / 4) + i;
-				if (images->views[i].base.resource->target == PIPE_BUFFER) {
-					constants[offset] = images->views[i].base.u.buf.size /
-						        util_format_get_blocksize(images->views[i].base.format);
-				} else {
-					constants[offset] = images->views[i].base.resource->array_size / 6;
-				}
-			}
-		}
-	}
-	if (buffers) {
-		for (i = img_bits; i < bits; i++) {
-			int idx = i - img_bits;
-			if (buffers->enabled_mask & (1 << idx)) {
-				uint32_t offset = (base_offset / 4) + i;
-				assert(buffers->views[i].base.resource->target == PIPE_BUFFER);
-				constants[offset] = buffers->views[i].base.u.buf.size /
-					        util_format_get_blocksize(buffers->views[i].base.format);
+				constants[offset] = images->views[i].base.resource->array_size / 6;
 			}
 		}
 	}
@@ -1550,11 +1538,11 @@ static void r600_generate_fixed_func_tcs(struct r600_context *rctx)
 
 	assert(!rctx->fixed_func_tcs_shader);
 
-	ureg_DECL_constant2D(ureg, 0, 3, R600_LDS_INFO_CONST_BUFFER);
-	const0 = ureg_src_dimension(ureg_src_register(TGSI_FILE_CONSTANT, 2),
-				    R600_LDS_INFO_CONST_BUFFER);
-	const1 = ureg_src_dimension(ureg_src_register(TGSI_FILE_CONSTANT, 3),
-				    R600_LDS_INFO_CONST_BUFFER);
+	ureg_DECL_constant2D(ureg, 0, 1, R600_BUFFER_INFO_CONST_BUFFER);
+	const0 = ureg_src_dimension(ureg_src_register(TGSI_FILE_CONSTANT, 0),
+				    R600_BUFFER_INFO_CONST_BUFFER);
+	const1 = ureg_src_dimension(ureg_src_register(TGSI_FILE_CONSTANT, 1),
+				    R600_BUFFER_INFO_CONST_BUFFER);
 
 	tessouter = ureg_DECL_output(ureg, TGSI_SEMANTIC_TESSOUTER, 0);
 	tessinner = ureg_DECL_output(ureg, TGSI_SEMANTIC_TESSINNER, 0);
@@ -1736,6 +1724,21 @@ static bool r600_update_derived_state(struct r600_context *rctx)
 		}
 	}
 
+	/*
+	 * XXX: I believe there's some fatal flaw in the dirty state logic when
+	 * enabling/disabling tes.
+	 * VS/ES share all buffer/resource/sampler slots. If TES is enabled,
+	 * it will therefore overwrite the VS slots. If it now gets disabled,
+	 * the VS needs to rebind all buffer/resource/sampler slots - not only
+	 * has TES overwritten the corresponding slots, but when the VS was
+	 * operating as LS the things with correpsonding dirty bits got bound
+	 * to LS slots and won't reflect what is dirty as VS stage even if the
+	 * TES didn't overwrite it. The story for re-enabled TES is similar.
+	 * In any case, we're not allowed to submit any TES state when
+	 * TES is disabled (the state tracker may not do this but this looks
+	 * like an optimization to me, not something which can be relied on).
+	 */
+
 	/* Update clip misc state. */
 	if (clip_so_current) {
 		r600_update_clip_state(rctx, clip_so_current);
@@ -1809,6 +1812,22 @@ static bool r600_update_derived_state(struct r600_context *rctx)
 				r600_setup_buffer_constants(rctx, PIPE_SHADER_GEOMETRY);
 			else
 				eg_setup_buffer_constants(rctx, PIPE_SHADER_GEOMETRY);
+		}
+	}
+
+	if (rctx->tes_shader) {
+		assert(rctx->b.chip_class >= EVERGREEN);
+		need_buf_const = rctx->tes_shader->current->shader.uses_tex_buffers ||
+				 rctx->tes_shader->current->shader.has_txq_cube_array_z_comp;
+		if (need_buf_const) {
+			eg_setup_buffer_constants(rctx, PIPE_SHADER_TESS_EVAL);
+		}
+		if (rctx->tcs_shader) {
+			need_buf_const = rctx->tcs_shader->current->shader.uses_tex_buffers ||
+					 rctx->tcs_shader->current->shader.has_txq_cube_array_z_comp;
+			if (need_buf_const) {
+				eg_setup_buffer_constants(rctx, PIPE_SHADER_TESS_CTRL);
+			}
 		}
 	}
 

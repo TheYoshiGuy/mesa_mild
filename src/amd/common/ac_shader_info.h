@@ -28,7 +28,7 @@ struct nir_shader;
 struct ac_nir_compiler_options;
 
 struct ac_shader_info {
-	bool needs_push_constants;
+	bool loads_push_constants;
 	uint32_t desc_set_used_mask;
 	bool needs_multiview_view_index;
 	bool uses_invocation_id;
@@ -55,7 +55,7 @@ struct ac_shader_info {
  * for the RADV user sgprs
  */
 void
-ac_nir_shader_info_pass(struct nir_shader *nir,
+ac_nir_shader_info_pass(const struct nir_shader *nir,
 			const struct ac_nir_compiler_options *options,
 			struct ac_shader_info *info);
 

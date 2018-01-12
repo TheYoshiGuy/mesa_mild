@@ -121,19 +121,21 @@ brw_nir_trig = custom_target(
   'brw_nir_trig_workarounds.c',
   input : 'brw_nir_trig_workarounds.py',
   output : 'brw_nir_trig_workarounds.c',
-  command : [prog_python2, '@INPUT@', '-p',
-             join_paths(meson.source_root(), 'src/compiler/nir/')],
+  command : [
+    prog_python2, '@INPUT@',
+    '-p', join_paths(meson.source_root(), 'src/compiler/nir/'),
+  ],
   depend_files : nir_algebraic_py,
   capture : true,
 )
 
 libintel_compiler = static_library(
   'intel_compiler',
-  [libintel_compiler_files, brw_nir_trig, nir_opcodes_h, nir_builder_opcodes_h,
-   ir_expression_operation_h],
-  include_directories : [inc_common, inc_intel, inc_nir],
+  [libintel_compiler_files, brw_nir_trig, ir_expression_operation_h],
+  include_directories : [inc_common, inc_intel],
   c_args : [c_vis_args, no_override_init_args],
   cpp_args : [cpp_vis_args],
+  dependencies : idep_nir_headers,
   build_by_default : false,
 )
 
@@ -143,14 +145,17 @@ if with_tests
                'fs_saturate_propagation', 'vf_float_conversions',
                'vec4_register_coalesce', 'vec4_copy_propagation',
                'vec4_cmod_propagation', 'eu_compact', 'eu_validate']
-    _exe = executable(
-      [t, nir_opcodes_h, ir_expression_operation_h],
-      'test_@0@.cpp'.format(t),
-      include_directories : [inc_common, inc_intel],
-      link_with : [libintel_compiler, libintel_common, libnir, libmesa_util,
-                   libisl],
-      dependencies : [dep_thread, dep_dl, idep_gtest],
+    test(
+      t,
+      executable(
+        [t, ir_expression_operation_h],
+        'test_@0@.cpp'.format(t),
+        include_directories : [inc_common, inc_intel],
+        link_with : [
+          libintel_compiler, libintel_common, libmesa_util, libisl,
+        ],
+        dependencies : [dep_thread, dep_dl, idep_gtest, idep_nir],
+      )
     )
-    test(t, _exe)
   endforeach
 endif

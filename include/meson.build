@@ -21,6 +21,7 @@
 inc_drm_uapi = include_directories('drm-uapi')
 inc_vulkan = include_directories('vulkan')
 inc_d3d9 = include_directories('D3D9')
+inc_gl_internal = include_directories('GL/internal')
 
 if with_gles1
   install_headers(
@@ -76,5 +77,24 @@ if with_gallium_st_nine
   install_headers(
     'd3dadapter/d3dadapter9.h', 'd3dadapter/drm.h', 'd3dadapter/present.h',
     subdir : 'd3dadapter',
+  )
+endif
+
+# Only install the headers if we are building a stand alone implementation and
+# not an ICD enabled implementation
+if with_gallium_opencl and not with_opencl_icd
+  install_headers(
+    'CL/cl.h',
+    'CL/cl.hpp',
+    'CL/cl_d3d10.h',
+    'CL/cl_d3d11.h',
+    'CL/cl_dx9_media_sharing.h',
+    'CL/cl_egl.h',
+    'CL/cl_ext.h',
+    'CL/cl_gl.h',
+    'CL/cl_gl_ext.h',
+    'CL/cl_platform.h',
+    'CL/opencl.h',
+    subdir: 'CL'
   )
 endif

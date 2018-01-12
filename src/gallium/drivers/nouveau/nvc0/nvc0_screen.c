@@ -258,8 +258,6 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
    case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
       return 1;
-   case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
-      return (class_3d >= NVE4_3D_CLASS) ? 1 : 0;
    case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
       return nouveau_screen(pscreen)->vram_domain & NOUVEAU_BO_VRAM ? 1 : 0;
    case PIPE_CAP_TGSI_FS_FBFETCH:
@@ -269,8 +267,11 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
    case PIPE_CAP_POST_DEPTH_COVERAGE:
       return class_3d >= GM200_3D_CLASS;
+   case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
    case PIPE_CAP_TGSI_BALLOT:
       return class_3d >= NVE4_3D_CLASS;
+   case PIPE_CAP_BINDLESS_TEXTURE:
+      return class_3d >= NVE4_3D_CLASS && class_3d < GM107_3D_CLASS;
 
    /* unsupported caps */
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
@@ -300,7 +301,6 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
    case PIPE_CAP_INT64_DIVMOD:
    case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
-   case PIPE_CAP_BINDLESS_TEXTURE:
    case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
    case PIPE_CAP_QUERY_SO_OVERFLOW:
    case PIPE_CAP_MEMOBJ:
@@ -741,6 +741,13 @@ nvc0_screen_resize_tls_area(struct nvc0_screen *screen,
                         NULL, &bo);
    if (ret)
       return ret;
+
+   /* Make sure that the pushbuf has acquired a reference to the old tls
+    * segment, as it may have commands that will reference it.
+    */
+   if (screen->tls)
+      PUSH_REFN(screen->base.pushbuf, screen->tls,
+                NV_VRAM_DOMAIN(&screen->base) | NOUVEAU_BO_RDWR);
    nouveau_bo_ref(NULL, &screen->tls);
    screen->tls = bo;
    return 0;
@@ -758,6 +765,12 @@ nvc0_screen_resize_text_area(struct nvc0_screen *screen, uint64_t size)
    if (ret)
       return ret;
 
+   /* Make sure that the pushbuf has acquired a reference to the old text
+    * segment, as it may have commands that will reference it.
+    */
+   if (screen->text)
+      PUSH_REFN(push, screen->text,
+                NV_VRAM_DOMAIN(&screen->base) | NOUVEAU_BO_RD);
    nouveau_bo_ref(NULL, &screen->text);
    screen->text = bo;
 
@@ -1044,7 +1057,8 @@ nvc0_screen_create(struct nouveau_device *dev)
    if (ret)
       FAIL_SCREEN_INIT("Error allocating TEXT area: %d\n", ret);
 
-   ret = nouveau_bo_new(dev, NV_VRAM_DOMAIN(&screen->base), 1 << 12, 7 << 16, NULL,
+   /* 6 user uniform areas, 6 driver areas, and 1 for the runout */
+   ret = nouveau_bo_new(dev, NV_VRAM_DOMAIN(&screen->base), 1 << 12, 13 << 16, NULL,
                         &screen->uniform_bo);
    if (ret)
       FAIL_SCREEN_INIT("Error allocating uniform BO: %d\n", ret);
@@ -1266,8 +1280,11 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    PUSH_KICK (push);
 
-   screen->tic.entries = CALLOC(4096, sizeof(void *));
-   screen->tsc.entries = screen->tic.entries + 2048;
+   screen->tic.entries = CALLOC(
+         NVC0_TIC_MAX_ENTRIES + NVC0_TSC_MAX_ENTRIES + NVE4_IMG_MAX_HANDLES,
+         sizeof(void *));
+   screen->tsc.entries = screen->tic.entries + NVC0_TIC_MAX_ENTRIES;
+   screen->img.entries = (void *)(screen->tsc.entries + NVC0_TSC_MAX_ENTRIES);
 
    if (!nvc0_blitter_create(screen))
       goto fail;

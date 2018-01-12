@@ -78,6 +78,8 @@ ac_llvm_context_init(struct ac_llvm_context *ctx, LLVMContextRef context,
 	ctx->i32_1 = LLVMConstInt(ctx->i32, 1, false);
 	ctx->f32_0 = LLVMConstReal(ctx->f32, 0.0);
 	ctx->f32_1 = LLVMConstReal(ctx->f32, 1.0);
+	ctx->f64_0 = LLVMConstReal(ctx->f64, 0.0);
+	ctx->f64_1 = LLVMConstReal(ctx->f64, 1.0);
 
 	ctx->i1false = LLVMConstInt(ctx->i1, 0, false);
 	ctx->i1true = LLVMConstInt(ctx->i1, 1, false);
@@ -983,11 +985,7 @@ ac_build_buffer_load(struct ac_llvm_context *ctx,
 
 	return ac_build_intrinsic(ctx, name, types[func], args,
 				  ARRAY_SIZE(args),
-				  /* READNONE means writes can't affect it, while
-				   * READONLY means that writes can affect it. */
-				  can_speculate && HAVE_LLVM >= 0x0400 ?
-					  AC_FUNC_ATTR_READNONE :
-					  AC_FUNC_ATTR_READONLY);
+				  ac_get_load_intr_attribs(can_speculate));
 }
 
 LLVMValueRef ac_build_buffer_load_format(struct ac_llvm_context *ctx,
@@ -1007,11 +1005,7 @@ LLVMValueRef ac_build_buffer_load_format(struct ac_llvm_context *ctx,
 	return ac_build_intrinsic(ctx,
 				  "llvm.amdgcn.buffer.load.format.v4f32",
 				  ctx->v4f32, args, ARRAY_SIZE(args),
-				  /* READNONE means writes can't affect it, while
-				   * READONLY means that writes can affect it. */
-				  can_speculate && HAVE_LLVM >= 0x0400 ?
-					  AC_FUNC_ATTR_READNONE :
-					  AC_FUNC_ATTR_READONLY);
+				  ac_get_load_intr_attribs(can_speculate));
 }
 
 /**

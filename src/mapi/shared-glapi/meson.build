@@ -39,8 +39,10 @@ shared_glapi_mapi_tmp_h = custom_target(
 libglapi = shared_library(
   'glapi',
   [files_mapi_glapi, files_mapi_util, shared_glapi_mapi_tmp_h],
-  c_args : [c_msvc_compat_args, '-DMAPI_MODE_GLAPI',
-            '-DMAPI_ABI_HEADER="@0@"'.format(shared_glapi_mapi_tmp_h.full_path())],
+  c_args : [
+    c_msvc_compat_args, '-DMAPI_MODE_GLAPI',
+    '-DMAPI_ABI_HEADER="@0@"'.format(shared_glapi_mapi_tmp_h.full_path()),
+  ],
   link_args : [ld_args_gc_sections],
   include_directories : [inc_src, inc_include, inc_mapi],
   dependencies : [dep_thread, dep_selinux],
@@ -49,14 +51,15 @@ libglapi = shared_library(
 )
 
 if with_tests
-  shared_glapi_test = executable(
-    ['shared-glapi-test', glapitable_h],
-    'tests/check_table.cpp',
-    cpp_args : [cpp_msvc_compat_args],
-    include_directories : [inc_src, inc_include, inc_mapi],
-    link_with : [libglapi],
-    dependencies : [dep_thread, idep_gtest],
+  test(
+    'shared-glapi-test',
+    executable(
+      ['shared-glapi-test', glapitable_h],
+      'tests/check_table.cpp',
+      cpp_args : [cpp_msvc_compat_args],
+      include_directories : [inc_src, inc_include, inc_mapi],
+      link_with : [libglapi],
+      dependencies : [dep_thread, idep_gtest],
+    )
   )
-
-  test('shared-glapi-test', shared_glapi_test)
 endif
