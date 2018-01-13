@@ -1,5 +1,6 @@
 /*
- * Copyright © 2017 Broadcom
+ * Copyright © 2014-2017 Broadcom
+ * Copyright (C) 2012 Rob Clark <robclark@freedesktop.org>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,24 +22,24 @@
  * IN THE SOFTWARE.
  */
 
-#include <stdint.h>
-#include <stdlib.h>
+/* This file generates the per-v3d-version function prototypes.  It must only
+ * be included from vc5_context.h.
+ */
 
 struct v3d_hw;
+struct vc5_format;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+void v3dX(emit_state)(struct pipe_context *pctx);
+void v3dX(emit_rcl)(struct vc5_job *job);
+void v3dX(draw_init)(struct pipe_context *pctx);
+void v3dX(state_init)(struct pipe_context *pctx);
 
-struct v3d_hw *v3d_hw_auto_new(void *params);
-uint32_t v3d_hw_get_mem(const struct v3d_hw *hw, size_t *size, void **p);
-bool v3d_hw_alloc_mem(struct v3d_hw *hw, size_t min_size);
-bool v3d_hw_has_gca(struct v3d_hw *hw);
-uint32_t v3d_hw_read_reg(struct v3d_hw *hw, uint32_t reg);
-void v3d_hw_write_reg(struct v3d_hw *hw, uint32_t reg, uint32_t val);
-void v3d_hw_tick(struct v3d_hw *hw);
-int v3d_hw_get_version(struct v3d_hw *hw);
-
-#ifdef __cplusplus
-}
-#endif
+void v3dX(simulator_init_regs)(struct v3d_hw *v3d);
+int v3dX(simulator_get_param_ioctl)(struct v3d_hw *v3d,
+                                    struct drm_vc5_get_param *args);
+void v3dX(simulator_flush)(struct v3d_hw *v3d, struct drm_vc5_submit_cl *submit,
+                           uint32_t gmp_ofs);
+const struct vc5_format *v3dX(get_format_desc)(enum pipe_format f);
+void v3dX(get_internal_type_bpp_for_output_format)(uint32_t format,
+                                                   uint32_t *type,
+                                                   uint32_t *bpp);

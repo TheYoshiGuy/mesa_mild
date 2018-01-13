@@ -1,5 +1,6 @@
 /*
- * Copyright © 2017 Broadcom
+ * Copyright © 2015 Intel Corporation
+ * Copyright © 2015 Broadcom
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,24 +22,24 @@
  * IN THE SOFTWARE.
  */
 
-#include <stdint.h>
-#include <stdlib.h>
+#ifndef V3DX_MACROS_H
+#define V3DX_MACROS_H
 
-struct v3d_hw;
-
-#ifdef __cplusplus
-extern "C" {
+#ifndef V3D_VERSION
+#  error "The V3D_VERSION macro must be defined"
 #endif
 
-struct v3d_hw *v3d_hw_auto_new(void *params);
-uint32_t v3d_hw_get_mem(const struct v3d_hw *hw, size_t *size, void **p);
-bool v3d_hw_alloc_mem(struct v3d_hw *hw, size_t min_size);
-bool v3d_hw_has_gca(struct v3d_hw *hw);
-uint32_t v3d_hw_read_reg(struct v3d_hw *hw, uint32_t reg);
-void v3d_hw_write_reg(struct v3d_hw *hw, uint32_t reg, uint32_t val);
-void v3d_hw_tick(struct v3d_hw *hw);
-int v3d_hw_get_version(struct v3d_hw *hw);
-
-#ifdef __cplusplus
-}
+#if (V3D_VERSION == 21)
+#  define V3DX(x) V3D21_##x
+#  define v3dX(x) v3d21_##x
+#elif (V3D_VERSION == 33)
+#  define V3DX(x) V3D33_##x
+#  define v3dX(x) v3d33_##x
+#elif (V3D_VERSION == 41)
+#  define V3DX(x) V3D41_##x
+#  define v3dX(x) v3d41_##x
+#else
+#  error "Need to add prefixing macros for this v3d version"
 #endif
+
+#endif /* V3DX_MACROS_H */

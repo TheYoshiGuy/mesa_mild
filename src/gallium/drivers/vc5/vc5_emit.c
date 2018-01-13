@@ -24,7 +24,8 @@
 #include "util/u_format.h"
 #include "util/u_half.h"
 #include "vc5_context.h"
-#include "broadcom/cle/v3d_packet_v33_pack.h"
+#include "broadcom/common/v3d_macros.h"
+#include "broadcom/cle/v3dx_pack.h"
 #include "broadcom/compiler/v3d_compiler.h"
 
 static uint8_t
@@ -75,7 +76,8 @@ vc5_factor(enum pipe_blendfactor factor, bool dst_alpha_one)
 }
 
 static inline uint16_t
-swizzled_border_color(struct pipe_sampler_state *sampler,
+swizzled_border_color(const struct v3d_device_info *devinfo,
+                      struct pipe_sampler_state *sampler,
                       struct vc5_sampler_view *sview,
                       int chan)
 {
@@ -91,7 +93,7 @@ swizzled_border_color(struct pipe_sampler_state *sampler,
          * For swizzling in the shader, we don't do any pre-swizzling of the
          * border color.
          */
-        if (vc5_get_tex_return_size(sview->base.format,
+        if (vc5_get_tex_return_size(devinfo, sview->base.format,
                                     sampler->compare_mode) != 32)
                 swiz = desc->swizzle[swiz];
 
@@ -105,6 +107,7 @@ swizzled_border_color(struct pipe_sampler_state *sampler,
         }
 }
 
+#if V3D_VERSION < 40
 static uint32_t
 translate_swizzle(unsigned char pipe_swizzle)
 {
@@ -134,6 +137,7 @@ emit_one_texture(struct vc5_context *vc5, struct vc5_texture_stateobj *stage_tex
         struct vc5_sampler_view *sview = vc5_sampler_view(psview);
         struct pipe_resource *prsc = psview->texture;
         struct vc5_resource *rsc = vc5_resource(prsc);
+        const struct v3d_device_info *devinfo = &vc5->screen->devinfo;
 
         stage_tex->texture_state[i].offset =
                 vc5_cl_ensure_space(&job->indirect,
@@ -142,15 +146,19 @@ emit_one_texture(struct vc5_context *vc5, struct vc5_texture_stateobj *stage_tex
         vc5_bo_set_reference(&stage_tex->texture_state[i].bo,
                              job->indirect.bo);
 
-        uint32_t return_size = vc5_get_tex_return_size(psview->format,
+        uint32_t return_size = vc5_get_tex_return_size(devinfo, psview->format,
                                                        psampler->compare_mode);
 
         struct V3D33_TEXTURE_SHADER_STATE unpacked = {
                 /* XXX */
-                .border_color_red = swizzled_border_color(psampler, sview, 0),
-                .border_color_green = swizzled_border_color(psampler, sview, 1),
-                .border_color_blue = swizzled_border_color(psampler, sview, 2),
-                .border_color_alpha = swizzled_border_color(psampler, sview, 3),
+                .border_color_red = swizzled_border_color(devinfo, psampler,
+                                                          sview, 0),
+                .border_color_green = swizzled_border_color(devinfo, psampler,
+                                                            sview, 1),
+                .border_color_blue = swizzled_border_color(devinfo, psampler,
+                                                           sview, 2),
+                .border_color_alpha = swizzled_border_color(devinfo, psampler,
+                                                            sview, 3),
 
                 /* In the normal texturing path, the LOD gets clamped between
                  * min/max, and the base_level field (set in the sampler view
@@ -250,6 +258,7 @@ emit_textures(struct vc5_context *vc5, struct vc5_texture_stateobj *stage_tex)
                         emit_one_texture(vc5, stage_tex, i);
         }
 }
+#endif /* V3D_VERSION < 40 */
 
 static uint32_t
 translate_colormask(struct vc5_context *vc5, uint32_t colormask, int rt)
@@ -263,8 +272,39 @@ translate_colormask(struct vc5_context *vc5, uint32_t colormask, int rt)
         return (~colormask) & 0xf;
 }
 
+static void
+emit_rt_blend(struct vc5_context *vc5, struct vc5_job *job,
+              struct pipe_blend_state *blend, int rt)
+{
+        cl_emit(&job->bcl, BLEND_CONFIG, config) {
+                struct pipe_rt_blend_state *rtblend = &blend->rt[rt];
+
+#if V3D_VERSION >= 40
+                config.render_target_mask = 1 << rt;
+#else
+                assert(rt == 0);
+#endif
+
+                config.colour_blend_mode = rtblend->rgb_func;
+                config.colour_blend_dst_factor =
+                        vc5_factor(rtblend->rgb_dst_factor,
+                                   vc5->blend_dst_alpha_one);
+                config.colour_blend_src_factor =
+                        vc5_factor(rtblend->rgb_src_factor,
+                                   vc5->blend_dst_alpha_one);
+
+                config.alpha_blend_mode = rtblend->alpha_func;
+                config.alpha_blend_dst_factor =
+                        vc5_factor(rtblend->alpha_dst_factor,
+                                   vc5->blend_dst_alpha_one);
+                config.alpha_blend_src_factor =
+                        vc5_factor(rtblend->alpha_src_factor,
+                                   vc5->blend_dst_alpha_one);
+        }
+}
+
 void
-vc5_emit_state(struct pipe_context *pctx)
+v3dX(emit_state)(struct pipe_context *pctx)
 {
         struct vc5_context *vc5 = vc5_context(pctx);
         struct vc5_job *job = vc5->job;
@@ -413,24 +453,11 @@ vc5_emit_state(struct pipe_context *pctx)
         if (vc5->dirty & VC5_DIRTY_BLEND && vc5->blend->rt[0].blend_enable) {
                 struct pipe_blend_state *blend = vc5->blend;
 
-                cl_emit(&job->bcl, BLEND_CONFIG, config) {
-                        struct pipe_rt_blend_state *rtblend = &blend->rt[0];
-
-                        config.colour_blend_mode = rtblend->rgb_func;
-                        config.colour_blend_dst_factor =
-                                vc5_factor(rtblend->rgb_dst_factor,
-                                           vc5->blend_dst_alpha_one);
-                        config.colour_blend_src_factor =
-                                vc5_factor(rtblend->rgb_src_factor,
-                                           vc5->blend_dst_alpha_one);
-
-                        config.alpha_blend_mode = rtblend->alpha_func;
-                        config.alpha_blend_dst_factor =
-                                vc5_factor(rtblend->alpha_dst_factor,
-                                           vc5->blend_dst_alpha_one);
-                        config.alpha_blend_src_factor =
-                                vc5_factor(rtblend->alpha_src_factor,
-                                           vc5->blend_dst_alpha_one);
+                if (blend->independent_blend_enable) {
+                        for (int i = 0; i < VC5_MAX_DRAW_BUFFERS; i++)
+                                emit_rt_blend(vc5, job, blend, i);
+                } else {
+                        emit_rt_blend(vc5, job, blend, 0);
                 }
         }
 
@@ -494,11 +521,16 @@ vc5_emit_state(struct pipe_context *pctx)
                 }
         }
 
+#if V3D_VERSION < 40
+        /* Pre-4.x, we have texture state that depends on both the sampler and
+         * the view, so we merge them together at draw time.
+         */
         if (vc5->dirty & VC5_DIRTY_FRAGTEX)
                 emit_textures(vc5, &vc5->fragtex);
 
         if (vc5->dirty & VC5_DIRTY_VERTTEX)
                 emit_textures(vc5, &vc5->verttex);
+#endif
 
         if (vc5->dirty & VC5_DIRTY_FLAT_SHADE_FLAGS) {
                 bool emitted_any = false;
@@ -512,17 +544,17 @@ vc5_emit_state(struct pipe_context *pctx)
 
                                 if (emitted_any) {
                                         flags.action_for_flat_shade_flags_of_lower_numbered_varyings =
-                                                V3D_FLAT_SHADE_ACTION_UNCHANGED;
+                                                V3D_VARYING_FLAGS_ACTION_UNCHANGED;
                                         flags.action_for_flat_shade_flags_of_higher_numbered_varyings =
-                                                V3D_FLAT_SHADE_ACTION_UNCHANGED;
+                                                V3D_VARYING_FLAGS_ACTION_UNCHANGED;
                                 } else {
                                         flags.action_for_flat_shade_flags_of_lower_numbered_varyings =
                                                 ((i == 0) ?
-                                                 V3D_FLAT_SHADE_ACTION_UNCHANGED :
-                                                 V3D_FLAT_SHADE_ACTION_ZEROED);
+                                                 V3D_VARYING_FLAGS_ACTION_UNCHANGED :
+                                                 V3D_VARYING_FLAGS_ACTION_ZEROED);
 
                                         flags.action_for_flat_shade_flags_of_higher_numbered_varyings =
-                                                V3D_FLAT_SHADE_ACTION_ZEROED;
+                                                V3D_VARYING_FLAGS_ACTION_ZEROED;
                                 }
 
                                 flags.flat_shade_flags_for_varyings_v024 =
@@ -541,13 +573,22 @@ vc5_emit_state(struct pipe_context *pctx)
                 struct vc5_streamout_stateobj *so = &vc5->streamout;
 
                 if (so->num_targets) {
+#if V3D_VERSION >= 40
+                        cl_emit(&job->bcl, TRANSFORM_FEEDBACK_SPECS, tfe) {
+                                tfe.number_of_16_bit_output_data_specs_following =
+                                        vc5->prog.bind_vs->num_tf_specs;
+                                tfe.enable =
+                                        (vc5->prog.bind_vs->num_tf_specs != 0 &&
+                                         vc5->active_queries);
+                        };
+#else /* V3D_VERSION < 40 */
                         cl_emit(&job->bcl, TRANSFORM_FEEDBACK_ENABLE, tfe) {
                                 tfe.number_of_32_bit_output_buffer_address_following =
                                         so->num_targets;
                                 tfe.number_of_16_bit_output_data_specs_following =
                                         vc5->prog.bind_vs->num_tf_specs;
                         };
-
+#endif /* V3D_VERSION < 40 */
                         for (int i = 0; i < vc5->prog.bind_vs->num_tf_specs; i++) {
                                 cl_emit_prepacked(&job->bcl,
                                                   &vc5->prog.bind_vs->tf_specs[i]);
@@ -559,12 +600,22 @@ vc5_emit_state(struct pipe_context *pctx)
                                 struct vc5_resource *rsc =
                                         vc5_resource(target->buffer);
 
+#if V3D_VERSION >= 40
+                                cl_emit(&job->bcl, TRANSFORM_FEEDBACK_BUFFER, output) {
+                                        output.buffer_address =
+                                                cl_address(rsc->bo,
+                                                           target->buffer_offset);
+                                        output.buffer_size_in_32_bit_words =
+                                                target->buffer_size >> 2;
+                                        output.buffer_number = i;
+                                }
+#else /* V3D_VERSION < 40 */
                                 cl_emit(&job->bcl, TRANSFORM_FEEDBACK_OUTPUT_ADDRESS, output) {
                                         output.address =
                                                 cl_address(rsc->bo,
                                                            target->buffer_offset);
                                 };
-
+#endif /* V3D_VERSION < 40 */
                                 vc5_job_add_write_resource(vc5->job,
                                                            target->buffer);
                                 /* XXX: buffer_size? */

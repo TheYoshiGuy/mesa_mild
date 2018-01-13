@@ -1,5 +1,5 @@
 /*
- * Copyright © 2017 Broadcom
+ * Copyright © 2014-2018 Broadcom
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,24 +21,34 @@
  * IN THE SOFTWARE.
  */
 
+#define V3D_OUTPUT_IMAGE_FORMAT_NO 255
+
+#include <stdbool.h>
 #include <stdint.h>
-#include <stdlib.h>
 
-struct v3d_hw;
+struct vc5_format {
+        /** Set if the pipe format is defined in the table. */
+        bool present;
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+        /** One of V3D33_OUTPUT_IMAGE_FORMAT_*, or OUTPUT_IMAGE_FORMAT_NO */
+        uint8_t rt_type;
 
-struct v3d_hw *v3d_hw_auto_new(void *params);
-uint32_t v3d_hw_get_mem(const struct v3d_hw *hw, size_t *size, void **p);
-bool v3d_hw_alloc_mem(struct v3d_hw *hw, size_t min_size);
-bool v3d_hw_has_gca(struct v3d_hw *hw);
-uint32_t v3d_hw_read_reg(struct v3d_hw *hw, uint32_t reg);
-void v3d_hw_write_reg(struct v3d_hw *hw, uint32_t reg, uint32_t val);
-void v3d_hw_tick(struct v3d_hw *hw);
-int v3d_hw_get_version(struct v3d_hw *hw);
+        /** One of V3D33_TEXTURE_DATA_FORMAT_*. */
+        uint8_t tex_type;
 
-#ifdef __cplusplus
-}
-#endif
+        /**
+         * Swizzle to apply to the RGBA shader output for storing to the tile
+         * buffer, to the RGBA tile buffer to produce shader input (for
+         * blending), and for turning the rgba8888 texture sampler return
+         * value into shader rgba values.
+         */
+        uint8_t swizzle[4];
+
+        /* Whether the return value is 16F/I/UI or 32F/I/UI. */
+        uint8_t return_size;
+
+        /* If return_size == 32, how many channels are returned by texturing.
+         * 16 always returns 2 pairs of 16 bit values.
+         */
+        uint8_t return_channels;
+};

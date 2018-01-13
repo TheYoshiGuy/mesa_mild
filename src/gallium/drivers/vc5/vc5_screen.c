@@ -82,6 +82,8 @@ vc5_screen_destroy(struct pipe_screen *pscreen)
 static int
 vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 {
+        struct vc5_screen *screen = vc5_screen(pscreen);
+
         switch (param) {
                 /* Supported features (boolean caps). */
         case PIPE_CAP_VERTEX_COLOR_CLAMPED:
@@ -100,7 +102,6 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_START_INSTANCE:
         case PIPE_CAP_TGSI_INSTANCEID:
         case PIPE_CAP_SM3:
-        case PIPE_CAP_INDEP_BLEND_ENABLE: /* XXX */
         case PIPE_CAP_TEXTURE_QUERY_LOD:
         case PIPE_CAP_PRIMITIVE_RESTART:
         case PIPE_CAP_GLSL_OPTIMIZE_CONSERVATIVELY:
@@ -113,6 +114,9 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
         case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
                 return 1;
+
+        case PIPE_CAP_INDEP_BLEND_ENABLE:
+                return screen->devinfo.ver >= 40;
 
         case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
                 return 256;
@@ -127,11 +131,19 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
                 return 1;
 
         case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
-        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
                 return 1;
         case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
-        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
                 return 0;
+        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
+                if (screen->devinfo.ver >= 40)
+                        return 0;
+                else
+                        return 1;
+        case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
+                if (screen->devinfo.ver >= 40)
+                        return 1;
+                else
+                        return 0;
 
         case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
         case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
@@ -419,6 +431,7 @@ vc5_screen_is_format_supported(struct pipe_screen *pscreen,
                                unsigned sample_count,
                                unsigned usage)
 {
+        struct vc5_screen *screen = vc5_screen(pscreen);
         unsigned retval = 0;
 
         if (sample_count > 1 && sample_count != VC5_MAX_SAMPLES)
@@ -483,12 +496,12 @@ vc5_screen_is_format_supported(struct pipe_screen *pscreen,
         }
 
         if ((usage & PIPE_BIND_RENDER_TARGET) &&
-            vc5_rt_format_supported(format)) {
+            vc5_rt_format_supported(&screen->devinfo, format)) {
                 retval |= PIPE_BIND_RENDER_TARGET;
         }
 
         if ((usage & PIPE_BIND_SAMPLER_VIEW) &&
-            vc5_tex_format_supported(format)) {
+            vc5_tex_format_supported(&screen->devinfo, format)) {
                 retval |= PIPE_BIND_SAMPLER_VIEW;
         }
 
@@ -560,7 +573,7 @@ vc5_get_device_info(struct vc5_screen *screen)
         uint32_t minor = (ident1.value >> 0) & 0xf;
         screen->devinfo.ver = major * 10 + minor;
 
-        if (screen->devinfo.ver != 33) {
+        if (screen->devinfo.ver != 33 && screen->devinfo.ver != 41) {
                 fprintf(stderr,
                         "V3D %d.%d not supported by this version of Mesa.\n",
                         screen->devinfo.ver / 10,
