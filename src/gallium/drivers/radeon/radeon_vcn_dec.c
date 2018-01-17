@@ -498,12 +498,17 @@ static rvcn_dec_message_mpeg2_vld_t get_mpeg2_msg(struct radeon_decoder *dec,
 	result.forward_ref_pic_idx = get_ref_pic_idx(dec, pic->ref[0]);
 	result.backward_ref_pic_idx = get_ref_pic_idx(dec, pic->ref[1]);
 
-	result.load_intra_quantiser_matrix = 1;
-	result.load_nonintra_quantiser_matrix = 1;
-
-	for (i = 0; i < 64; ++i) {
-		result.intra_quantiser_matrix[i] = pic->intra_matrix[zscan[i]];
-		result.nonintra_quantiser_matrix[i] = pic->non_intra_matrix[zscan[i]];
+	if(pic->intra_matrix) {
+		result.load_intra_quantiser_matrix = 1;
+		for (i = 0; i < 64; ++i) {
+			result.intra_quantiser_matrix[i] = pic->intra_matrix[zscan[i]];
+		}
+	}
+	if(pic->non_intra_matrix) {
+		result.load_nonintra_quantiser_matrix = 1;
+		for (i = 0; i < 64; ++i) {
+			result.nonintra_quantiser_matrix[i] = pic->non_intra_matrix[zscan[i]];
+		}
 	}
 
 	result.profile_and_level_indication = 0;
@@ -635,10 +640,10 @@ static struct pb_buffer *rvcn_dec_message_decode(struct radeon_decoder *dec,
 	index->size = sizeof(rvcn_dec_message_avc_t);
 	index->filled = 0;
 
-	decode->stream_type = dec->stream_type;;
+	decode->stream_type = dec->stream_type;
 	decode->decode_flags = 0x1;
-	decode->width_in_samples = dec->base.width;;
-	decode->height_in_samples = dec->base.height;;
+	decode->width_in_samples = dec->base.width;
+	decode->height_in_samples = dec->base.height;
 
 	decode->bsd_size = align(dec->bs_size, 128);
 	decode->dpb_size = dec->dpb.res->buf->size;

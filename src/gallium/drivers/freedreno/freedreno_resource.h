@@ -97,6 +97,9 @@ struct fd_resource {
 	 */
 	uint32_t bc_batch_mask;
 
+	unsigned tile_mode : 2;
+	unsigned preferred_tile_mode : 2;
+
 	/*
 	 * LRZ
 	 */
@@ -164,6 +167,16 @@ fd_resource_offset(struct fd_resource *rsc, unsigned level, unsigned layer)
 	return offset;
 }
 
+/* This might be a5xx specific, but higher mipmap levels are always linear: */
+static inline bool
+fd_resource_level_linear(struct pipe_resource *prsc, int level)
+{
+	unsigned w = u_minify(prsc->width0, level);
+	if (w < 16)
+		return true;
+	return false;
+}
+
 void fd_blitter_pipe_begin(struct fd_context *ctx, bool render_cond, bool discard,
 		enum fd_render_stage stage);
 void fd_blitter_pipe_end(struct fd_context *ctx);
@@ -171,6 +184,7 @@ void fd_blitter_pipe_end(struct fd_context *ctx);
 void fd_resource_screen_init(struct pipe_screen *pscreen);
 void fd_resource_context_init(struct pipe_context *pctx);
 
+uint32_t fd_setup_slices(struct fd_resource *rsc);
 void fd_resource_resize(struct pipe_resource *prsc, uint32_t sz);
 
 bool fd_render_condition_check(struct pipe_context *pctx);
