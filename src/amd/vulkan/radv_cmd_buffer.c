@@ -604,21 +604,6 @@ radv_update_multisample_state(struct radv_cmd_buffer *cmd_buffer,
 	radeon_set_context_reg(cmd_buffer->cs, R_028804_DB_EQAA, ms->db_eqaa);
 	radeon_set_context_reg(cmd_buffer->cs, R_028A4C_PA_SC_MODE_CNTL_1, ms->pa_sc_mode_cntl_1);
 
-	if (old_pipeline && num_samples == old_pipeline->graphics.ms.num_samples &&
-	    old_pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.needs_sample_positions == pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.needs_sample_positions)
-		return;
-
-	radeon_set_context_reg_seq(cmd_buffer->cs, R_028BDC_PA_SC_LINE_CNTL, 2);
-	radeon_emit(cmd_buffer->cs, ms->pa_sc_line_cntl);
-	radeon_emit(cmd_buffer->cs, ms->pa_sc_aa_config);
-
-	radv_cayman_emit_msaa_sample_locs(cmd_buffer->cs, num_samples);
-
-	/* GFX9: Flush DFSM when the AA mode changes. */
-	if (cmd_buffer->device->dfsm_allowed) {
-		radeon_emit(cmd_buffer->cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
-		radeon_emit(cmd_buffer->cs, EVENT_TYPE(V_028A90_FLUSH_DFSM) | EVENT_INDEX(0));
-	}
 	if (pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.needs_sample_positions) {
 		uint32_t offset;
 		struct ac_userdata_info *loc = radv_lookup_user_sgpr(pipeline, MESA_SHADER_FRAGMENT, AC_UD_PS_SAMPLE_POS_OFFSET);
@@ -647,6 +632,23 @@ radv_update_multisample_state(struct radv_cmd_buffer *cmd_buffer,
 
 		radeon_set_sh_reg(cmd_buffer->cs, base_reg + loc->sgpr_idx * 4, offset);
 		cmd_buffer->sample_positions_needed = true;
+	}
+
+	if (old_pipeline && num_samples == old_pipeline->graphics.ms.num_samples)
+		return;
+
+	radeon_set_context_reg_seq(cmd_buffer->cs, R_028BDC_PA_SC_LINE_CNTL, 2);
+	radeon_emit(cmd_buffer->cs, ms->pa_sc_line_cntl);
+	radeon_emit(cmd_buffer->cs, ms->pa_sc_aa_config);
+
+	radeon_set_context_reg(cmd_buffer->cs, R_028A48_PA_SC_MODE_CNTL_0, ms->pa_sc_mode_cntl_0);
+
+	radv_cayman_emit_msaa_sample_locs(cmd_buffer->cs, num_samples);
+
+	/* GFX9: Flush DFSM when the AA mode changes. */
+	if (cmd_buffer->device->dfsm_allowed) {
+		radeon_emit(cmd_buffer->cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cmd_buffer->cs, EVENT_TYPE(V_028A90_FLUSH_DFSM) | EVENT_INDEX(0));
 	}
 }
 
@@ -1143,8 +1145,6 @@ radv_emit_scissor(struct radv_cmd_buffer *cmd_buffer)
 			  cmd_buffer->state.dynamic.scissor.scissors,
 			  cmd_buffer->state.dynamic.viewport.viewports,
 			  cmd_buffer->state.emitted_pipeline->graphics.can_use_guardband);
-	radeon_set_context_reg(cmd_buffer->cs, R_028A48_PA_SC_MODE_CNTL_0,
-			       cmd_buffer->state.pipeline->graphics.ms.pa_sc_mode_cntl_0 | S_028A48_VPORT_SCISSOR_ENABLE(count ? 1 : 0));
 }
 
 static void
@@ -4026,7 +4026,9 @@ static void radv_handle_dcc_image_transition(struct radv_cmd_buffer *cmd_buffer,
 					     unsigned dst_queue_mask,
 					     const VkImageSubresourceRange *range)
 {
-	if (src_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+	if (src_layout == VK_IMAGE_LAYOUT_PREINITIALIZED) {
+		radv_initialize_dcc(cmd_buffer, image, 0xffffffffu);
+	} else if (src_layout == VK_IMAGE_LAYOUT_UNDEFINED) {
 		radv_initialize_dcc(cmd_buffer, image,
 		                    radv_layout_dcc_compressed(image, dst_layout, dst_queue_mask) ?
 		                         0x20202020u : 0xffffffffu);

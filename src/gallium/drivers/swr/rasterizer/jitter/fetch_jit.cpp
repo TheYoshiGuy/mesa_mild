@@ -127,12 +127,13 @@ struct FetchJit : public Builder
     void CreateGatherOddFormats(SWR_FORMAT format, Value* pMask, Value* pBase, Value* offsets, Value* result[4]);
     void ConvertFormat(SWR_FORMAT format, Value *texels[4]);
 
+    Value* mpPrivateContext;
     Value* mpFetchInfo;
 };
 
 Function* FetchJit::Create(const FETCH_COMPILE_STATE& fetchState)
 {
-    std::stringstream fnName("FetchShader_", std::ios_base::in | std::ios_base::out | std::ios_base::ate);
+    std::stringstream fnName("FCH_", std::ios_base::in | std::ios_base::out | std::ios_base::ate);
     fnName << ComputeCRC(0, &fetchState, sizeof(fetchState));
 
     Function*    fetch = Function::Create(JM()->mFetchShaderTy, GlobalValue::ExternalLinkage, fnName.str(), JM()->mpCurrentModule);
@@ -145,6 +146,9 @@ Function* FetchJit::Create(const FETCH_COMPILE_STATE& fetchState)
     auto    argitr = fetch->arg_begin();
 
     // Fetch shader arguments
+    mpPrivateContext = &*argitr; ++argitr;
+    mpPrivateContext->setName("privateContext");
+
     mpFetchInfo = &*argitr; ++argitr;
     mpFetchInfo->setName("fetchInfo");
     Value*    pVtxOut = &*argitr;
@@ -353,6 +357,7 @@ Function* FetchJit::Create(const FETCH_COMPILE_STATE& fetchState)
     optPasses.run(*fetch);
 
     JitManager::DumpToFile(fetch, "opt");
+
 
     return fetch;
 }
@@ -2806,8 +2811,10 @@ Value *FetchJit::GenerateCompCtrlVector16(const ComponentControl ctrl)
             Value *pId = BITCAST(LOAD(GEP(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_CurInstance })), mFP32Ty);
             return VBROADCAST_16(pId);
         }
+
+
         case StoreSrc:
-        default:        
+        default:
             SWR_INVALID("Invalid component control");
             return VUNDEF_I_16();
     }
@@ -2822,15 +2829,15 @@ Value *FetchJit::GenerateCompCtrlVector(const ComponentControl ctrl)
 {
     switch (ctrl)
     {
-        case NoStore:
-            return VUNDEF_I();
-        case Store0:
-            return VIMMED1(0);
-        case Store1Fp:
-            return VIMMED1(1.0f);
-        case Store1Int:
-            return VIMMED1(1);
-        case StoreVertexId:
+    case NoStore:
+        return VUNDEF_I();
+    case Store0:
+        return VIMMED1(0);
+    case Store1Fp:
+        return VIMMED1(1.0f);
+    case Store1Int:
+        return VIMMED1(1);
+    case StoreVertexId:
         {
 #if USE_SIMD16_SHADERS
             Value *pId;
@@ -2847,15 +2854,17 @@ Value *FetchJit::GenerateCompCtrlVector(const ComponentControl ctrl)
 #endif
             return pId;
         }
-        case StoreInstanceId:
+    case StoreInstanceId:
         {
             Value *pId = BITCAST(LOAD(GEP(mpFetchInfo, { 0, SWR_FETCH_CONTEXT_CurInstance })), mFP32Ty);
             return VBROADCAST(pId);
         }
-        case StoreSrc:
-        default:
-            SWR_INVALID("Invalid component control");
-            return VUNDEF_I();
+
+
+    case StoreSrc:
+    default:
+        SWR_INVALID("Invalid component control");
+        return VUNDEF_I();
     }
 }
 
@@ -2881,6 +2890,10 @@ bool isComponentEnabled(ComponentEnable enableMask, uint8_t component)
     }
 }
 
+// Don't want two threads compiling the same fetch shader simultaneously
+// Has problems in the JIT cache implementation
+// This is only a problem for fetch right now.
+static std::mutex gFetchCodegenMutex;
 
 //////////////////////////////////////////////////////////////////////////
 /// @brief JITs from fetch shader IR
@@ -2893,6 +2906,7 @@ PFN_FETCH_FUNC JitFetchFunc(HANDLE hJitMgr, const HANDLE hFunc)
     JitManager* pJitMgr = reinterpret_cast<JitManager*>(hJitMgr);
     PFN_FETCH_FUNC pfnFetch;
 
+    gFetchCodegenMutex.lock();
     pfnFetch = (PFN_FETCH_FUNC)(pJitMgr->mpExec->getFunctionAddress(func->getName().str()));
     // MCJIT finalizes modules the first time you JIT code from them. After finalized, you cannot add new IR to the module
     pJitMgr->mIsModuleFinalized = true;
@@ -2907,6 +2921,9 @@ PFN_FETCH_FUNC JitFetchFunc(HANDLE hJitMgr, const HANDLE hFunc)
 #endif
 
     pJitMgr->DumpAsm(const_cast<llvm::Function*>(func), "final");
+    gFetchCodegenMutex.unlock();
+
+
 
     return pfnFetch;
 }

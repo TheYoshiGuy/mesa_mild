@@ -59,8 +59,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    switch (param) {
    case PIPE_CAP_NPOT_TEXTURES:
       return 1;
-   case PIPE_CAP_TWO_SIDED_STENCIL:
-      return 1;
    case PIPE_CAP_SM3:
       return 1;
    case PIPE_CAP_ANISOTROPIC_FILTER:
@@ -75,8 +73,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return vscreen->caps.caps.v1.bset.occlusion_query;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
       return vscreen->caps.caps.v1.bset.mirror_clamp;
-   case PIPE_CAP_TEXTURE_SHADOW_MAP:
-      return 1;
    case PIPE_CAP_TEXTURE_SWIZZLE:
       return 1;
    case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
@@ -141,8 +137,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 0;
    case PIPE_CAP_USER_VERTEX_BUFFERS:
       return 0;
-   case PIPE_CAP_USER_CONSTANT_BUFFERS:
-      return 1;
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 16;
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:

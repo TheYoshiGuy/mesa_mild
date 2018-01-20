@@ -203,7 +203,6 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
    case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
-   case PIPE_CAP_TWO_SIDED_STENCIL:
    case PIPE_CAP_SM3:
    case PIPE_CAP_POINT_SPRITE:
    case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
@@ -211,7 +210,6 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_QUERY_TIME_ELAPSED:
    case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
-   case PIPE_CAP_TEXTURE_SHADOW_MAP:
    case PIPE_CAP_TEXTURE_SWIZZLE:
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
    case PIPE_CAP_INDEP_BLEND_ENABLE:
@@ -231,7 +229,6 @@ swr_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
    case PIPE_CAP_USER_VERTEX_BUFFERS:
-   case PIPE_CAP_USER_CONSTANT_BUFFERS:
    case PIPE_CAP_STREAM_OUTPUT_INTERLEAVE_BUFFERS:
    case PIPE_CAP_QUERY_TIMESTAMP:
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
@@ -1067,9 +1064,6 @@ swr_destroy_screen(struct pipe_screen *p_screen)
    swr_fence_reference(p_screen, &screen->flush_fence, NULL);
 
    JitDestroyContext(screen->hJitMgr);
-#if USE_SIMD16_SHADERS
-   JitDestroyContext(screen->hJitMgr16);
-#endif
 
    if (winsys->destroy)
       winsys->destroy(winsys);
@@ -1153,9 +1147,6 @@ swr_create_screen_internal(struct sw_winsys *winsys)
 
    // Pass in "" for architecture for run-time determination
    screen->hJitMgr = JitCreateContext(KNOB_SIMD_WIDTH, "", "swr");
-#if USE_SIMD16_SHADERS
-   screen->hJitMgr16 = JitCreateContext(16, "", "swr");
-#endif
 
    swr_fence_init(&screen->base);
 

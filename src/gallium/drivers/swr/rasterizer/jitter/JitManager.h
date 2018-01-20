@@ -84,9 +84,11 @@ struct JitLLVMContext : llvm::LLVMContext
 {
 };
 
+
 //////////////////////////////////////////////////////////////////////////
 /// JitCache
 //////////////////////////////////////////////////////////////////////////
+struct JitManager; // Forward Decl
 class JitCache : public llvm::ObjectCache
 {
 public:
@@ -94,7 +96,15 @@ public:
     JitCache();
     virtual ~JitCache() {}
 
-    void SetCpu(const llvm::StringRef& cpu) { mCpu = cpu.str(); }
+    void Init(
+        JitManager* pJitMgr,
+        const llvm::StringRef& cpu,
+        llvm::CodeGenOpt::Level level)
+    {
+        mCpu = cpu.str();
+        mpJitMgr = pJitMgr;
+        mOptLevel = level;
+    }
 
     /// notifyObjectCompiled - Provides a pointer to compiled code for Module M.
     virtual void notifyObjectCompiled(const llvm::Module *M, llvm::MemoryBufferRef Obj);
@@ -107,7 +117,9 @@ public:
 private:
     std::string mCpu;
     llvm::SmallString<MAX_PATH> mCacheDir;
-    uint32_t mCurrentModuleCRC;
+    uint32_t mCurrentModuleCRC = 0;
+    JitManager* mpJitMgr = nullptr;
+    llvm::CodeGenOpt::Level mOptLevel = llvm::CodeGenOpt::None;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -157,8 +169,33 @@ struct JitManager
     JitInstructionSet mArch;
     std::string mCore;
 
+    // Debugging support
+    std::unordered_map<llvm::StructType*, llvm::DIType*> mDebugStructMap;
+
     void SetupNewModule();
 
     void DumpAsm(llvm::Function* pFunction, const char* fileName);
     static void DumpToFile(llvm::Function *f, const char *fileName);
+    static void DumpToFile(llvm::Module *M, const char *fileName);
+    static std::string GetOutputDir();
+
+    // Debugging support methods
+    llvm::DIType* GetDebugType(llvm::Type* pTy);
+    llvm::DIType* GetDebugIntegerType(llvm::Type* pTy);
+    llvm::DIType* GetDebugArrayType(llvm::Type* pTy);
+    llvm::DIType* GetDebugVectorType(llvm::Type* pTy);
+    llvm::DIType* GetDebugFunctionType(llvm::Type* pTy);
+
+    llvm::DIType* GetDebugStructType(llvm::Type* pType)
+    {
+        llvm::StructType* pStructTy = llvm::cast<llvm::StructType>(pType);
+        if (mDebugStructMap.find(pStructTy) == mDebugStructMap.end())
+        {
+            return nullptr;
+        }
+        return mDebugStructMap[pStructTy];
+    }
+
+    llvm::DIType* CreateDebugStructType(llvm::StructType* pType, const std::string& name, llvm::DIFile* pFile, uint32_t lineNum,
+        const std::vector<std::pair<std::string, uint32_t>>& members);
 };

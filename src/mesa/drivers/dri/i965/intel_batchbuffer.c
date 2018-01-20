@@ -83,12 +83,12 @@ intel_batchbuffer_init(struct brw_context *brw)
    struct intel_batchbuffer *batch = &brw->batch;
    const struct gen_device_info *devinfo = &screen->devinfo;
 
-   if (!devinfo->has_llc) {
-      batch->batch.cpu_map = malloc(BATCH_SZ);
-      batch->batch.map = batch->batch.cpu_map;
+   batch->use_shadow_copy = !devinfo->has_llc;
+
+   if (batch->use_shadow_copy) {
+      batch->batch.map = malloc(BATCH_SZ);
       batch->map_next = batch->batch.map;
-      batch->state.cpu_map = malloc(STATE_SZ);
-      batch->state.map = batch->state.cpu_map;
+      batch->state.map = malloc(STATE_SZ);
    }
 
    init_reloc_list(&batch->batch_relocs, 250);
@@ -161,11 +161,28 @@ add_exec_bo(struct intel_batchbuffer *batch, struct brw_bo *bo)
 }
 
 static void
-intel_batchbuffer_reset(struct brw_context *brw)
+recreate_growing_buffer(struct brw_context *brw,
+                        struct brw_growing_bo *grow,
+                        const char *name, unsigned size)
 {
    struct intel_screen *screen = brw->screen;
    struct intel_batchbuffer *batch = &brw->batch;
    struct brw_bufmgr *bufmgr = screen->bufmgr;
+
+   grow->bo = brw_bo_alloc(bufmgr, name, size, 4096);
+   grow->bo->kflags = can_do_exec_capture(screen) ? EXEC_OBJECT_CAPTURE : 0;
+   grow->partial_bo = NULL;
+   grow->partial_bo_map = NULL;
+   grow->partial_bytes = 0;
+
+   if (!batch->use_shadow_copy)
+      grow->map = brw_bo_map(brw, grow->bo, MAP_READ | MAP_WRITE);
+}
+
+static void
+intel_batchbuffer_reset(struct brw_context *brw)
+{
+   struct intel_batchbuffer *batch = &brw->batch;
 
    if (batch->last_bo != NULL) {
       brw_bo_unreference(batch->last_bo);
@@ -173,20 +190,10 @@ intel_batchbuffer_reset(struct brw_context *brw)
    }
    batch->last_bo = batch->batch.bo;
 
-   batch->batch.bo = brw_bo_alloc(bufmgr, "batchbuffer", BATCH_SZ, 4096);
-   if (!batch->batch.cpu_map) {
-      batch->batch.map =
-         brw_bo_map(brw, batch->batch.bo, MAP_READ | MAP_WRITE);
-   }
+   recreate_growing_buffer(brw, &batch->batch, "batchbuffer", BATCH_SZ);
    batch->map_next = batch->batch.map;
 
-   batch->state.bo = brw_bo_alloc(bufmgr, "statebuffer", STATE_SZ, 4096);
-   batch->state.bo->kflags =
-      can_do_exec_capture(screen) ? EXEC_OBJECT_CAPTURE : 0;
-   if (!batch->state.cpu_map) {
-      batch->state.map =
-         brw_bo_map(brw, batch->state.bo, MAP_READ | MAP_WRITE);
-   }
+   recreate_growing_buffer(brw, &batch->state, "statebuffer", STATE_SZ);
 
    /* Avoid making 0 a valid state offset - otherwise the decoder will try
     * and decode data when we use offset 0 as a null pointer.
@@ -243,8 +250,10 @@ intel_batchbuffer_reset_to_saved(struct brw_context *brw)
 void
 intel_batchbuffer_free(struct intel_batchbuffer *batch)
 {
-   free(batch->batch.cpu_map);
-   free(batch->state.cpu_map);
+   if (batch->use_shadow_copy) {
+      free(batch->batch.map);
+      free(batch->state.map);
+   }
 
    for (int i = 0; i < batch->exec_count; i++) {
       brw_bo_unreference(batch->exec_bos[i]);
@@ -259,6 +268,26 @@ intel_batchbuffer_free(struct intel_batchbuffer *batch)
    brw_bo_unreference(batch->state.bo);
    if (batch->state_batch_sizes)
       _mesa_hash_table_destroy(batch->state_batch_sizes, NULL);
+}
+
+/**
+ * Finish copying the old batch/state buffer's contents to the new one
+ * after we tried to "grow" the buffer in an earlier operation.
+ */
+static void
+finish_growing_bos(struct brw_growing_bo *grow)
+{
+   struct brw_bo *old_bo = grow->partial_bo;
+   if (!old_bo)
+      return;
+
+   memcpy(grow->map, grow->partial_bo_map, grow->partial_bytes);
+
+   grow->partial_bo = NULL;
+   grow->partial_bo_map = NULL;
+   grow->partial_bytes = 0;
+
+   brw_bo_unreference(old_bo);
 }
 
 static void
@@ -282,30 +311,38 @@ replace_bo_in_reloc_list(struct brw_reloc_list *rlist,
  */
 static void
 grow_buffer(struct brw_context *brw,
-            struct brw_bo **bo_ptr,
-            uint32_t **map_ptr,
-            uint32_t **cpu_map_ptr,
+            struct brw_growing_bo *grow,
             unsigned existing_bytes,
             unsigned new_size)
 {
    struct intel_batchbuffer *batch = &brw->batch;
    struct brw_bufmgr *bufmgr = brw->bufmgr;
+   struct brw_bo *bo = grow->bo;
 
-   uint32_t *old_map = *map_ptr;
-   struct brw_bo *old_bo = *bo_ptr;
+   perf_debug("Growing %s - ran out of space\n", bo->name);
 
-   struct brw_bo *new_bo =
-      brw_bo_alloc(bufmgr, old_bo->name, new_size, old_bo->align);
-   uint32_t *new_map;
+   if (grow->partial_bo) {
+      /* We've already grown once, and now we need to do it again.
+       * Finish our last grow operation so we can start a new one.
+       * This should basically never happen.
+       */
+      perf_debug("Had to grow multiple times");
+      finish_growing_bos(grow);
+   }
 
-   perf_debug("Growing %s - ran out of space\n", old_bo->name);
+   struct brw_bo *new_bo = brw_bo_alloc(bufmgr, bo->name, new_size, bo->align);
 
    /* Copy existing data to the new larger buffer */
-   if (*cpu_map_ptr) {
-      *cpu_map_ptr = new_map = realloc(*cpu_map_ptr, new_size);
+   grow->partial_bo_map = grow->map;
+
+   if (batch->use_shadow_copy) {
+      /* We can't safely use realloc, as it may move the existing buffer,
+       * breaking existing pointers the caller may still be using.  Just
+       * malloc a new copy and memcpy it like the normal BO path.
+       */
+      grow->map = malloc(new_size);
    } else {
-      new_map = brw_bo_map(brw, new_bo, MAP_READ | MAP_WRITE);
-      memcpy(new_map, old_map, existing_bytes);
+      grow->map = brw_bo_map(brw, new_bo, MAP_READ | MAP_WRITE);
    }
 
    /* Try to put the new BO at the same GTT offset as the old BO (which
@@ -317,21 +354,18 @@ grow_buffer(struct brw_context *brw,
     *
     * Also preserve kflags for EXEC_OBJECT_CAPTURE.
     */
-   new_bo->gtt_offset = old_bo->gtt_offset;
-   new_bo->index = old_bo->index;
-   new_bo->kflags = old_bo->kflags;
+   new_bo->gtt_offset = bo->gtt_offset;
+   new_bo->index = bo->index;
+   new_bo->kflags = bo->kflags;
 
    /* Batch/state buffers are per-context, and if we've run out of space,
     * we must have actually used them before, so...they will be in the list.
     */
-   assert(old_bo->index < batch->exec_count);
-   assert(batch->exec_bos[old_bo->index] == old_bo);
+   assert(bo->index < batch->exec_count);
+   assert(batch->exec_bos[bo->index] == bo);
 
    /* Update the validation list to use the new BO. */
-   batch->exec_bos[old_bo->index] = new_bo;
-   batch->validation_list[old_bo->index].handle = new_bo->gem_handle;
-   brw_bo_reference(new_bo);
-   brw_bo_unreference(old_bo);
+   batch->validation_list[bo->index].handle = new_bo->gem_handle;
 
    if (!batch->use_batch_first) {
       /* We're not using I915_EXEC_HANDLE_LUT, which means we need to go
@@ -340,16 +374,62 @@ grow_buffer(struct brw_context *brw,
        * list, which remains unchanged, so we can skip this.)
        */
       replace_bo_in_reloc_list(&batch->batch_relocs,
-                               old_bo->gem_handle, new_bo->gem_handle);
+                               bo->gem_handle, new_bo->gem_handle);
       replace_bo_in_reloc_list(&batch->state_relocs,
-                               old_bo->gem_handle, new_bo->gem_handle);
+                               bo->gem_handle, new_bo->gem_handle);
    }
 
-   /* Drop the *bo_ptr reference.  This should free the old BO. */
-   brw_bo_unreference(old_bo);
+   /* Exchange the two BOs...without breaking pointers to the old BO.
+    *
+    * Consider this scenario:
+    *
+    * 1. Somebody calls brw_state_batch() to get a region of memory, and
+    *    and then creates a brw_address pointing to brw->batch.state.bo.
+    * 2. They then call brw_state_batch() a second time, which happens to
+    *    grow and replace the state buffer.  They then try to emit a
+    *    relocation to their first section of memory.
+    *
+    * If we replace the brw->batch.state.bo pointer at step 2, we would
+    * break the address created in step 1.  They'd have a pointer to the
+    * old destroyed BO.  Emitting a relocation would add this dead BO to
+    * the validation list...causing /both/ statebuffers to be in the list,
+    * and all kinds of disasters.
+    *
+    * This is not a contrived case - BLORP vertex data upload hits this.
+    *
+    * There are worse scenarios too.  Fences for GL sync objects reference
+    * brw->batch.batch.bo.  If we replaced the batch pointer when growing,
+    * we'd need to chase down every fence and update it to point to the
+    * new BO.  Otherwise, it would refer to a "batch" that never actually
+    * gets submitted, and would fail to trigger.
+    *
+    * To work around both of these issues, we transmutate the buffers in
+    * place, making the existing struct brw_bo represent the new buffer,
+    * and "new_bo" represent the old BO.  This is highly unusual, but it
+    * seems like a necessary evil.
+    *
+    * We also defer the memcpy of the existing batch's contents.  Callers
+    * may make multiple brw_state_batch calls, and retain pointers to the
+    * old BO's map.  We'll perform the memcpy in finish_growing_bo() when
+    * we finally submit the batch, at which point we've finished uploading
+    * state, and nobody should have any old references anymore.
+    *
+    * To do that, we keep a reference to the old BO in grow->partial_bo,
+    * and store the number of bytes to copy in grow->partial_bytes.  We
+    * can monkey with the refcounts directly without atomics because these
+    * are per-context BOs and they can only be touched by this thread.
+    */
+   assert(new_bo->refcount == 1);
+   new_bo->refcount = bo->refcount;
+   bo->refcount = 1;
 
-   *bo_ptr = new_bo;
-   *map_ptr = new_map;
+   struct brw_bo tmp;
+   memcpy(&tmp, bo, sizeof(struct brw_bo));
+   memcpy(bo, new_bo, sizeof(struct brw_bo));
+   memcpy(new_bo, &tmp, sizeof(struct brw_bo));
+
+   grow->partial_bo = new_bo; /* the one reference of the OLD bo */
+   grow->partial_bytes = existing_bytes;
 }
 
 void
@@ -372,8 +452,7 @@ intel_batchbuffer_require_space(struct brw_context *brw, GLuint sz,
       const unsigned new_size =
          MIN2(batch->batch.bo->size + batch->batch.bo->size / 2,
               MAX_BATCH_SIZE);
-      grow_buffer(brw, &batch->batch.bo, &batch->batch.map,
-                  &batch->batch.cpu_map, batch_used, new_size);
+      grow_buffer(brw, &batch->batch, batch_used, new_size);
       batch->map_next = (void *) batch->batch.map + batch_used;
       assert(batch_used + sz < batch->batch.bo->size);
    }
@@ -806,14 +885,12 @@ submit_batch(struct brw_context *brw, int in_fence_fd, int *out_fence_fd)
    struct intel_batchbuffer *batch = &brw->batch;
    int ret = 0;
 
-   if (batch->batch.cpu_map) {
+   if (batch->use_shadow_copy) {
       void *bo_map = brw_bo_map(brw, batch->batch.bo, MAP_WRITE);
-      memcpy(bo_map, batch->batch.cpu_map, 4 * USED_BATCH(*batch));
-   }
+      memcpy(bo_map, batch->batch.map, 4 * USED_BATCH(*batch));
 
-   if (batch->state.cpu_map) {
-      void *bo_map = brw_bo_map(brw, batch->state.bo, MAP_WRITE);
-      memcpy(bo_map, batch->state.cpu_map, batch->state_used);
+      bo_map = brw_bo_map(brw, batch->state.bo, MAP_WRITE);
+      memcpy(bo_map, batch->state.map, batch->state_used);
    }
 
    brw_bo_unmap(batch->batch.bo);
@@ -917,6 +994,9 @@ _intel_batchbuffer_flush_fence(struct brw_context *brw,
 
    brw_finish_batch(brw);
    intel_upload_finish(brw);
+
+   finish_growing_bos(&brw->batch.batch);
+   finish_growing_bos(&brw->batch.state);
 
    if (brw->throttle_batch[0] == NULL) {
       brw->throttle_batch[0] = brw->batch.batch.bo;
@@ -1076,8 +1156,7 @@ brw_state_batch(struct brw_context *brw,
       const unsigned new_size =
          MIN2(batch->state.bo->size + batch->state.bo->size / 2,
               MAX_STATE_SIZE);
-      grow_buffer(brw, &batch->state.bo, &batch->state.map,
-                  &batch->state.cpu_map, batch->state_used, new_size);
+      grow_buffer(brw, &batch->state, batch->state_used, new_size);
       assert(offset + size < batch->state.bo->size);
    }
 

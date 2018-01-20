@@ -70,7 +70,7 @@ using PassManager = llvm::legacy::PassManager;
 #include "llvm/Support/Host.h"
 #include "llvm/Support/DynamicLibrary.h"
 
-
+#include "llvm/IR/DIBuilder.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Type.h"
@@ -132,3 +132,9 @@ using PassManager = llvm::legacy::PassManager;
 #include <mutex>
 
 #include "common/os.h"
+
+#if defined(_WIN32)
+#define JIT_OBJ_EXT ".obj"
+#else
+#define JIT_OBJ_EXT ".o"
+#endif // _WIN32

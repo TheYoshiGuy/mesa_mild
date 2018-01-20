@@ -833,7 +833,8 @@ radv_pipeline_init_multisample_state(struct radv_pipeline *pipeline,
 		S_028A4C_MULTI_SHADER_ENGINE_PRIM_DISCARD_ENABLE(1) |
 		S_028A4C_FORCE_EOV_CNTDWN_ENABLE(1) |
 		S_028A4C_FORCE_EOV_REZ_ENABLE(1);
-	ms->pa_sc_mode_cntl_0 = S_028A48_ALTERNATE_RBS_PER_TILE(pipeline->device->physical_device->rad_info.chip_class >= GFX9);
+	ms->pa_sc_mode_cntl_0 = S_028A48_ALTERNATE_RBS_PER_TILE(pipeline->device->physical_device->rad_info.chip_class >= GFX9) |
+	                        S_028A48_VPORT_SCISSOR_ENABLE(1);
 
 	if (ms->num_samples > 1) {
 		unsigned log_samples = util_logbase2(ms->num_samples);
@@ -1726,10 +1727,16 @@ radv_generate_graphics_pipeline_key(struct radv_pipeline *pipeline,
 
 	key.has_multiview_view_index = has_view_index;
 
+	uint32_t binding_input_rate = 0;
+	for (unsigned i = 0; i < input_state->vertexBindingDescriptionCount; ++i) {
+		if (input_state->pVertexBindingDescriptions[i].inputRate)
+			binding_input_rate |= 1u << input_state->pVertexBindingDescriptions[i].binding;
+	}
+
 	for (unsigned i = 0; i < input_state->vertexAttributeDescriptionCount; ++i) {
 		unsigned binding;
 		binding = input_state->pVertexAttributeDescriptions[i].binding;
-		if (input_state->pVertexBindingDescriptions[binding].inputRate)
+		if (binding_input_rate & (1u << binding))
 			key.instance_rate_inputs |= 1u << input_state->pVertexAttributeDescriptions[i].location;
 	}
 

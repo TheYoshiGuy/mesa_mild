@@ -227,6 +227,10 @@ struct SWR_VS_CONTEXT
     simdscalari mask;           // IN: Active mask for shader
 #if USE_SIMD16_FRONTEND
     uint32_t AlternateOffset;   // IN: amount to offset for interleaving even/odd simd8 in simd16vertex output
+#if USE_SIMD16_VS
+    simd16scalari mask16;	// IN: Active mask for shader (16-wide)
+    simd16scalari VertexID16;	// IN: Vertex ID (16-wide)
+#endif
 #endif
 };
 
@@ -873,9 +877,9 @@ static_assert(sizeof(SWR_BLEND_STATE) == 36, "Invalid SWR_BLEND_STATE size");
 /// FUNCTION POINTERS FOR SHADERS
 
 #if USE_SIMD16_SHADERS
-typedef void(__cdecl *PFN_FETCH_FUNC)(SWR_FETCH_CONTEXT& fetchInfo, simd16vertex& out);
+typedef void(__cdecl *PFN_FETCH_FUNC)(HANDLE hPrivateData, SWR_FETCH_CONTEXT& fetchInfo, simd16vertex& out);
 #else
-typedef void(__cdecl *PFN_FETCH_FUNC)(SWR_FETCH_CONTEXT& fetchInfo, simdvertex& out);
+typedef void(__cdecl *PFN_FETCH_FUNC)(HANDLE hPrivateData, SWR_FETCH_CONTEXT& fetchInfo, simdvertex& out);
 #endif
 typedef void(__cdecl *PFN_VERTEX_FUNC)(HANDLE hPrivateData, SWR_VS_CONTEXT* pVsContext);
 typedef void(__cdecl *PFN_HS_FUNC)(HANDLE hPrivateData, SWR_HS_CONTEXT* pHsContext);
