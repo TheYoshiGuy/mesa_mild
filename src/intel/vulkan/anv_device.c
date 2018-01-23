@@ -433,6 +433,9 @@ anv_physical_device_init(struct anv_physical_device *device,
       goto fail;
    }
 
+   anv_physical_device_get_supported_extensions(device,
+                                                &device->supported_extensions);
+
    device->local_fd = fd;
    return VK_SUCCESS;
 
@@ -475,6 +478,24 @@ static const VkAllocationCallbacks default_alloc = {
    .pfnReallocation = default_realloc_func,
    .pfnFree = default_free_func,
 };
+
+VkResult anv_EnumerateInstanceExtensionProperties(
+    const char*                                 pLayerName,
+    uint32_t*                                   pPropertyCount,
+    VkExtensionProperties*                      pProperties)
+{
+   VK_OUTARRAY_MAKE(out, pProperties, pPropertyCount);
+
+   for (int i = 0; i < ANV_INSTANCE_EXTENSION_COUNT; i++) {
+      if (anv_instance_extensions_supported.extensions[i]) {
+         vk_outarray_append(&out, prop) {
+            *prop = anv_instance_extensions[i];
+         }
+      }
+   }
+
+   return vk_outarray_status(&out);
+}
 
 VkResult anv_CreateInstance(
     const VkInstanceCreateInfo*                 pCreateInfo,
@@ -521,10 +542,22 @@ VkResult anv_CreateInstance(
                        VK_VERSION_PATCH(client_version));
    }
 
+   struct anv_instance_extension_table enabled_extensions = {};
    for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
-      const char *ext_name = pCreateInfo->ppEnabledExtensionNames[i];
-      if (!anv_instance_extension_supported(ext_name))
+      int idx;
+      for (idx = 0; idx < ANV_INSTANCE_EXTENSION_COUNT; idx++) {
+         if (strcmp(pCreateInfo->ppEnabledExtensionNames[i],
+                    anv_instance_extensions[idx].extensionName) == 0)
+            break;
+      }
+
+      if (idx >= ANV_INSTANCE_EXTENSION_COUNT)
          return vk_error(VK_ERROR_EXTENSION_NOT_PRESENT);
+
+      if (!anv_instance_extensions_supported.extensions[idx])
+         return vk_error(VK_ERROR_EXTENSION_NOT_PRESENT);
+
+      enabled_extensions.extensions[idx] = true;
    }
 
    instance = vk_alloc2(&default_alloc, pAllocator, sizeof(*instance), 8,
@@ -540,6 +573,23 @@ VkResult anv_CreateInstance(
       instance->alloc = default_alloc;
 
    instance->apiVersion = client_version;
+   instance->enabled_extensions = enabled_extensions;
+
+   for (unsigned i = 0; i < ARRAY_SIZE(instance->dispatch.entrypoints); i++) {
+      /* Vulkan requires that entrypoints for extensions which have not been
+       * enabled must not be advertised.
+       */
+      if (!anv_entrypoint_is_enabled(i, instance->apiVersion,
+                                     &instance->enabled_extensions, NULL)) {
+         instance->dispatch.entrypoints[i] = NULL;
+      } else if (anv_dispatch_table.entrypoints[i] != NULL) {
+         instance->dispatch.entrypoints[i] = anv_dispatch_table.entrypoints[i];
+      } else {
+         instance->dispatch.entrypoints[i] =
+            anv_tramp_dispatch_table.entrypoints[i];
+      }
+   }
+
    instance->physicalDeviceCount = -1;
 
    result = vk_debug_report_instance_init(&instance->debug_report_callbacks);
@@ -1029,10 +1079,36 @@ void anv_GetPhysicalDeviceMemoryProperties2KHR(
 }
 
 PFN_vkVoidFunction anv_GetInstanceProcAddr(
-    VkInstance                                  instance,
+    VkInstance                                  _instance,
     const char*                                 pName)
 {
-   return anv_lookup_entrypoint(NULL, pName);
+   ANV_FROM_HANDLE(anv_instance, instance, _instance);
+
+   /* The Vulkan 1.0 spec for vkGetInstanceProcAddr has a table of exactly
+    * when we have to return valid function pointers, NULL, or it's left
+    * undefined.  See the table for exact details.
+    */
+   if (pName == NULL)
+      return NULL;
+
+#define LOOKUP_ANV_ENTRYPOINT(entrypoint) \
+   if (strcmp(pName, "vk" #entrypoint) == 0) \
+      return (PFN_vkVoidFunction)anv_##entrypoint
+
+   LOOKUP_ANV_ENTRYPOINT(EnumerateInstanceExtensionProperties);
+   LOOKUP_ANV_ENTRYPOINT(EnumerateInstanceLayerProperties);
+   LOOKUP_ANV_ENTRYPOINT(CreateInstance);
+
+#undef LOOKUP_ANV_ENTRYPOINT
+
+   if (instance == NULL)
+      return NULL;
+
+   int idx = anv_get_entrypoint_index(pName);
+   if (idx < 0)
+      return NULL;
+
+   return instance->dispatch.entrypoints[idx];
 }
 
 /* With version 1+ of the loader interface the ICD should expose
@@ -1056,7 +1132,15 @@ PFN_vkVoidFunction anv_GetDeviceProcAddr(
     const char*                                 pName)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
-   return anv_lookup_entrypoint(&device->info, pName);
+
+   if (!device || !pName)
+      return NULL;
+
+   int idx = anv_get_entrypoint_index(pName);
+   if (idx < 0)
+      return NULL;
+
+   return device->dispatch.entrypoints[idx];
 }
 
 VkResult
@@ -1174,6 +1258,67 @@ anv_device_init_trivial_batch(struct anv_device *device)
    anv_gem_munmap(map, device->trivial_batch_bo.size);
 }
 
+VkResult anv_EnumerateDeviceExtensionProperties(
+    VkPhysicalDevice                            physicalDevice,
+    const char*                                 pLayerName,
+    uint32_t*                                   pPropertyCount,
+    VkExtensionProperties*                      pProperties)
+{
+   ANV_FROM_HANDLE(anv_physical_device, device, physicalDevice);
+   VK_OUTARRAY_MAKE(out, pProperties, pPropertyCount);
+   (void)device;
+
+   for (int i = 0; i < ANV_DEVICE_EXTENSION_COUNT; i++) {
+      if (device->supported_extensions.extensions[i]) {
+         vk_outarray_append(&out, prop) {
+            *prop = anv_device_extensions[i];
+         }
+      }
+   }
+
+   return vk_outarray_status(&out);
+}
+
+static void
+anv_device_init_dispatch(struct anv_device *device)
+{
+   const struct anv_dispatch_table *genX_table;
+   switch (device->info.gen) {
+   case 10:
+      genX_table = &gen10_dispatch_table;
+      break;
+   case 9:
+      genX_table = &gen9_dispatch_table;
+      break;
+   case 8:
+      genX_table = &gen8_dispatch_table;
+      break;
+   case 7:
+      if (device->info.is_haswell)
+         genX_table = &gen75_dispatch_table;
+      else
+         genX_table = &gen7_dispatch_table;
+      break;
+   default:
+      unreachable("unsupported gen\n");
+   }
+
+   for (unsigned i = 0; i < ARRAY_SIZE(device->dispatch.entrypoints); i++) {
+      /* Vulkan requires that entrypoints for extensions which have not been
+       * enabled must not be advertised.
+       */
+      if (!anv_entrypoint_is_enabled(i, device->instance->apiVersion,
+                                     &device->instance->enabled_extensions,
+                                     &device->enabled_extensions)) {
+         device->dispatch.entrypoints[i] = NULL;
+      } else if (genX_table->entrypoints[i]) {
+         device->dispatch.entrypoints[i] = genX_table->entrypoints[i];
+      } else {
+         device->dispatch.entrypoints[i] = anv_dispatch_table.entrypoints[i];
+      }
+   }
+}
+
 VkResult anv_CreateDevice(
     VkPhysicalDevice                            physicalDevice,
     const VkDeviceCreateInfo*                   pCreateInfo,
@@ -1186,10 +1331,22 @@ VkResult anv_CreateDevice(
 
    assert(pCreateInfo->sType == VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
 
+   struct anv_device_extension_table enabled_extensions;
    for (uint32_t i = 0; i < pCreateInfo->enabledExtensionCount; i++) {
-      const char *ext_name = pCreateInfo->ppEnabledExtensionNames[i];
-      if (!anv_physical_device_extension_supported(physical_device, ext_name))
+      int idx;
+      for (idx = 0; idx < ANV_DEVICE_EXTENSION_COUNT; idx++) {
+         if (strcmp(pCreateInfo->ppEnabledExtensionNames[i],
+                    anv_device_extensions[idx].extensionName) == 0)
+            break;
+      }
+
+      if (idx >= ANV_DEVICE_EXTENSION_COUNT)
          return vk_error(VK_ERROR_EXTENSION_NOT_PRESENT);
+
+      if (!physical_device->supported_extensions.extensions[idx])
+         return vk_error(VK_ERROR_EXTENSION_NOT_PRESENT);
+
+      enabled_extensions.extensions[idx] = true;
    }
 
    /* Check enabled features */
@@ -1246,6 +1403,9 @@ VkResult anv_CreateDevice(
 
    device->robust_buffer_access = pCreateInfo->pEnabledFeatures &&
       pCreateInfo->pEnabledFeatures->robustBufferAccess;
+   device->enabled_extensions = enabled_extensions;
+
+   anv_device_init_dispatch(device);
 
    if (pthread_mutex_init(&device->mutex, NULL) != 0) {
       result = vk_error(VK_ERROR_INITIALIZATION_FAILED);

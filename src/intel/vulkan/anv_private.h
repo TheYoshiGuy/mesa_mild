@@ -72,6 +72,7 @@ struct gen_l3_config;
 #include <vulkan/vk_android_native_buffer.h>
 
 #include "anv_entrypoints.h"
+#include "anv_extensions.h"
 #include "isl/isl.h"
 
 #include "common/gen_debug.h"
@@ -769,6 +770,8 @@ struct anv_physical_device {
     bool                                        has_syncobj;
     bool                                        has_syncobj_wait;
 
+    struct anv_device_extension_table           supported_extensions;
+
     uint32_t                                    eu_total;
     uint32_t                                    subslice_total;
 
@@ -793,6 +796,9 @@ struct anv_instance {
     VkAllocationCallbacks                       alloc;
 
     uint32_t                                    apiVersion;
+    struct anv_instance_extension_table         enabled_extensions;
+    struct anv_dispatch_table                   dispatch;
+
     int                                         physicalDeviceCount;
     struct anv_physical_device                  physicalDevice;
 
@@ -802,7 +808,6 @@ struct anv_instance {
 VkResult anv_init_wsi(struct anv_physical_device *physical_device);
 void anv_finish_wsi(struct anv_physical_device *physical_device);
 
-bool anv_instance_extension_supported(const char *name);
 uint32_t anv_physical_device_api_version(struct anv_physical_device *dev);
 bool anv_physical_device_extension_supported(struct anv_physical_device *dev,
                                              const char *name);
@@ -853,6 +858,8 @@ struct anv_device {
     int                                         fd;
     bool                                        can_chain_batches;
     bool                                        robust_buffer_access;
+    struct anv_device_extension_table           enabled_extensions;
+    struct anv_dispatch_table                   dispatch;
 
     struct anv_bo_pool                          batch_bo_pool;
 
@@ -2810,6 +2817,13 @@ struct anv_query_pool {
    uint32_t                                     slots;
    struct anv_bo                                bo;
 };
+
+int anv_get_entrypoint_index(const char *name);
+
+bool
+anv_entrypoint_is_enabled(int index, uint32_t core_version,
+                          const struct anv_instance_extension_table *instance,
+                          const struct anv_device_extension_table *device);
 
 void *anv_lookup_entrypoint(const struct gen_device_info *devinfo,
                             const char *name);

@@ -98,6 +98,9 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		case nir_intrinsic_load_primitive_id:
 			info->uses_primid = 1;
 			break;
+		case nir_intrinsic_load_sample_mask_in:
+			info->reads_samplemask = true;
+			break;
 		case nir_intrinsic_load_tess_level_inner:
 		case nir_intrinsic_load_tess_level_outer:
 			info->reads_tess_factors = true;
@@ -236,6 +239,9 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		info->input_semantic_name[i] = semantic_name;
 		info->input_semantic_index[i] = semantic_index;
 
+		if (semantic_name == TGSI_SEMANTIC_PRIMID)
+			info->uses_primid = true;
+
 		if (variable->data.sample)
 			info->input_interpolate_loc[i] = TGSI_INTERPOLATE_LOC_SAMPLE;
 		else if (variable->data.centroid)
@@ -311,6 +317,11 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		if (nir->info.stage == MESA_SHADER_FRAGMENT) {
 			tgsi_get_gl_frag_result_semantic(variable->data.location,
 				&semantic_name, &semantic_index);
+
+			/* Adjust for dual source blending */
+			if (variable->data.index > 0) {
+				semantic_index++;
+			}
 		} else {
 			tgsi_get_gl_varying_semantic(variable->data.location, true,
 						     &semantic_name, &semantic_index);
@@ -498,6 +509,15 @@ si_lower_nir(struct si_shader_selector* sel)
 		.lower_txp = ~0u,
 	};
 	NIR_PASS_V(sel->nir, nir_lower_tex, &lower_tex_options);
+
+	const nir_lower_subgroups_options subgroups_options = {
+		.subgroup_size = 64,
+		.ballot_bit_size = 32,
+		.lower_to_scalar = true,
+		.lower_subgroup_masks = true,
+		.lower_vote_trivial = false,
+	};
+	NIR_PASS_V(sel->nir, nir_lower_subgroups, &subgroups_options);
 
 	bool progress;
 	do {

@@ -20,7 +20,8 @@
 
 anv_entrypoints = custom_target(
   'anv_entrypoints.[ch]',
-  input : ['anv_entrypoints_gen.py', vk_api_xml, vk_android_native_buffer_xml],
+  input : ['anv_entrypoints_gen.py', vk_api_xml, vk_android_native_buffer_xml,
+           'anv_extensions.py'],
   output : ['anv_entrypoints.h', 'anv_entrypoints.c'],
   command : [
     prog_python2, '@INPUT0@', '--xml', '@INPUT1@', '--xml', '@INPUT2@',
@@ -31,11 +32,23 @@ anv_entrypoints = custom_target(
 
 anv_extensions_c = custom_target(
   'anv_extensions.c',
-  input : ['anv_extensions.py', vk_api_xml, vk_android_native_buffer_xml],
+  input : ['anv_extensions_gen.py', vk_api_xml, vk_android_native_buffer_xml,
+           'anv_extensions.py'],
   output : 'anv_extensions.c',
   command : [
     prog_python2, '@INPUT0@', '--xml', '@INPUT1@', '--xml', '@INPUT2@',
-    '--out', '@OUTPUT@',
+    '--out-c', '@OUTPUT@',
+  ],
+)
+
+anv_extensions_h = custom_target(
+  'anv_extensions.h',
+  input : ['anv_extensions_gen.py', vk_api_xml, vk_android_native_buffer_xml,
+           'anv_extensions.py'],
+  output : 'anv_extensions.h',
+  command : [
+    prog_python2, '@INPUT0@', '--xml', '@INPUT1@', '--xml', '@INPUT2@',
+    '--out-h', '@OUTPUT@',
   ],
 )
 
@@ -132,8 +145,16 @@ libanv_files = files(
   'vk_format_info.h',
 )
 
-anv_deps = []
-anv_flags = []
+anv_deps = [
+  dep_libdrm,
+  dep_valgrind,
+  idep_nir_headers,
+]
+anv_flags = [
+  c_vis_args,
+  no_override_init_args,
+  '-msse2',
+]
 
 if with_platform_x11
   anv_deps += dep_xcb_dri3
@@ -152,18 +173,18 @@ endif
 
 libanv_common = static_library(
   'anv_common',
-  [libanv_files, anv_entrypoints, anv_extensions_c],
+  [libanv_files, anv_entrypoints, anv_extensions_c, anv_extensions_h],
   include_directories : [
     inc_common, inc_intel, inc_compiler, inc_drm_uapi, inc_vulkan_util,
     inc_vulkan_wsi,
   ],
-  c_args : [c_vis_args, no_override_init_args, '-msse2', anv_flags],
-  dependencies : [dep_valgrind, anv_deps, dep_libdrm, idep_nir_headers],
+  c_args : anv_flags,
+  dependencies : anv_deps,
 )
 
 libvulkan_intel = shared_library(
   'vulkan_intel',
-  [files('anv_gem.c'), block_entrypoints],
+  [files('anv_gem.c'), block_entrypoints, anv_extensions_h],
   include_directories : [
     inc_common, inc_intel, inc_compiler, inc_drm_uapi, inc_vulkan_util,
     inc_vulkan_wsi,
@@ -174,9 +195,9 @@ libvulkan_intel = shared_library(
     libvulkan_wsi, libmesa_util,
   ],
   dependencies : [
-    dep_libdrm, dep_thread, dep_dl, dep_m, anv_deps, dep_valgrind, idep_nir,
+    dep_thread, dep_dl, dep_m, anv_deps, idep_nir,
   ],
-  c_args : [c_vis_args, no_override_init_args, '-msse2', anv_flags],
+  c_args : anv_flags,
   link_args : ['-Wl,--build-id=sha1', ld_args_bsymbolic, ld_args_gc_sections],
   install : true,
 )
@@ -184,7 +205,7 @@ libvulkan_intel = shared_library(
 if with_tests
   libvulkan_intel_test = static_library(
     'vulkan_intel_test',
-    [files('anv_gem_stubs.c'), block_entrypoints],
+    [files('anv_gem_stubs.c'), block_entrypoints, anv_extensions_h],
     include_directories : [
       inc_common, inc_intel, inc_compiler, inc_drm_uapi, inc_vulkan_util,
       inc_vulkan_wsi,
@@ -195,10 +216,9 @@ if with_tests
       libvulkan_util, libvulkan_wsi, libmesa_util,
     ],
     dependencies : [
-      dep_libdrm, dep_thread, dep_dl, dep_m, anv_deps, dep_valgrind,
-      idep_nir,
+      dep_thread, dep_dl, dep_m, anv_deps, idep_nir,
     ],
-    c_args : [c_vis_args, no_override_init_args, '-msse2', anv_flags],
+    c_args : anv_flags,
   )
 
   foreach t : ['block_pool_no_free', 'state_pool_no_free',

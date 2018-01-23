@@ -134,7 +134,7 @@ svga_context_create(struct pipe_screen *screen, void *priv, unsigned flags)
 
    svga = CALLOC_STRUCT(svga_context);
    if (!svga)
-      goto cleanup;
+      goto done;
 
    LIST_INITHEAD(&svga->dirty_buffers);
 
@@ -327,6 +327,7 @@ cleanup:
    util_bitmask_destroy(svga->stream_output_id_bm);
    util_bitmask_destroy(svga->query_id_bm);
    FREE(svga);
+   svga = NULL;
 
 done:
    SVGA_STATS_TIME_POP(svgascreen->sws);
