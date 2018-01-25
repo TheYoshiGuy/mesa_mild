@@ -38,6 +38,8 @@ namespace SwrJit
     struct Builder
     {
         Builder(JitManager *pJitMgr);
+        virtual ~Builder() {}
+
         IRBuilder<> *IRB() { return mpIRBuilder; };
         JitManager *JM() { return mpJitMgr; }
 
@@ -92,5 +94,6 @@ namespace SwrJit
 #include "gen_builder_x86.hpp"
 #include "builder_misc.h"
 #include "builder_math.h"
+#include "builder_mem.h"
     };
 }
