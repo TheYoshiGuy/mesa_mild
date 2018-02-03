@@ -249,6 +249,7 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_TGSI_CLOCK:
         case PIPE_CAP_TGSI_TEX_TXF_LZ:
         case PIPE_CAP_NATIVE_FENCE_FD:
+        case PIPE_CAP_FENCE_SIGNAL:
         case PIPE_CAP_TGSI_MUL_ZERO_WINS:
         case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
         case PIPE_CAP_QUERY_SO_OVERFLOW:
@@ -570,7 +571,12 @@ vc5_get_device_info(struct vc5_screen *screen)
         uint32_t minor = (ident1.value >> 0) & 0xf;
         screen->devinfo.ver = major * 10 + minor;
 
-        if (screen->devinfo.ver != 33 && screen->devinfo.ver != 41) {
+        switch (screen->devinfo.ver) {
+        case 33:
+        case 41:
+        case 42:
+                break;
+        default:
                 fprintf(stderr,
                         "V3D %d.%d not supported by this version of Mesa.\n",
                         screen->devinfo.ver / 10,

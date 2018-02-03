@@ -1510,7 +1510,7 @@ int cm_bytecode_add_cf_end(struct r600_bytecode *bc)
 /* common to all 3 families */
 static int r600_bytecode_vtx_build(struct r600_bytecode *bc, struct r600_bytecode_vtx *vtx, unsigned id)
 {
-	bc->bytecode[id] = S_SQ_VTX_WORD0_VTX_INST(vtx->op) |
+	bc->bytecode[id] = S_SQ_VTX_WORD0_VTX_INST(r600_isa_fetch_opcode(bc->isa->hw_class, vtx->op)) |
 			S_SQ_VTX_WORD0_BUFFER_ID(vtx->buffer_id) |
 			S_SQ_VTX_WORD0_FETCH_TYPE(vtx->fetch_type) |
 			S_SQ_VTX_WORD0_SRC_GPR(vtx->src_gpr) |
@@ -2099,9 +2099,12 @@ void r600_bytecode_disasm(struct r600_bytecode *bc)
 				fprintf(stderr, "%04d %08X %08X  %s ", id, bc->bytecode[id],
 						bc->bytecode[id + 1], cfop->name);
 				fprintf(stderr, "%d @%d ", cf->ndw / 4, cf->addr);
-				fprintf(stderr, "\n");
+				if (cf->vpm)
+					fprintf(stderr, "VPM ");
 				if (cf->end_of_program)
 					fprintf(stderr, "EOP ");
+				fprintf(stderr, "\n");
+
 			} else if (cfop->flags & CF_EXP) {
 				int o = 0;
 				const char *exp_type[] = {"PIXEL", "POS  ", "PARAM"};
@@ -2198,6 +2201,8 @@ void r600_bytecode_disasm(struct r600_bytecode *bc)
 					fprintf(stderr, "POP:%X ", cf->pop_count);
 				if (cf->count && (cfop->flags & CF_EMIT))
 					fprintf(stderr, "STREAM%d ", cf->count);
+				if (cf->vpm)
+					fprintf(stderr, "VPM ");
 				if (cf->end_of_program)
 					fprintf(stderr, "EOP ");
 				fprintf(stderr, "\n");

@@ -55,7 +55,6 @@ static const struct debug_named_value debug_options[] = {
 
 	/* Shader compiler options (with no effect on the shader cache): */
 	{ "checkir", DBG(CHECK_IR), "Enable additional sanity checks on shader IR" },
-	{ "precompile", DBG(PRECOMPILE), "Compile one shader variant at shader creation." },
 	{ "nir", DBG(NIR), "Enable experimental NIR shaders" },
 	{ "mono", DBG(MONOLITHIC_SHADERS), "Use old-style monolithic shaders compiled on demand" },
 	{ "nooptvariant", DBG(NO_OPT_VARIANT), "Disable compiling optimized shader variants." },
@@ -464,7 +463,6 @@ static struct pipe_context *si_pipe_create_context(struct pipe_screen *screen,
 /*
  * pipe_screen
  */
-
 static void si_destroy_screen(struct pipe_screen* pscreen)
 {
 	struct si_screen *sscreen = (struct si_screen *)pscreen;

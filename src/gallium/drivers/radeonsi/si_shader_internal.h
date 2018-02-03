@@ -191,10 +191,6 @@ struct si_shader_context {
 
 	LLVMTargetMachineRef tm;
 
-	unsigned range_md_kind;
-	unsigned fpmath_md_kind;
-	LLVMValueRef fpmath_md_2p5_ulp;
-
 	/* Preloaded descriptors. */
 	LLVMValueRef esgs_ring;
 	LLVMValueRef gsvs_ring[4];
@@ -292,6 +288,10 @@ LLVMValueRef si_llvm_load_input_gs(struct ac_shader_abi *abi,
 				   LLVMTypeRef type,
 				   unsigned swizzle);
 
+LLVMValueRef si_nir_lookup_interp_param(struct ac_shader_abi *abi,
+					enum glsl_interp_mode interp,
+					unsigned location);
+
 void si_llvm_emit_store(struct lp_build_tgsi_context *bld_base,
 			const struct tgsi_full_instruction *inst,
 			const struct tgsi_opcode_info *info,
@@ -309,8 +309,6 @@ LLVMValueRef si_get_indirect_index(struct si_shader_context *ctx,
 LLVMValueRef si_get_bounded_indirect_index(struct si_shader_context *ctx,
 					   const struct tgsi_ind_register *ind,
 					   int rel_index, unsigned num);
-
-LLVMTypeRef si_const_array(LLVMTypeRef elem_type, int num_elements);
 
 void si_shader_context_init_alu(struct lp_build_tgsi_context *bld_base);
 void si_shader_context_init_mem(struct si_shader_context *ctx);

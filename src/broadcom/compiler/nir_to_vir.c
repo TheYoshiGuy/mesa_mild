@@ -528,7 +528,9 @@ ntq_emit_comparison(struct v3d_compile *c, struct qreg *dest,
                     nir_alu_instr *sel_instr)
 {
         struct qreg src0 = ntq_get_alu_src(c, compare_instr, 0);
-        struct qreg src1 = ntq_get_alu_src(c, compare_instr, 1);
+        struct qreg src1;
+        if (nir_op_infos[compare_instr->op].num_inputs > 1)
+                src1 = ntq_get_alu_src(c, compare_instr, 1);
         bool cond_invert = false;
 
         switch (compare_instr->op) {
@@ -969,7 +971,11 @@ emit_frag_end(struct v3d_compile *c)
                 switch (glsl_get_base_type(var->type)) {
                 case GLSL_TYPE_UINT:
                 case GLSL_TYPE_INT:
-                        conf |= TLB_TYPE_I32_COLOR;
+                        /* The F32 vs I32 distinction was dropped in 4.2. */
+                        if (c->devinfo->ver < 42)
+                                conf |= TLB_TYPE_I32_COLOR;
+                        else
+                                conf |= TLB_TYPE_F32_COLOR;
                         conf |= ((num_components - 1) <<
                                  TLB_VEC_SIZE_MINUS_1_SHIFT);
 
@@ -1159,7 +1165,7 @@ emit_vert_end(struct v3d_compile *c)
 
         /* GFXH-1684: VPM writes need to be complete by the end of the shader.
          */
-        if (c->devinfo->ver >= 40 && c->devinfo->ver <= 41)
+        if (c->devinfo->ver >= 40 && c->devinfo->ver <= 42)
                 vir_VPMWT(c);
 }
 
@@ -1870,6 +1876,7 @@ nir_to_vir(struct v3d_compile *c)
 }
 
 const nir_shader_compiler_options v3d_nir_options = {
+        .lower_all_io_to_temps = true,
         .lower_extract_byte = true,
         .lower_extract_word = true,
         .lower_bitfield_insert = true,

@@ -1351,10 +1351,10 @@ has_color_buffer_write_enabled(const struct anv_pipeline *pipeline,
       if (binding->set != ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS)
          continue;
 
-      const VkPipelineColorBlendAttachmentState *a =
-         &blend->pAttachments[binding->index];
+      if (binding->index == UINT32_MAX)
+         continue;
 
-      if (binding->index != UINT32_MAX && a->colorWriteMask != 0)
+      if (blend->pAttachments[binding->index].colorWriteMask != 0)
          return true;
    }
 
@@ -1756,7 +1756,6 @@ compute_pipeline_create(
       return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
 
    pipeline->device = device;
-   pipeline->layout = anv_pipeline_layout_from_handle(pCreateInfo->layout);
 
    pipeline->blend_state.map = NULL;
 

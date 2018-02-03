@@ -51,19 +51,19 @@ check_size(const GLfloat *attr)
  * Helper for initializing a vertex array.
  */
 static void
-init_array(struct gl_context *ctx, struct gl_vertex_array *cl,
+init_array(struct gl_context *ctx, struct gl_vertex_array *array,
            unsigned size, const void *pointer)
 {
-   memset(cl, 0, sizeof(*cl));
+   memset(array, 0, sizeof(*array));
 
-   cl->Size = size;
-   cl->Type = GL_FLOAT;
-   cl->Format = GL_RGBA;
-   cl->StrideB = 0;
-   cl->_ElementSize = cl->Size * sizeof(GLfloat);
-   cl->Ptr = pointer;
+   array->Size = size;
+   array->Type = GL_FLOAT;
+   array->Format = GL_RGBA;
+   array->StrideB = 0;
+   array->_ElementSize = array->Size * sizeof(GLfloat);
+   array->Ptr = pointer;
 
-   _mesa_reference_buffer_object(ctx, &cl->BufferObj,
+   _mesa_reference_buffer_object(ctx, &array->BufferObj,
                                  ctx->Shared->NullBufferObj);
 }
 
@@ -82,9 +82,9 @@ init_legacy_currval(struct gl_context *ctx)
     * attribute:
     */
    for (i = 0; i < VERT_ATTRIB_FF_MAX; i++) {
-      struct gl_vertex_array *cl = &vbo->currval[VERT_ATTRIB_FF(i)];
+      struct gl_vertex_array *array = &vbo->currval[VERT_ATTRIB_FF(i)];
 
-      init_array(ctx, cl,
+      init_array(ctx, array,
                  check_size(ctx->Current.Attrib[i]),
                  ctx->Current.Attrib[i]);
    }
@@ -98,9 +98,9 @@ init_generic_currval(struct gl_context *ctx)
    GLuint i;
 
    for (i = 0; i < VERT_ATTRIB_GENERIC_MAX; i++) {
-      struct gl_vertex_array *cl = &vbo->currval[VBO_ATTRIB_GENERIC0 + i];
+      struct gl_vertex_array *array = &vbo->currval[VBO_ATTRIB_GENERIC0 + i];
 
-      init_array(ctx, cl, 1, ctx->Current.Attrib[VERT_ATTRIB_GENERIC0 + i]);
+      init_array(ctx, array, 1, ctx->Current.Attrib[VERT_ATTRIB_GENERIC0 + i]);
    }
 }
 
@@ -115,7 +115,7 @@ init_mat_currval(struct gl_context *ctx)
     * attribute:
     */
    for (i = 0; i < MAT_ATTRIB_MAX; i++) {
-      struct gl_vertex_array *cl =
+      struct gl_vertex_array *array =
          &vbo->currval[VBO_ATTRIB_MAT_FRONT_AMBIENT + i];
       unsigned size;
 
@@ -136,19 +136,23 @@ init_mat_currval(struct gl_context *ctx)
          break;
       }
 
-      init_array(ctx, cl, size, ctx->Light.Material.Attrib[i]);
+      init_array(ctx, array, size, ctx->Light.Material.Attrib[i]);
    }
 }
 
+
+/**
+ * Fallback for when a driver does not call vbo_set_indirect_draw_func().
+ */
 static void
 vbo_draw_indirect_prims(struct gl_context *ctx,
                         GLuint mode,
-                        struct gl_buffer_object *indirect_data,
+                        struct gl_buffer_object *indirect_buffer,
                         GLsizeiptr indirect_offset,
                         unsigned draw_count,
                         unsigned stride,
-                        struct gl_buffer_object *indirect_params,
-                        GLsizeiptr indirect_params_offset,
+                        struct gl_buffer_object *indirect_draw_count_buffer,
+                        GLsizeiptr indirect_draw_count_offset,
                         const struct _mesa_index_buffer *ib)
 {
    struct vbo_context *vbo = vbo_context(ctx);
@@ -160,7 +164,7 @@ vbo_draw_indirect_prims(struct gl_context *ctx,
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "gl%sDraw%sIndirect%s",
                   (draw_count > 1) ? "Multi" : "",
                   ib ? "Elements" : "Arrays",
-                  indirect_params ? "CountARB" : "");
+                  indirect_buffer ? "CountARB" : "");
       return;
    }
 
@@ -174,10 +178,13 @@ vbo_draw_indirect_prims(struct gl_context *ctx,
       prim[i].draw_id = i;
    }
 
+   /* This should always be true at this time */
+   assert(indirect_buffer == ctx->DrawIndirectBuffer);
+
    vbo->draw_prims(ctx, prim, draw_count,
                    ib, false, 0, ~0,
                    NULL, 0,
-                   ctx->DrawIndirectBuffer);
+                   indirect_buffer);
 
    free(prim);
 }
@@ -229,27 +236,8 @@ _vbo_CreateContext(struct gl_context *ctx)
    init_mat_currval(ctx);
    vbo_set_indirect_draw_func(ctx, vbo_draw_indirect_prims);
 
-   /* Build mappings from VERT_ATTRIB -> VBO_ATTRIB depending on type
-    * of vertex program active.
-    */
-   {
-      GLuint i;
-
-      /* make sure all VBO_ATTRIB_ values can fit in an unsigned byte */
-      STATIC_ASSERT(VBO_ATTRIB_MAX <= 255);
-
-      /* identity mapping */
-      for (i = 0; i < ARRAY_SIZE(vbo->map_vp_none); i++)
-         vbo->map_vp_none[i] = i;
-      /* map material attribs to generic slots */
-      for (i = 0; i < MAT_ATTRIB_MAX; i++)
-         vbo->map_vp_none[VERT_ATTRIB_GENERIC(i)]
-            = VBO_ATTRIB_MAT_FRONT_AMBIENT + i;
-
-      for (i = 0; i < ARRAY_SIZE(vbo->map_vp_arb); i++)
-         vbo->map_vp_arb[i] = i;
-   }
-
+   /* make sure all VBO_ATTRIB_ values can fit in an unsigned byte */
+   STATIC_ASSERT(VBO_ATTRIB_MAX <= 255);
 
    /* Hook our functions into exec and compile dispatch tables.  These
     * will pretty much be permanently installed, which means that the

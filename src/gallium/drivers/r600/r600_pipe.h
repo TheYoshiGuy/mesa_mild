@@ -63,6 +63,7 @@
 #define R600_CONTEXT_PS_PARTIAL_FLUSH		(R600_CONTEXT_PRIVATE_FLAG << 8)
 #define R600_CONTEXT_WAIT_3D_IDLE		(R600_CONTEXT_PRIVATE_FLAG << 9)
 #define R600_CONTEXT_WAIT_CP_DMA_IDLE		(R600_CONTEXT_PRIVATE_FLAG << 10)
+#define R600_CONTEXT_CS_PARTIAL_FLUSH           (R600_CONTEXT_PRIVATE_FLAG << 11)
 
 /* the number of CS dwords for flushing and drawing */
 #define R600_MAX_FLUSH_CS_DWORDS	18
@@ -152,8 +153,8 @@ struct r600_cb_misc_state {
 	unsigned blend_colormask; /* 8*4 bits for 8 RGBA colorbuffers */
 	unsigned nr_cbufs;
 	unsigned nr_ps_color_outputs;
-	unsigned nr_image_rats;
-	unsigned nr_buffer_rats;
+	unsigned image_rat_enabled_mask;
+	unsigned buffer_rat_enabled_mask;
 	bool multiwrite;
 	bool dual_src_blend;
 };
@@ -700,6 +701,9 @@ void evergreen_init_color_surface_rat(struct r600_context *rctx,
 					struct r600_surface *surf);
 void evergreen_update_db_shader_control(struct r600_context * rctx);
 bool evergreen_adjust_gprs(struct r600_context *rctx);
+
+uint32_t evergreen_construct_rat_mask(struct r600_context *rctx, struct r600_cb_misc_state *a,
+				      unsigned nr_cbufs);
 /* r600_blit.c */
 void r600_init_blit_functions(struct r600_context *rctx);
 void r600_decompress_depth_textures(struct r600_context *rctx,

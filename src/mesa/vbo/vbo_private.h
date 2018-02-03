@@ -45,10 +45,6 @@ struct _mesa_prim;
 struct vbo_context {
    struct gl_vertex_array currval[VBO_ATTRIB_MAX];
 
-   /** Map VERT_ATTRIB_x to VBO_ATTRIB_y */
-   GLubyte map_vp_none[VERT_ATTRIB_MAX];
-   GLubyte map_vp_arb[VERT_ATTRIB_MAX];
-
    struct vbo_exec_context exec;
    struct vbo_save_context save;
 
@@ -73,56 +69,39 @@ vbo_context(struct gl_context *ctx)
 
 
 /**
- * Return VP_x token to indicate whether we're running fixed-function
- * vertex transformation, an NV vertex program or ARB vertex program/shader.
+ * Current vertex processing mode: fixed function vs. shader.
+ * In reality, fixed function is probably implemented by a shader but that's
+ * not what we care about here.
+ */
+enum vp_mode {
+   VP_FF,    /**< legacy / fixed function */
+   VP_SHADER, /**< ARB vertex program or GLSL vertex shader */
+   VP_MODE_MAX /**< for sizing arrays */
+};
+
+
+/**
+ * Get current vertex processing mode (fixed function vs. shader).
  */
 static inline enum vp_mode
-get_program_mode( struct gl_context *ctx )
+get_vp_mode( struct gl_context *ctx )
 {
    if (!ctx->VertexProgram._Current)
-      return VP_NONE;
+      return VP_FF;
    else if (ctx->VertexProgram._Current == ctx->VertexProgram._TnlProgram)
-      return VP_NONE;
+      return VP_FF;
    else
-      return VP_ARB;
+      return VP_SHADER;
 }
 
 
 /**
- * This is called by glBegin, glDrawArrays and glDrawElements (and
- * variations of those calls).  When we transition from immediate mode
- * drawing to array drawing we need to invalidate the array state.
- *
- * glBegin/End builds vertex arrays.  Those arrays may look identical
- * to glDrawArrays arrays except that the position of the elements may
- * be different.  For example, arrays of (position3v, normal3f) vs. arrays
- * of (normal3f, position3f).  So we need to make sure we notify drivers
- * that arrays may be changing.
+ * Array to apply the fixed function material aliasing map to
+ * an attribute value used in vbo processing inputs to an attribute
+ * as they appear in the vao.
  */
-static inline void
-vbo_draw_method(struct vbo_context *vbo, gl_draw_method method)
-{
-   struct gl_context *ctx = vbo->exec.ctx;
-
-   if (ctx->Array.DrawMethod != method) {
-      switch (method) {
-      case DRAW_ARRAYS:
-         ctx->Array._DrawArrays = vbo->exec.array.inputs;
-         break;
-      case DRAW_BEGIN_END:
-         ctx->Array._DrawArrays = vbo->exec.vtx.inputs;
-         break;
-      case DRAW_DISPLAY_LIST:
-         ctx->Array._DrawArrays = vbo->save.inputs;
-         break;
-      default:
-         unreachable("Bad VBO drawing method");
-      }
-
-      ctx->NewDriverState |= ctx->DriverFlags.NewArray;
-      ctx->Array.DrawMethod = method;
-   }
-}
+extern const GLubyte
+_vbo_attribute_alias_map[VP_MODE_MAX][VERT_ATTRIB_MAX];
 
 
 /**

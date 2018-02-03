@@ -547,6 +547,14 @@ anv_cmd_buffer_bind_descriptor_set(struct anv_cmd_buffer *cmd_buffer,
       cmd_buffer->state.descriptors_dirty |=
          set_layout->shader_stages & VK_SHADER_STAGE_ALL_GRAPHICS;
    }
+
+   /* Pipeline layout objects are required to live at least while any command
+    * buffers that use them are in recording state. We need to grab a reference
+    * to the pipeline layout being bound here so we can compute correct dynamic
+    * offsets for VK_DESCRIPTOR_TYPE_*_DYNAMIC in dynamic_offset_for_binding()
+    * when we record draw commands that come after this.
+    */
+   pipe_state->layout = layout;
 }
 
 void anv_CmdBindDescriptorSets(
@@ -913,8 +921,7 @@ void anv_CmdPushDescriptorSetKHR(
 
    assert(_set < MAX_SETS);
 
-   const struct anv_descriptor_set_layout *set_layout =
-      layout->set[_set].layout;
+   struct anv_descriptor_set_layout *set_layout = layout->set[_set].layout;
 
    struct anv_push_descriptor_set *push_set =
       anv_cmd_buffer_get_push_descriptor_set(cmd_buffer,
@@ -1006,8 +1013,7 @@ void anv_CmdPushDescriptorSetWithTemplateKHR(
 
    assert(_set < MAX_PUSH_DESCRIPTORS);
 
-   const struct anv_descriptor_set_layout *set_layout =
-      layout->set[_set].layout;
+   struct anv_descriptor_set_layout *set_layout = layout->set[_set].layout;
 
    struct anv_push_descriptor_set *push_set =
       anv_cmd_buffer_get_push_descriptor_set(cmd_buffer,

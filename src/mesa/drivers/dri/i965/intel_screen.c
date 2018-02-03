@@ -41,6 +41,7 @@
 #include "compiler/nir/nir.h"
 
 #include "utils.h"
+#include "util/disk_cache.h"
 #include "util/xmlpool.h"
 
 static const __DRIconfigOptionsExtension brw_config_options = {
@@ -1573,6 +1574,8 @@ intelDestroyScreen(__DRIscreen * sPriv)
    brw_bufmgr_destroy(screen->bufmgr);
    driDestroyOptionInfo(&screen->optionCache);
 
+   disk_cache_destroy(screen->disk_cache);
+
    ralloc_free(screen);
    sPriv->driverPrivate = NULL;
 }
@@ -1777,8 +1780,8 @@ intel_init_bufmgr(struct intel_screen *screen)
       return false;
    }
 
-   if (!intel_get_boolean(screen, I915_PARAM_HAS_WAIT_TIMEOUT)) {
-      fprintf(stderr, "[%s: %u] Kernel 3.6 required.\n", __func__, __LINE__);
+   if (!intel_get_boolean(screen, I915_PARAM_HAS_EXEC_NO_RELOC)) {
+      fprintf(stderr, "[%s: %u] Kernel 3.9 required.\n", __func__, __LINE__);
       return false;
    }
 
@@ -2683,6 +2686,8 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
             fprintf(stderr, "  - Preemption enabled\n");
       }
    }
+
+   brw_disk_cache_init(screen);
 
    return (const __DRIconfig**) intel_screen_make_configs(dri_screen);
 }

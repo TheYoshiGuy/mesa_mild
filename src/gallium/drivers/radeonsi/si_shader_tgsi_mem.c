@@ -140,7 +140,7 @@ LLVMValueRef si_load_image_desc(struct si_shader_context *ctx,
 		index = LLVMBuildAdd(builder, index,
 				     ctx->i32_1, "");
 		list = LLVMBuildPointerCast(builder, list,
-					    si_const_array(ctx->v4i32, 0), "");
+					    ac_array_in_const_addr_space(ctx->v4i32), "");
 	} else {
 		assert(desc_type == AC_DESC_IMAGE);
 	}
@@ -296,7 +296,7 @@ static void image_append_args(
 	LLVMValueRef slc = i1false;
 	LLVMValueRef lwe = i1false;
 
-	if (atomic || (HAVE_LLVM <= 0x0309)) {
+	if (atomic) {
 		emit_data->args[emit_data->arg_count++] = r128;
 		emit_data->args[emit_data->arg_count++] = da;
 		if (!atomic) {
@@ -306,7 +306,6 @@ static void image_append_args(
 		return;
 	}
 
-	/* HAVE_LLVM >= 0x0400 */
 	emit_data->args[emit_data->arg_count++] = glc;
 	emit_data->args[emit_data->arg_count++] = slc;
 	emit_data->args[emit_data->arg_count++] = lwe;
@@ -566,11 +565,17 @@ static void load_emit(
 	}
 
 	if (inst->Memory.Texture == TGSI_TEXTURE_BUFFER) {
+		unsigned num_channels = util_last_bit(inst->Dst[0].Register.WriteMask);
+		LLVMValueRef result =
+			ac_build_buffer_load_format(&ctx->ac,
+						    emit_data->args[0],
+						    emit_data->args[1],
+						    emit_data->args[2],
+						    num_channels,
+						    LLVMConstIntGetZExtValue(emit_data->args[3]),
+						    can_speculate);
 		emit_data->output[emit_data->chan] =
-			lp_build_intrinsic(
-				builder, "llvm.amdgcn.buffer.load.format.v4f32", emit_data->dst_type,
-				emit_data->args, emit_data->arg_count,
-				ac_get_load_intr_attribs(can_speculate));
+			ac_build_expand_to_vec4(&ctx->ac, result, num_channels);
 	} else {
 		ac_get_image_intr_name("llvm.amdgcn.image.load",
 				       emit_data->dst_type,		/* vdata */
@@ -1102,7 +1107,7 @@ LLVMValueRef si_load_sampler_desc(struct si_shader_context *ctx,
 		index = LLVMBuildMul(builder, index, LLVMConstInt(ctx->i32, 4, 0), "");
 		index = LLVMBuildAdd(builder, index, ctx->i32_1, "");
 		list = LLVMBuildPointerCast(builder, list,
-					    si_const_array(ctx->v4i32, 0), "");
+					    ac_array_in_const_addr_space(ctx->v4i32), "");
 		break;
 	case AC_DESC_FMASK:
 		/* The FMASK is at [8:15]. */
@@ -1114,7 +1119,7 @@ LLVMValueRef si_load_sampler_desc(struct si_shader_context *ctx,
 		index = LLVMBuildMul(builder, index, LLVMConstInt(ctx->i32, 4, 0), "");
 		index = LLVMBuildAdd(builder, index, LLVMConstInt(ctx->i32, 3, 0), "");
 		list = LLVMBuildPointerCast(builder, list,
-					    si_const_array(ctx->v4i32, 0), "");
+					    ac_array_in_const_addr_space(ctx->v4i32), "");
 		break;
 	}
 
@@ -1821,12 +1826,16 @@ static void build_tex_intrinsic(const struct lp_build_tgsi_action *action,
 	unsigned target = inst->Texture.Texture;
 
 	if (target == TGSI_TEXTURE_BUFFER) {
-		emit_data->output[emit_data->chan] =
+		unsigned num_channels =
+			util_last_bit(inst->Dst[0].Register.WriteMask);
+		LLVMValueRef result =
 			ac_build_buffer_load_format(&ctx->ac,
 						    emit_data->args[0],
 						    emit_data->args[2],
 						    emit_data->args[1],
-						    true);
+						    num_channels, false, true);
+		emit_data->output[emit_data->chan] =
+			ac_build_expand_to_vec4(&ctx->ac, result, num_channels);
 		return;
 	}
 

@@ -60,6 +60,7 @@
 #include "st_cb_program.h"
 #include "st_cb_queryobj.h"
 #include "st_cb_readpixels.h"
+#include "st_cb_semaphoreobjects.h"
 #include "st_cb_texture.h"
 #include "st_cb_xformfb.h"
 #include "st_cb_flush.h"
@@ -734,6 +735,7 @@ st_init_driver_functions(struct pipe_screen *screen,
    st_init_query_functions(functions);
    st_init_cond_render_functions(functions);
    st_init_readpixels_functions(functions);
+   st_init_semaphoreobject_functions(functions);
    st_init_texture_functions(functions);
    st_init_texture_barrier_functions(functions);
    st_init_flush_functions(screen, functions);
@@ -753,8 +755,8 @@ st_init_driver_functions(struct pipe_screen *screen,
    functions->UpdateState = st_invalidate_state;
    functions->QueryMemoryInfo = st_query_memory_info;
    functions->SetBackgroundContext = st_set_background_context;
-   functions->GetDriverUuid = st_get_device_uuid;
-   functions->GetDeviceUuid = st_get_driver_uuid;
+   functions->GetDriverUuid = st_get_driver_uuid;
+   functions->GetDeviceUuid = st_get_device_uuid;
 
    /* GL_ARB_get_program_binary */
    functions->GetProgramBinaryDriverSHA1 = st_get_program_binary_driver_sha1;

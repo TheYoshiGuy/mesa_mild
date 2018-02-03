@@ -969,6 +969,14 @@ genX(BeginCommandBuffer)(
    if (cmd_buffer->level == VK_COMMAND_BUFFER_LEVEL_PRIMARY)
       cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_VF_CACHE_INVALIDATE_BIT;
 
+   /* We send an "Indirect State Pointers Disable" packet at
+    * EndCommandBuffer, so all push contant packets are ignored during a
+    * context restore. Documentation says after that command, we need to
+    * emit push constants again before any rendering operation. So we
+    * flag them dirty here to make sure they get emitted.
+    */
+   cmd_buffer->state.push_constants_dirty |= VK_SHADER_STAGE_ALL_GRAPHICS;
+
    VkResult result = VK_SUCCESS;
    if (cmd_buffer->usage_flags &
        VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT) {
@@ -1008,6 +1016,47 @@ genX(BeginCommandBuffer)(
    return result;
 }
 
+/* From the PRM, Volume 2a:
+ *
+ *    "Indirect State Pointers Disable
+ *
+ *    At the completion of the post-sync operation associated with this pipe
+ *    control packet, the indirect state pointers in the hardware are
+ *    considered invalid; the indirect pointers are not saved in the context.
+ *    If any new indirect state commands are executed in the command stream
+ *    while the pipe control is pending, the new indirect state commands are
+ *    preserved.
+ *
+ *    [DevIVB+]: Using Invalidate State Pointer (ISP) only inhibits context
+ *    restoring of Push Constant (3DSTATE_CONSTANT_*) commands. Push Constant
+ *    commands are only considered as Indirect State Pointers. Once ISP is
+ *    issued in a context, SW must initialize by programming push constant
+ *    commands for all the shaders (at least to zero length) before attempting
+ *    any rendering operation for the same context."
+ *
+ * 3DSTATE_CONSTANT_* packets are restored during a context restore,
+ * even though they point to a BO that has been already unreferenced at
+ * the end of the previous batch buffer. This has been fine so far since
+ * we are protected by these scratch page (every address not covered by
+ * a BO should be pointing to the scratch page). But on CNL, it is
+ * causing a GPU hang during context restore at the 3DSTATE_CONSTANT_*
+ * instruction.
+ *
+ * The flag "Indirect State Pointers Disable" in PIPE_CONTROL tells the
+ * hardware to ignore previous 3DSTATE_CONSTANT_* packets during a
+ * context restore, so the mentioned hang doesn't happen. However,
+ * software must program push constant commands for all stages prior to
+ * rendering anything. So we flag them dirty in BeginCommandBuffer.
+ */
+static void
+emit_isp_disable(struct anv_cmd_buffer *cmd_buffer)
+{
+   anv_batch_emit(&cmd_buffer->batch, GENX(PIPE_CONTROL), pc) {
+         pc.IndirectStatePointersDisable = true;
+         pc.CommandStreamerStallEnable = true;
+   }
+}
+
 VkResult
 genX(EndCommandBuffer)(
     VkCommandBuffer                             commandBuffer)
@@ -1023,6 +1072,8 @@ genX(EndCommandBuffer)(
    genX(cmd_buffer_enable_pma_fix)(cmd_buffer, false);
 
    genX(cmd_buffer_apply_pipe_flushes)(cmd_buffer);
+
+   emit_isp_disable(cmd_buffer);
 
    anv_cmd_buffer_end_batch_buffer(cmd_buffer);
 
@@ -1476,7 +1527,6 @@ anv_descriptor_for_binding(const struct anv_cmd_pipeline_state *pipe_state,
 
 static uint32_t
 dynamic_offset_for_binding(const struct anv_cmd_pipeline_state *pipe_state,
-                           const struct anv_pipeline *pipeline,
                            const struct anv_pipeline_binding *binding)
 {
    assert(binding->set < MAX_SETS);
@@ -1484,7 +1534,7 @@ dynamic_offset_for_binding(const struct anv_cmd_pipeline_state *pipe_state,
       pipe_state->descriptors[binding->set];
 
    uint32_t dynamic_offset_idx =
-      pipeline->layout->set[binding->set].dynamic_offset_start +
+      pipe_state->layout->set[binding->set].dynamic_offset_start +
       set->layout->binding[binding->binding].dynamic_offset_index +
       binding->index;
 
@@ -1672,7 +1722,7 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
       case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: {
          /* Compute the offset within the buffer */
          uint32_t dynamic_offset =
-            dynamic_offset_for_binding(pipe_state, pipeline, binding);
+            dynamic_offset_for_binding(pipe_state, binding);
          uint64_t offset = desc->offset + dynamic_offset;
          /* Clamp to the buffer size */
          offset = MIN2(offset, desc->buffer->size);
@@ -1947,8 +1997,7 @@ cmd_buffer_flush_push_constants(struct anv_cmd_buffer *cmd_buffer,
                   assert(desc->type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC);
 
                   uint32_t dynamic_offset =
-                     dynamic_offset_for_binding(&gfx_state->base,
-                                                pipeline, binding);
+                     dynamic_offset_for_binding(&gfx_state->base, binding);
                   uint32_t buf_offset =
                      MIN2(desc->offset + dynamic_offset, desc->buffer->size);
                   uint32_t buf_range =
@@ -3154,6 +3203,17 @@ genX(cmd_buffer_set_subpass)(struct anv_cmd_buffer *cmd_buffer,
     */
    if (GEN_GEN == 7)
       cmd_buffer->state.gfx.vb_dirty |= ~0;
+
+   /* It is possible to start a render pass with an old pipeline.  Because the
+    * render pass and subpass index are both baked into the pipeline, this is
+    * highly unlikely.  In order to do so, it requires that you have a render
+    * pass with a single subpass and that you use that render pass twice
+    * back-to-back and use the same pipeline at the start of the second render
+    * pass as at the end of the first.  In order to avoid unpredictable issues
+    * with this edge case, we just dirty the pipeline at the start of every
+    * subpass.
+    */
+   cmd_buffer->state.gfx.dirty |= ANV_CMD_DIRTY_PIPELINE;
 
    /* Perform transitions to the subpass layout before any writes have
     * occurred.

@@ -583,6 +583,12 @@ struct radeon_winsys {
                                     struct pipe_fence_handle *fence);
 
     /**
+     * Signal a syncobj when the CS finishes execution.
+     */
+    void (*cs_add_syncobj_signal)(struct radeon_winsys_cs *cs,
+				  struct pipe_fence_handle *fence);
+
+    /**
      * Wait for the fence and return true if the fence has been signalled.
      * The timeout of 0 will only return the status.
      * The timeout of PIPE_TIMEOUT_INFINITE will always wait until the fence
@@ -599,6 +605,12 @@ struct radeon_winsys {
                             struct pipe_fence_handle *src);
 
     /**
+     * Create a new fence object corresponding to the given syncobj fd.
+     */
+    struct pipe_fence_handle *(*fence_import_syncobj)(struct radeon_winsys *ws,
+						      int fd);
+
+    /**
      * Create a new fence object corresponding to the given sync_file.
      */
     struct pipe_fence_handle *(*fence_import_sync_file)(struct radeon_winsys *ws,
@@ -609,6 +621,11 @@ struct radeon_winsys {
      */
     int (*fence_export_sync_file)(struct radeon_winsys *ws,
 				  struct pipe_fence_handle *fence);
+
+    /**
+     * Return a sync file FD that is already signalled.
+     */
+    int (*export_signalled_sync_file)(struct radeon_winsys *ws);
 
     /**
      * Initialize surface
@@ -682,50 +699,24 @@ static inline enum radeon_bo_domain radeon_domain_from_heap(enum radeon_heap hea
 
 static inline unsigned radeon_flags_from_heap(enum radeon_heap heap)
 {
+    unsigned flags = RADEON_FLAG_NO_INTERPROCESS_SHARING |
+                     (heap != RADEON_HEAP_GTT ? RADEON_FLAG_GTT_WC : 0);
+
     switch (heap) {
     case RADEON_HEAP_VRAM_NO_CPU_ACCESS:
-        return RADEON_FLAG_GTT_WC |
-               RADEON_FLAG_NO_CPU_ACCESS |
-               RADEON_FLAG_NO_INTERPROCESS_SHARING;
+        return flags |
+               RADEON_FLAG_NO_CPU_ACCESS;
 
     case RADEON_HEAP_VRAM_READ_ONLY:
-        return RADEON_FLAG_GTT_WC |
-               RADEON_FLAG_NO_INTERPROCESS_SHARING |
+    case RADEON_HEAP_GTT_WC_READ_ONLY:
+        return flags |
                RADEON_FLAG_READ_ONLY;
 
     case RADEON_HEAP_VRAM:
     case RADEON_HEAP_GTT_WC:
-        return RADEON_FLAG_GTT_WC |
-               RADEON_FLAG_NO_INTERPROCESS_SHARING;
-
-    case RADEON_HEAP_GTT_WC_READ_ONLY:
-        return RADEON_FLAG_GTT_WC |
-               RADEON_FLAG_NO_INTERPROCESS_SHARING |
-               RADEON_FLAG_READ_ONLY;
-
     case RADEON_HEAP_GTT:
     default:
-        return RADEON_FLAG_NO_INTERPROCESS_SHARING;
-    }
-}
-
-/* The pb cache bucket is chosen to minimize pb_cache misses.
- * It must be between 0 and 3 inclusive.
- */
-static inline unsigned radeon_get_pb_cache_bucket_index(enum radeon_heap heap)
-{
-    switch (heap) {
-    case RADEON_HEAP_VRAM_NO_CPU_ACCESS:
-        return 0;
-    case RADEON_HEAP_VRAM_READ_ONLY:
-    case RADEON_HEAP_VRAM:
-        return 1;
-    case RADEON_HEAP_GTT_WC:
-    case RADEON_HEAP_GTT_WC_READ_ONLY:
-        return 2;
-    case RADEON_HEAP_GTT:
-    default:
-        return 3;
+        return flags;
     }
 }
 

@@ -764,6 +764,10 @@ brw_finish_batch(struct brw_context *brw)
          brw_emit_pipe_control_flush(brw, PIPE_CONTROL_RENDER_TARGET_FLUSH |
                                           PIPE_CONTROL_CS_STALL);
       }
+
+      /* Do not restore push constant packets during context restore. */
+      if (devinfo->gen >= 7)
+         gen10_emit_isp_disable(brw);
    }
 
    /* Emit MI_BATCH_BUFFER_END to finish our batch.  Note that execbuf2
@@ -800,9 +804,6 @@ throttle(struct brw_context *brw)
    if (brw->need_swap_throttle && brw->throttle_batch[0]) {
       if (brw->throttle_batch[1]) {
          if (!brw->disable_throttling) {
-            /* Pass NULL rather than brw so we avoid perf_debug warnings;
-             * stalling is common and expected here...
-             */
             brw_bo_wait_rendering(brw->throttle_batch[1]);
          }
          brw_bo_unreference(brw->throttle_batch[1]);

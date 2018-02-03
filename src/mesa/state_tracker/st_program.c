@@ -368,7 +368,6 @@ st_release_cp_variants(struct st_context *st, struct st_compute_program *stcp)
       case PIPE_SHADER_IR_NIR:
          /* pipe driver took ownership of prog */
          break;
-      case PIPE_SHADER_IR_LLVM:
       case PIPE_SHADER_IR_NATIVE:
          /* ??? */
          stcp->tgsi.prog = NULL;
@@ -406,7 +405,7 @@ st_translate_vertex_program(struct st_context *st,
          input_to_index[attr] = stvp->num_inputs;
          stvp->index_to_input[stvp->num_inputs] = attr;
          stvp->num_inputs++;
-         if ((stvp->Base.info.double_inputs_read &
+         if ((stvp->Base.info.vs.double_inputs_read &
               BITFIELD64_BIT(attr)) != 0) {
             /* add placeholder for second part of a double attribute */
             stvp->index_to_input[stvp->num_inputs] = ST_DOUBLE_ATTRIB_PLACEHOLDER;

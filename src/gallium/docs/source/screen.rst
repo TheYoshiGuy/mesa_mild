@@ -412,6 +412,8 @@ The integer capabilities:
   priorities, this returns a bitmask of PIPE_CONTEXT_PRIORITY_x for the
   supported priority levels.  A driver that does not support prioritized
   contexts can return 0.
+* ``PIPE_CAP_FENCE_SIGNAL``: True if the driver supports signaling semaphores
+  using fence_server_signal().
 
 
 .. _pipe_capf:
@@ -529,8 +531,8 @@ pipe_screen::get_compute_param.
 
 * ``PIPE_COMPUTE_CAP_IR_TARGET``: A description of the target of the form
   ``processor-arch-manufacturer-os`` that will be passed on to the compiler.
-  This CAP is only relevant for drivers that specify PIPE_SHADER_IR_LLVM
-  or PIPE_SHADER_IR_NATIVE for their preferred IR.
+  This CAP is only relevant for drivers that specify PIPE_SHADER_IR_NATIVE for
+  their preferred IR.
   Value type: null-terminated string. Shader IR type dependent.
 * ``PIPE_COMPUTE_CAP_GRID_DIMENSION``: Number of supported dimensions
   for grid and block coordinates.  Value type: ``uint64_t``. Shader IR type dependent.

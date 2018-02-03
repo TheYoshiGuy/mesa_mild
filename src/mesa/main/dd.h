@@ -549,7 +549,7 @@ struct dd_function_table {
    /** Specify the width of rasterized lines */
    void (*LineWidth)(struct gl_context *ctx, GLfloat width);
    /** Specify a logical pixel operation for color index rendering */
-   void (*LogicOpcode)(struct gl_context *ctx, GLenum opcode);
+   void (*LogicOpcode)(struct gl_context *ctx, enum gl_logicop_mode opcode);
    void (*PointParameterfv)(struct gl_context *ctx, GLenum pname,
                             const GLfloat *params);
    /** Specify the diameter of rasterized points */
@@ -1132,6 +1132,64 @@ struct dd_function_table {
    void (*ProgramBinaryDeserializeDriverBlob)(struct gl_context *ctx,
                                               struct gl_shader_program *shProg,
                                               struct gl_program *prog);
+   /*@}*/
+
+   /**
+    * \name GL_EXT_semaphore interface
+    */
+   /*@{*/
+  /**
+    * Called to allocate a new semaphore object. Drivers will usually
+    * allocate/return a subclass of gl_semaphore_object.
+    */
+   struct gl_semaphore_object * (*NewSemaphoreObject)(struct gl_context *ctx,
+                                                      GLuint name);
+   /**
+    * Called to delete/free a semaphore object. Drivers should free the
+    * object and any associated resources.
+    */
+   void (*DeleteSemaphoreObject)(struct gl_context *ctx,
+                                 struct gl_semaphore_object *semObj);
+
+   /**
+    * Introduce an operation to wait for the semaphore object in the GL
+    * server's command stream
+    */
+   void (*ServerWaitSemaphoreObject)(struct gl_context *ctx,
+                                     struct gl_semaphore_object *semObj,
+                                     GLuint numBufferBarriers,
+                                     struct gl_buffer_object **bufObjs,
+                                     GLuint numTextureBarriers,
+                                     struct gl_texture_object **texObjs,
+                                     const GLenum *srcLayouts);
+
+   /**
+    * Introduce an operation to signal the semaphore object in the GL
+    * server's command stream
+    */
+   void (*ServerSignalSemaphoreObject)(struct gl_context *ctx,
+                                       struct gl_semaphore_object *semObj,
+                                       GLuint numBufferBarriers,
+                                       struct gl_buffer_object **bufObjs,
+                                       GLuint numTextureBarriers,
+                                       struct gl_texture_object **texObjs,
+                                       const GLenum *dstLayouts);
+   /*@}*/
+
+   /**
+    * \name GL_EXT_semaphore_fd interface
+    */
+   /*@{*/
+   /**
+    * Called to import a semaphore object. The caller relinquishes ownership
+    * of fd after the call returns.
+    *
+    * Accessing fd after ImportSemaphoreFd returns results in undefined
+    * behaviour. This is consistent with EXT_semaphore_fd.
+    */
+   void (*ImportSemaphoreFd)(struct gl_context *ctx,
+                                struct gl_semaphore_object *semObj,
+                                int fd);
    /*@}*/
 };
 

@@ -54,6 +54,135 @@
 #include "util/bitscan.h"
 
 
+const GLubyte
+_mesa_vao_attribute_map[ATTRIBUTE_MAP_MODE_MAX][VERT_ATTRIB_MAX] =
+{
+   /* ATTRIBUTE_MAP_MODE_IDENTITY
+    *
+    * Grab vertex processing attribute VERT_ATTRIB_POS from
+    * the VAO attribute VERT_ATTRIB_POS, and grab vertex processing
+    * attribute VERT_ATTRIB_GENERIC0 from the VAO attribute
+    * VERT_ATTRIB_GENERIC0.
+    */
+   {
+      VERT_ATTRIB_POS,                 /* VERT_ATTRIB_POS */
+      VERT_ATTRIB_NORMAL,              /* VERT_ATTRIB_NORMAL */
+      VERT_ATTRIB_COLOR0,              /* VERT_ATTRIB_COLOR0 */
+      VERT_ATTRIB_COLOR1,              /* VERT_ATTRIB_COLOR1 */
+      VERT_ATTRIB_FOG,                 /* VERT_ATTRIB_FOG */
+      VERT_ATTRIB_COLOR_INDEX,         /* VERT_ATTRIB_COLOR_INDEX */
+      VERT_ATTRIB_EDGEFLAG,            /* VERT_ATTRIB_EDGEFLAG */
+      VERT_ATTRIB_TEX0,                /* VERT_ATTRIB_TEX0 */
+      VERT_ATTRIB_TEX1,                /* VERT_ATTRIB_TEX1 */
+      VERT_ATTRIB_TEX2,                /* VERT_ATTRIB_TEX2 */
+      VERT_ATTRIB_TEX3,                /* VERT_ATTRIB_TEX3 */
+      VERT_ATTRIB_TEX4,                /* VERT_ATTRIB_TEX4 */
+      VERT_ATTRIB_TEX5,                /* VERT_ATTRIB_TEX5 */
+      VERT_ATTRIB_TEX6,                /* VERT_ATTRIB_TEX6 */
+      VERT_ATTRIB_TEX7,                /* VERT_ATTRIB_TEX7 */
+      VERT_ATTRIB_POINT_SIZE,          /* VERT_ATTRIB_POINT_SIZE */
+      VERT_ATTRIB_GENERIC0,            /* VERT_ATTRIB_GENERIC0 */
+      VERT_ATTRIB_GENERIC1,            /* VERT_ATTRIB_GENERIC1 */
+      VERT_ATTRIB_GENERIC2,            /* VERT_ATTRIB_GENERIC2 */
+      VERT_ATTRIB_GENERIC3,            /* VERT_ATTRIB_GENERIC3 */
+      VERT_ATTRIB_GENERIC4,            /* VERT_ATTRIB_GENERIC4 */
+      VERT_ATTRIB_GENERIC5,            /* VERT_ATTRIB_GENERIC5 */
+      VERT_ATTRIB_GENERIC6,            /* VERT_ATTRIB_GENERIC6 */
+      VERT_ATTRIB_GENERIC7,            /* VERT_ATTRIB_GENERIC7 */
+      VERT_ATTRIB_GENERIC8,            /* VERT_ATTRIB_GENERIC8 */
+      VERT_ATTRIB_GENERIC9,            /* VERT_ATTRIB_GENERIC9 */
+      VERT_ATTRIB_GENERIC10,           /* VERT_ATTRIB_GENERIC10 */
+      VERT_ATTRIB_GENERIC11,           /* VERT_ATTRIB_GENERIC11 */
+      VERT_ATTRIB_GENERIC12,           /* VERT_ATTRIB_GENERIC12 */
+      VERT_ATTRIB_GENERIC13,           /* VERT_ATTRIB_GENERIC13 */
+      VERT_ATTRIB_GENERIC14,           /* VERT_ATTRIB_GENERIC14 */
+      VERT_ATTRIB_GENERIC15            /* VERT_ATTRIB_GENERIC15 */
+   },
+
+   /* ATTRIBUTE_MAP_MODE_POSITION
+    *
+    * Grab vertex processing attribute VERT_ATTRIB_POS as well as
+    * vertex processing attribute VERT_ATTRIB_GENERIC0 from the
+    * VAO attribute VERT_ATTRIB_POS.
+    */
+   {
+      VERT_ATTRIB_POS,                 /* VERT_ATTRIB_POS */
+      VERT_ATTRIB_NORMAL,              /* VERT_ATTRIB_NORMAL */
+      VERT_ATTRIB_COLOR0,              /* VERT_ATTRIB_COLOR0 */
+      VERT_ATTRIB_COLOR1,              /* VERT_ATTRIB_COLOR1 */
+      VERT_ATTRIB_FOG,                 /* VERT_ATTRIB_FOG */
+      VERT_ATTRIB_COLOR_INDEX,         /* VERT_ATTRIB_COLOR_INDEX */
+      VERT_ATTRIB_EDGEFLAG,            /* VERT_ATTRIB_EDGEFLAG */
+      VERT_ATTRIB_TEX0,                /* VERT_ATTRIB_TEX0 */
+      VERT_ATTRIB_TEX1,                /* VERT_ATTRIB_TEX1 */
+      VERT_ATTRIB_TEX2,                /* VERT_ATTRIB_TEX2 */
+      VERT_ATTRIB_TEX3,                /* VERT_ATTRIB_TEX3 */
+      VERT_ATTRIB_TEX4,                /* VERT_ATTRIB_TEX4 */
+      VERT_ATTRIB_TEX5,                /* VERT_ATTRIB_TEX5 */
+      VERT_ATTRIB_TEX6,                /* VERT_ATTRIB_TEX6 */
+      VERT_ATTRIB_TEX7,                /* VERT_ATTRIB_TEX7 */
+      VERT_ATTRIB_POINT_SIZE,          /* VERT_ATTRIB_POINT_SIZE */
+      VERT_ATTRIB_POS,                 /* VERT_ATTRIB_GENERIC0 */
+      VERT_ATTRIB_GENERIC1,            /* VERT_ATTRIB_GENERIC1 */
+      VERT_ATTRIB_GENERIC2,            /* VERT_ATTRIB_GENERIC2 */
+      VERT_ATTRIB_GENERIC3,            /* VERT_ATTRIB_GENERIC3 */
+      VERT_ATTRIB_GENERIC4,            /* VERT_ATTRIB_GENERIC4 */
+      VERT_ATTRIB_GENERIC5,            /* VERT_ATTRIB_GENERIC5 */
+      VERT_ATTRIB_GENERIC6,            /* VERT_ATTRIB_GENERIC6 */
+      VERT_ATTRIB_GENERIC7,            /* VERT_ATTRIB_GENERIC7 */
+      VERT_ATTRIB_GENERIC8,            /* VERT_ATTRIB_GENERIC8 */
+      VERT_ATTRIB_GENERIC9,            /* VERT_ATTRIB_GENERIC9 */
+      VERT_ATTRIB_GENERIC10,           /* VERT_ATTRIB_GENERIC10 */
+      VERT_ATTRIB_GENERIC11,           /* VERT_ATTRIB_GENERIC11 */
+      VERT_ATTRIB_GENERIC12,           /* VERT_ATTRIB_GENERIC12 */
+      VERT_ATTRIB_GENERIC13,           /* VERT_ATTRIB_GENERIC13 */
+      VERT_ATTRIB_GENERIC14,           /* VERT_ATTRIB_GENERIC14 */
+      VERT_ATTRIB_GENERIC15            /* VERT_ATTRIB_GENERIC15 */
+   },
+
+   /* ATTRIBUTE_MAP_MODE_GENERIC0
+    *
+    * Grab vertex processing attribute VERT_ATTRIB_POS as well as
+    * vertex processing attribute VERT_ATTRIB_GENERIC0 from the
+    * VAO attribute VERT_ATTRIB_GENERIC0.
+    */
+   {
+      VERT_ATTRIB_GENERIC0,            /* VERT_ATTRIB_POS */
+      VERT_ATTRIB_NORMAL,              /* VERT_ATTRIB_NORMAL */
+      VERT_ATTRIB_COLOR0,              /* VERT_ATTRIB_COLOR0 */
+      VERT_ATTRIB_COLOR1,              /* VERT_ATTRIB_COLOR1 */
+      VERT_ATTRIB_FOG,                 /* VERT_ATTRIB_FOG */
+      VERT_ATTRIB_COLOR_INDEX,         /* VERT_ATTRIB_COLOR_INDEX */
+      VERT_ATTRIB_EDGEFLAG,            /* VERT_ATTRIB_EDGEFLAG */
+      VERT_ATTRIB_TEX0,                /* VERT_ATTRIB_TEX0 */
+      VERT_ATTRIB_TEX1,                /* VERT_ATTRIB_TEX1 */
+      VERT_ATTRIB_TEX2,                /* VERT_ATTRIB_TEX2 */
+      VERT_ATTRIB_TEX3,                /* VERT_ATTRIB_TEX3 */
+      VERT_ATTRIB_TEX4,                /* VERT_ATTRIB_TEX4 */
+      VERT_ATTRIB_TEX5,                /* VERT_ATTRIB_TEX5 */
+      VERT_ATTRIB_TEX6,                /* VERT_ATTRIB_TEX6 */
+      VERT_ATTRIB_TEX7,                /* VERT_ATTRIB_TEX7 */
+      VERT_ATTRIB_POINT_SIZE,          /* VERT_ATTRIB_POINT_SIZE */
+      VERT_ATTRIB_GENERIC0,            /* VERT_ATTRIB_GENERIC0 */
+      VERT_ATTRIB_GENERIC1,            /* VERT_ATTRIB_GENERIC1 */
+      VERT_ATTRIB_GENERIC2,            /* VERT_ATTRIB_GENERIC2 */
+      VERT_ATTRIB_GENERIC3,            /* VERT_ATTRIB_GENERIC3 */
+      VERT_ATTRIB_GENERIC4,            /* VERT_ATTRIB_GENERIC4 */
+      VERT_ATTRIB_GENERIC5,            /* VERT_ATTRIB_GENERIC5 */
+      VERT_ATTRIB_GENERIC6,            /* VERT_ATTRIB_GENERIC6 */
+      VERT_ATTRIB_GENERIC7,            /* VERT_ATTRIB_GENERIC7 */
+      VERT_ATTRIB_GENERIC8,            /* VERT_ATTRIB_GENERIC8 */
+      VERT_ATTRIB_GENERIC9,            /* VERT_ATTRIB_GENERIC9 */
+      VERT_ATTRIB_GENERIC10,           /* VERT_ATTRIB_GENERIC10 */
+      VERT_ATTRIB_GENERIC11,           /* VERT_ATTRIB_GENERIC11 */
+      VERT_ATTRIB_GENERIC12,           /* VERT_ATTRIB_GENERIC12 */
+      VERT_ATTRIB_GENERIC13,           /* VERT_ATTRIB_GENERIC13 */
+      VERT_ATTRIB_GENERIC14,           /* VERT_ATTRIB_GENERIC14 */
+      VERT_ATTRIB_GENERIC15            /* VERT_ATTRIB_GENERIC15 */
+   }
+};
+
+
 /**
  * Look up the array object for the given ID.
  *
@@ -222,7 +351,7 @@ _mesa_reference_vao_(struct gl_context *ctx,
 
 
 /**
- * Initialize attribtes of a vertex array within a vertex array object.
+ * Initialize attributes of a vertex array within a vertex array object.
  * \param vao  the container vertex array object
  * \param index  which array in the VAO to initialize
  * \param size  number of components (1, 2, 3 or 4) per attribute
@@ -231,9 +360,11 @@ _mesa_reference_vao_(struct gl_context *ctx,
 static void
 init_array(struct gl_context *ctx,
            struct gl_vertex_array_object *vao,
-           GLuint index, GLint size, GLint type)
+           gl_vert_attrib index, GLint size, GLint type)
 {
+   assert(index < ARRAY_SIZE(vao->VertexAttrib));
    struct gl_array_attributes *array = &vao->VertexAttrib[index];
+   assert(index < ARRAY_SIZE(vao->BufferBinding));
    struct gl_vertex_buffer_binding *binding = &vao->BufferBinding[index];
 
    array->Size = size;
@@ -247,6 +378,8 @@ init_array(struct gl_context *ctx,
    array->Integer = GL_FALSE;
    array->Doubles = GL_FALSE;
    array->_ElementSize = size * _mesa_sizeof_type(type);
+   ASSERT_BITFIELD_SIZE(struct gl_array_attributes, BufferBindingIndex,
+                        VERT_ATTRIB_MAX - 1);
    array->BufferBindingIndex = index;
 
    binding->Offset = 0;
@@ -301,6 +434,8 @@ _mesa_initialize_vao(struct gl_context *ctx,
       }
    }
 
+   vao->_AttributeMapMode = ATTRIBUTE_MAP_MODE_IDENTITY;
+
    _mesa_reference_buffer_object(ctx, &vao->IndexBufferObj,
                                  ctx->Shared->NullBufferObj);
 }
@@ -311,8 +446,8 @@ _mesa_initialize_vao(struct gl_context *ctx,
  * or a gl_vertex_buffer_binding has changed.
  */
 void
-_mesa_update_vao_client_arrays(struct gl_context *ctx,
-                               struct gl_vertex_array_object *vao)
+_mesa_update_vao_derived_arrays(struct gl_context *ctx,
+                                struct gl_vertex_array_object *vao)
 {
    GLbitfield arrays = vao->NewArrays;
 
@@ -324,7 +459,7 @@ _mesa_update_vao_client_arrays(struct gl_context *ctx,
       const struct gl_vertex_buffer_binding *buffer_binding =
          &vao->BufferBinding[attrib_array->BufferBindingIndex];
 
-      _mesa_update_client_array(ctx, client_array, attrib_array,
+      _mesa_update_vertex_array(ctx, client_array, attrib_array,
                                 buffer_binding);
    }
 }
@@ -433,20 +568,17 @@ bind_vertex_array(struct gl_context *ctx, GLuint id, bool no_error)
       newObj->EverBound = GL_TRUE;
    }
 
-   if (ctx->Array.DrawMethod == DRAW_ARRAYS) {
-      /* The _DrawArrays pointer is pointing at the VAO being unbound and
-       * that VAO may be in the process of being deleted. If it's not going
-       * to be deleted, this will have no effect, because the pointer needs
-       * to be updated by the VBO module anyway.
-       *
-       * Before the VBO module can update the pointer, we have to set it
-       * to NULL for drivers not to set up arrays which are not bound,
-       * or to prevent a crash if the VAO being unbound is going to be
-       * deleted.
-       */
-      ctx->Array._DrawArrays = NULL;
-      ctx->Array.DrawMethod = DRAW_NONE;
-   }
+   /* The _DrawArrays pointer is pointing at the VAO being unbound and
+    * that VAO may be in the process of being deleted. If it's not going
+    * to be deleted, this will have no effect, because the pointer needs
+    * to be updated by the VBO module anyway.
+    *
+    * Before the VBO module can update the pointer, we have to set it
+    * to NULL for drivers not to set up arrays which are not bound,
+    * or to prevent a crash if the VAO being unbound is going to be
+    * deleted.
+    */
+   _mesa_set_drawing_arrays(ctx, NULL);
 
    ctx->NewState |= _NEW_ARRAY;
    _mesa_reference_vao(ctx, &ctx->Array.VAO, newObj);

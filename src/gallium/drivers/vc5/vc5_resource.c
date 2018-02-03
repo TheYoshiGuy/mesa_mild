@@ -74,7 +74,7 @@ vc5_debug_resource_layout(struct vc5_resource *rsc, const char *caller)
                 struct vc5_resource_slice *slice = &rsc->slices[i];
 
                 int level_width = slice->stride / rsc->cpp;
-                int level_height = slice->size / slice->stride;
+                int level_height = slice->padded_height;
 
                 fprintf(stderr,
                         "rsc %s %p (format %s), %dx%d: "
@@ -133,8 +133,7 @@ vc5_resource_transfer_unmap(struct pipe_context *pctx,
                                               slice->stride,
                                               trans->map, ptrans->stride,
                                               slice->tiling, rsc->cpp,
-                                              u_minify(rsc->base.height0,
-                                                       ptrans->level),
+                                              slice->padded_height,
                                               &ptrans->box);
                 }
                 free(trans->map);
@@ -265,7 +264,7 @@ vc5_resource_transfer_map(struct pipe_context *pctx,
                                              ptrans->box.z * rsc->cube_map_stride,
                                              slice->stride,
                                              slice->tiling, rsc->cpp,
-                                             rsc->base.height0,
+                                             slice->padded_height,
                                              &ptrans->box);
                 }
                 return trans->map;
@@ -325,6 +324,52 @@ vc5_resource_get_handle(struct pipe_screen *pscreen,
         }
 
         return FALSE;
+}
+
+#define PAGE_UB_ROWS (VC5_UIFCFG_PAGE_SIZE / VC5_UIFBLOCK_ROW_SIZE)
+#define PAGE_UB_ROWS_TIMES_1_5 ((PAGE_UB_ROWS * 3) >> 1)
+#define PAGE_CACHE_UB_ROWS (VC5_PAGE_CACHE_SIZE / VC5_UIFBLOCK_ROW_SIZE)
+#define PAGE_CACHE_MINUS_1_5_UB_ROWS (PAGE_CACHE_UB_ROWS - PAGE_UB_ROWS_TIMES_1_5)
+
+/**
+ * Computes the HW's UIFblock padding for a given height/cpp.
+ *
+ * The goal of the padding is to keep pages of the same color (bank number) at
+ * least half a page away from each other vertically when crossing between
+ * between columns of UIF blocks.
+ */
+static uint32_t
+vc5_get_ub_pad(struct vc5_resource *rsc, uint32_t height)
+{
+        uint32_t utile_h = vc5_utile_height(rsc->cpp);
+        uint32_t uif_block_h = utile_h * 2;
+        uint32_t height_ub = height / uif_block_h;
+
+        uint32_t height_offset_in_pc = height_ub % PAGE_CACHE_UB_ROWS;
+
+        /* For the perfectly-aligned-for-UIF-XOR case, don't add any pad. */
+        if (height_offset_in_pc == 0)
+                return 0;
+
+        /* Try padding up to where we're offset by at least half a page. */
+        if (height_offset_in_pc < PAGE_UB_ROWS_TIMES_1_5) {
+                /* If we fit entirely in the page cache, don't pad. */
+                if (height_ub < PAGE_CACHE_UB_ROWS)
+                        return 0;
+                else
+                        return PAGE_UB_ROWS_TIMES_1_5 - height_offset_in_pc;
+        }
+
+        /* If we're close to being aligned to page cache size, then round up
+         * and rely on XOR.
+         */
+        if (height_offset_in_pc > PAGE_CACHE_MINUS_1_5_UB_ROWS)
+                return PAGE_CACHE_UB_ROWS - height_offset_in_pc;
+
+        /* Otherwise, we're far enough away (top and bottom) to not need any
+         * padding.
+         */
+        return 0;
 }
 
 static void
@@ -390,8 +435,6 @@ vc5_setup_slices(struct vc5_resource *rsc)
                                 level_width = align(level_width, 2 * uif_block_w);
                                 level_height = align(level_height, uif_block_h);
                         } else {
-                                slice->tiling = VC5_TILING_UIF_NO_XOR;
-
                                 /* We align the width to a 4-block column of
                                  * UIF blocks, but we only align height to UIF
                                  * blocks.
@@ -400,12 +443,41 @@ vc5_setup_slices(struct vc5_resource *rsc)
                                                     4 * uif_block_w);
                                 level_height = align(level_height,
                                                      uif_block_h);
+
+                                slice->ub_pad = vc5_get_ub_pad(rsc,
+                                                               level_height);
+                                level_height += slice->ub_pad * uif_block_h;
+
+                                /* If the padding set us to to be aligned to
+                                 * the page cache size, then the HW will use
+                                 * the XOR bit on odd columns to get us
+                                 * perfectly misaligned
+                                 */
+                                if ((level_height / uif_block_h) %
+                                    (VC5_PAGE_CACHE_SIZE /
+                                     VC5_UIFBLOCK_ROW_SIZE) == 0) {
+                                        slice->tiling = VC5_TILING_UIF_XOR;
+                                } else {
+                                        slice->tiling = VC5_TILING_UIF_NO_XOR;
+                                }
                         }
                 }
 
                 slice->offset = offset;
                 slice->stride = level_width * rsc->cpp;
+                slice->padded_height = level_height;
                 slice->size = level_height * slice->stride;
+
+                /* The HW aligns level 1's base to a page if any of level 1 or
+                 * below could be UIF XOR.  The lower levels then inherit the
+                 * alignment for as long as necesary, thanks to being power of
+                 * two aligned.
+                 */
+                if (i == 1 &&
+                    level_width > 4 * uif_block_w &&
+                    level_height > PAGE_CACHE_MINUS_1_5_UB_ROWS * uif_block_h) {
+                        slice->size = align(slice->size, VC5_UIFCFG_PAGE_SIZE);
+                }
 
                 offset += slice->size;
         }
@@ -654,10 +726,6 @@ vc5_create_surface(struct pipe_context *pctx,
         unsigned level = surf_tmpl->u.tex.level;
         struct vc5_resource_slice *slice = &rsc->slices[level];
 
-        struct vc5_resource_slice *separate_stencil_slice = NULL;
-        if (rsc->separate_stencil)
-                separate_stencil_slice = &rsc->separate_stencil->slices[level];
-
         pipe_reference_init(&psurf->reference, 1);
         pipe_resource_reference(&psurf->texture, ptex);
 
@@ -672,14 +740,6 @@ vc5_create_surface(struct pipe_context *pctx,
         surface->offset = (slice->offset +
                            psurf->u.tex.first_layer * rsc->cube_map_stride);
         surface->tiling = slice->tiling;
-        if (separate_stencil_slice) {
-                surface->separate_stencil_offset =
-                        (separate_stencil_slice->offset +
-                         psurf->u.tex.first_layer *
-                         rsc->separate_stencil->cube_map_stride);
-                surface->separate_stencil_tiling =
-                        separate_stencil_slice->tiling;
-        }
 
         surface->format = vc5_get_rt_format(&screen->devinfo, psurf->format);
 
@@ -707,15 +767,14 @@ vc5_create_surface(struct pipe_context *pctx,
         if (surface->tiling == VC5_TILING_UIF_NO_XOR ||
             surface->tiling == VC5_TILING_UIF_XOR) {
                 surface->padded_height_of_output_image_in_uif_blocks =
-                        ((slice->size / slice->stride) /
+                        (slice->padded_height /
                          (2 * vc5_utile_height(rsc->cpp)));
+        }
 
-                if (separate_stencil_slice) {
-                        surface->separate_stencil_padded_height_of_output_image_in_uif_blocks =
-                        ((separate_stencil_slice->size /
-                          separate_stencil_slice->stride) /
-                         (2 * vc5_utile_height(rsc->separate_stencil->cpp)));
-                }
+        if (rsc->separate_stencil) {
+                surface->separate_stencil =
+                        vc5_create_surface(pctx, &rsc->separate_stencil->base,
+                                           surf_tmpl);
         }
 
         return &surface->base;
@@ -724,6 +783,11 @@ vc5_create_surface(struct pipe_context *pctx,
 static void
 vc5_surface_destroy(struct pipe_context *pctx, struct pipe_surface *psurf)
 {
+        struct vc5_surface *surf = vc5_surface(psurf);
+
+        if (surf->separate_stencil)
+                pipe_surface_reference(&surf->separate_stencil, NULL);
+
         pipe_resource_reference(&psurf->texture, NULL);
         FREE(psurf);
 }

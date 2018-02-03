@@ -31,6 +31,7 @@
 #include "util/u_helpers.h"
 
 #include "vc5_context.h"
+#include "vc5_tiling.h"
 #include "broadcom/common/v3d_macros.h"
 #include "broadcom/cle/v3dx_pack.h"
 
@@ -443,6 +444,9 @@ vc5_set_framebuffer_state(struct pipe_context *pctx,
         vc5->blend_dst_alpha_one = 0;
         for (int i = 0; i < vc5->framebuffer.nr_cbufs; i++) {
                 struct pipe_surface *cbuf = vc5->framebuffer.cbufs[i];
+                if (!cbuf)
+                        continue;
+
                 const struct util_format_description *desc =
                         util_format_description(cbuf->format);
 
@@ -769,9 +773,6 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                                                               cso->format);
                 }
 
-                tex.uif_xor_disable = (rsc->slices[0].tiling ==
-                                       VC5_TILING_UIF_NO_XOR);
-
                 /* Since other platform devices may produce UIF images even
                  * when they're not big enough for V3D to assume they're UIF,
                  * we force images with level 0 as UIF to be always treated
@@ -783,6 +784,9 @@ vc5_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                                                VC5_TILING_UIF_NO_XOR);
                 tex.level_0_xor_enable = (rsc->slices[0].tiling ==
                                           VC5_TILING_UIF_XOR);
+
+                if (tex.level_0_is_strictly_uif)
+                        tex.level_0_ub_pad = rsc->slices[0].ub_pad;
 
 #if V3D_VERSION >= 40
                 if (tex.uif_xor_disable ||
