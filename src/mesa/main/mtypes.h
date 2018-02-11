@@ -81,6 +81,10 @@ typedef GLuint64 GLbitfield64;
    (BITFIELD64_MASK((b) + (count)) & ~BITFIELD64_MASK(b))
 
 
+#define GET_COLORMASK_BIT(mask, buf, chan) (((mask) >> (4 * (buf) + (chan))) & 0x1)
+#define GET_COLORMASK(mask, buf) (((mask) >> (4 * (buf))) & 0xf)
+
+
 /**
  * \name Some forward type declarations
  */
@@ -459,7 +463,9 @@ struct gl_colorbuffer_attrib
    GLuint ClearIndex;                      /**< Index for glClear */
    union gl_color_union ClearColor;        /**< Color for glClear, unclamped */
    GLuint IndexMask;                       /**< Color index write mask */
-   GLubyte ColorMask[MAX_DRAW_BUFFERS][4]; /**< Each flag is 0xff or 0x0 */
+
+   /** 4 colormask bits per draw buffer, max 8 draw buffers. 4*8 = 32 bits */
+   GLbitfield ColorMask;
 
    GLenum16 DrawBuffer[MAX_DRAW_BUFFERS];  /**< Which buffer to draw into */
 
@@ -1437,7 +1443,6 @@ typedef enum
  */
 struct gl_buffer_object
 {
-   simple_mtx_t Mutex;
    GLint RefCount;
    GLuint Name;
    GLchar *Label;       /**< GL_KHR_debug */
@@ -1458,6 +1463,7 @@ struct gl_buffer_object
    struct gl_buffer_mapping Mappings[MAP_COUNT];
 
    /** Memoization of min/max index computations for static index buffers */
+   simple_mtx_t MinMaxCacheMutex;
    struct hash_table *MinMaxCache;
    unsigned MinMaxCacheHitIndices;
    unsigned MinMaxCacheMissIndices;
@@ -1597,9 +1603,9 @@ struct gl_vertex_array_object
     * Derived vertex attribute arrays
     *
     * This is a legacy data structure created from gl_array_attributes and
-    * gl_vertex_buffer_binding, for compatibility with existing driver code.
+    * gl_vertex_buffer_binding, only used by the VBO module at this time.
     */
-   struct gl_vertex_array _VertexAttrib[VERT_ATTRIB_MAX];
+   struct gl_vertex_array _VertexArray[VERT_ATTRIB_MAX];
 
    /** Vertex attribute arrays */
    struct gl_array_attributes VertexAttrib[VERT_ATTRIB_MAX];

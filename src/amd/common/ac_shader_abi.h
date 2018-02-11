@@ -54,6 +54,10 @@ struct ac_shader_abi {
 	LLVMValueRef ancillary;
 	LLVMValueRef sample_coverage;
 	LLVMValueRef prim_mask;
+	/* CS */
+	LLVMValueRef local_invocation_ids;
+	LLVMValueRef num_work_groups;
+	LLVMValueRef workgroup_ids[3];
 
 	/* For VS and PS: pre-loaded shader inputs.
 	 *
@@ -153,6 +157,8 @@ struct ac_shader_abi {
 
 	LLVMValueRef (*load_sample_position)(struct ac_shader_abi *abi,
 					     LLVMValueRef sample_id);
+
+	LLVMValueRef (*load_local_group_size)(struct ac_shader_abi *abi);
 
 	/* Whether to clamp the shadow reference value to [0,1]on VI. Radeonsi currently
 	 * uses it due to promoting D16 to D32, but radv needs it off. */

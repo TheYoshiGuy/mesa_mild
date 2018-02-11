@@ -967,19 +967,19 @@ _mesa_PopAttrib(void)
                                 color->ClearColor.f[3]);
                _mesa_IndexMask(color->IndexMask);
                if (!ctx->Extensions.EXT_draw_buffers2) {
-                  _mesa_ColorMask((GLboolean) (color->ColorMask[0][0] != 0),
-                                  (GLboolean) (color->ColorMask[0][1] != 0),
-                                  (GLboolean) (color->ColorMask[0][2] != 0),
-                                  (GLboolean) (color->ColorMask[0][3] != 0));
+                  _mesa_ColorMask(GET_COLORMASK_BIT(color->ColorMask, 0, 0),
+                                  GET_COLORMASK_BIT(color->ColorMask, 0, 1),
+                                  GET_COLORMASK_BIT(color->ColorMask, 0, 2),
+                                  GET_COLORMASK_BIT(color->ColorMask, 0, 3));
                }
                else {
                   GLuint i;
                   for (i = 0; i < ctx->Const.MaxDrawBuffers; i++) {
                      _mesa_ColorMaski(i,
-                                  (GLboolean) (color->ColorMask[i][0] != 0),
-                                  (GLboolean) (color->ColorMask[i][1] != 0),
-                                  (GLboolean) (color->ColorMask[i][2] != 0),
-                                  (GLboolean) (color->ColorMask[i][3] != 0));
+                                      GET_COLORMASK_BIT(color->ColorMask, i, 0),
+                                      GET_COLORMASK_BIT(color->ColorMask, i, 1),
+                                      GET_COLORMASK_BIT(color->ColorMask, i, 2),
+                                      GET_COLORMASK_BIT(color->ColorMask, i, 3));
                   }
                }
                {
@@ -1503,7 +1503,7 @@ copy_array_object(struct gl_context *ctx,
    /* skip RefCount */
 
    for (i = 0; i < ARRAY_SIZE(src->VertexAttrib); i++) {
-      _mesa_copy_vertex_array(ctx, &dest->_VertexAttrib[i], &src->_VertexAttrib[i]);
+      _mesa_copy_vertex_array(ctx, &dest->_VertexArray[i], &src->_VertexArray[i]);
       _mesa_copy_vertex_attrib_array(ctx, &dest->VertexAttrib[i], &src->VertexAttrib[i]);
       _mesa_copy_vertex_buffer_binding(ctx, &dest->BufferBinding[i], &src->BufferBinding[i]);
    }

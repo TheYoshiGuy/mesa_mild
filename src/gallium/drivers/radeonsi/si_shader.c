@@ -1874,6 +1874,32 @@ static LLVMValueRef get_sample_id(struct si_shader_context *ctx)
 	return unpack_param(ctx, SI_PARAM_ANCILLARY, 8, 4);
 }
 
+static LLVMValueRef get_block_size(struct ac_shader_abi *abi)
+{
+	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
+
+	LLVMValueRef values[3];
+	LLVMValueRef result;
+	unsigned i;
+	unsigned *properties = ctx->shader->selector->info.properties;
+
+	if (properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH] != 0) {
+		unsigned sizes[3] = {
+			properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH],
+			properties[TGSI_PROPERTY_CS_FIXED_BLOCK_HEIGHT],
+			properties[TGSI_PROPERTY_CS_FIXED_BLOCK_DEPTH]
+		};
+
+		for (i = 0; i < 3; ++i)
+			values[i] = LLVMConstInt(ctx->i32, sizes[i], 0);
+
+		result = lp_build_gather_values(&ctx->gallivm, values, 3);
+	} else {
+		result = LLVMGetParam(ctx->main_fn, ctx->param_block_size);
+	}
+
+	return result;
+}
 
 /**
  * Load a dword from a constant buffer.
@@ -2120,31 +2146,12 @@ void si_load_system_value(struct si_shader_context *ctx,
 		break;
 
 	case TGSI_SEMANTIC_GRID_SIZE:
-		value = LLVMGetParam(ctx->main_fn, ctx->param_grid_size);
+		value = ctx->abi.num_work_groups;
 		break;
 
 	case TGSI_SEMANTIC_BLOCK_SIZE:
-	{
-		LLVMValueRef values[3];
-		unsigned i;
-		unsigned *properties = ctx->shader->selector->info.properties;
-
-		if (properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH] != 0) {
-			unsigned sizes[3] = {
-				properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH],
-				properties[TGSI_PROPERTY_CS_FIXED_BLOCK_HEIGHT],
-				properties[TGSI_PROPERTY_CS_FIXED_BLOCK_DEPTH]
-			};
-
-			for (i = 0; i < 3; ++i)
-				values[i] = LLVMConstInt(ctx->i32, sizes[i], 0);
-
-			value = lp_build_gather_values(&ctx->gallivm, values, 3);
-		} else {
-			value = LLVMGetParam(ctx->main_fn, ctx->param_block_size);
-		}
+		value = get_block_size(&ctx->abi);
 		break;
-	}
 
 	case TGSI_SEMANTIC_BLOCK_ID:
 	{
@@ -2152,9 +2159,8 @@ void si_load_system_value(struct si_shader_context *ctx,
 
 		for (int i = 0; i < 3; i++) {
 			values[i] = ctx->i32_0;
-			if (ctx->param_block_id[i] >= 0) {
-				values[i] = LLVMGetParam(ctx->main_fn,
-							 ctx->param_block_id[i]);
+			if (ctx->abi.workgroup_ids[i]) {
+				values[i] = ctx->abi.workgroup_ids[i];
 			}
 		}
 		value = lp_build_gather_values(&ctx->gallivm, values, 3);
@@ -2162,7 +2168,7 @@ void si_load_system_value(struct si_shader_context *ctx,
 	}
 
 	case TGSI_SEMANTIC_THREAD_ID:
-		value = LLVMGetParam(ctx->main_fn, ctx->param_thread_id);
+		value = ctx->abi.local_invocation_ids;
 		break;
 
 	case TGSI_SEMANTIC_HELPER_INVOCATION:
@@ -3719,25 +3725,6 @@ static void si_emit_ps_exports(struct si_shader_context *ctx,
 		ac_build_export(&ctx->ac, &exp->args[i]);
 }
 
-static void si_export_null(struct lp_build_tgsi_context *bld_base)
-{
-	struct si_shader_context *ctx = si_shader_context(bld_base);
-	struct lp_build_context *base = &bld_base->base;
-	struct ac_export_args args;
-
-	args.enabled_channels = 0x0; /* enabled channels */
-	args.valid_mask = 1; /* whether the EXEC mask is valid */
-	args.done = 1; /* DONE bit */
-	args.target = V_008DFC_SQ_EXP_NULL;
-	args.compr = 0; /* COMPR flag (0 = 32-bit export) */
-	args.out[0] = base->undef; /* R */
-	args.out[1] = base->undef; /* G */
-	args.out[2] = base->undef; /* B */
-	args.out[3] = base->undef; /* A */
-
-	ac_build_export(&ctx->ac, &args);
-}
-
 /**
  * Return PS outputs in this order:
  *
@@ -3867,11 +3854,7 @@ static void clock_emit(
 		struct lp_build_emit_data *emit_data)
 {
 	struct si_shader_context *ctx = si_shader_context(bld_base);
-	LLVMValueRef tmp;
-
-	tmp = lp_build_intrinsic(ctx->ac.builder, "llvm.readcyclecounter",
-				 ctx->i64, NULL, 0, 0);
-	tmp = LLVMBuildBitCast(ctx->ac.builder, tmp, ctx->v2i32, "");
+	LLVMValueRef tmp = ac_build_shader_clock(&ctx->ac);
 
 	emit_data->output[0] =
 		LLVMBuildExtractElement(ctx->ac.builder, tmp, ctx->i32_0, "");
@@ -4877,17 +4860,17 @@ static void create_function(struct si_shader_context *ctx)
 		declare_global_desc_pointers(ctx, &fninfo);
 		declare_per_stage_desc_pointers(ctx, &fninfo, true);
 		if (shader->selector->info.uses_grid_size)
-			ctx->param_grid_size = add_arg(&fninfo, ARG_SGPR, v3i32);
+			add_arg_assign(&fninfo, ARG_SGPR, v3i32, &ctx->abi.num_work_groups);
 		if (shader->selector->info.uses_block_size)
 			ctx->param_block_size = add_arg(&fninfo, ARG_SGPR, v3i32);
 
 		for (i = 0; i < 3; i++) {
-			ctx->param_block_id[i] = -1;
+			ctx->abi.workgroup_ids[i] = NULL;
 			if (shader->selector->info.uses_block_id[i])
-				ctx->param_block_id[i] = add_arg(&fninfo, ARG_SGPR, ctx->i32);
+				add_arg_assign(&fninfo, ARG_SGPR, ctx->i32, &ctx->abi.workgroup_ids[i]);
 		}
 
-		ctx->param_thread_id = add_arg(&fninfo, ARG_VGPR, v3i32);
+		add_arg_assign(&fninfo, ARG_VGPR, v3i32, &ctx->abi.local_invocation_ids);
 		break;
 	default:
 		assert(0 && "unimplemented shader");
@@ -5979,6 +5962,7 @@ static bool si_compile_tgsi_main(struct si_shader_context *ctx,
 		ctx->abi.load_sample_position = load_sample_position;
 		break;
 	case PIPE_SHADER_COMPUTE:
+		ctx->abi.load_local_group_size = get_block_size;
 		break;
 	default:
 		assert(!"Unsupported shader type");
@@ -7732,7 +7716,7 @@ static void si_build_ps_epilog_function(struct si_shader_context *ctx,
 	if (depth || stencil || samplemask)
 		si_export_mrt_z(bld_base, depth, stencil, samplemask, &exp);
 	else if (last_color_export == -1)
-		si_export_null(bld_base);
+		ac_build_export_null(&ctx->ac);
 
 	if (exp.num)
 		si_emit_ps_exports(ctx, &exp);

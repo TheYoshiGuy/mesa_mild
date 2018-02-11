@@ -90,9 +90,6 @@ struct nir_to_llvm_context {
 	LLVMValueRef ring_offsets;
 	LLVMValueRef push_constants;
 	LLVMValueRef view_index;
-	LLVMValueRef num_work_groups;
-	LLVMValueRef workgroup_ids[3];
-	LLVMValueRef local_invocation_ids;
 	LLVMValueRef tg_size;
 
 	LLVMValueRef vertex_buffers;
@@ -332,24 +329,6 @@ create_llvm_function(LLVMContextRef ctx, LLVMModuleRef module,
 	return main_function;
 }
 
-static int get_elem_bits(struct ac_llvm_context *ctx, LLVMTypeRef type)
-{
-	if (LLVMGetTypeKind(type) == LLVMVectorTypeKind)
-		type = LLVMGetElementType(type);
-
-	if (LLVMGetTypeKind(type) == LLVMIntegerTypeKind)
-		return LLVMGetIntTypeWidth(type);
-
-	if (type == ctx->f16)
-		return 16;
-	if (type == ctx->f32)
-		return 32;
-	if (type == ctx->f64)
-		return 64;
-
-	unreachable("Unhandled type kind in get_elem_bits");
-}
-
 static LLVMValueRef unpack_param(struct ac_llvm_context *ctx,
 				 LLVMValueRef param, unsigned rshift,
 				 unsigned bitwidth)
@@ -534,8 +513,21 @@ static bool needs_view_index_sgpr(struct nir_to_llvm_context *ctx,
 	return false;
 }
 
+static uint8_t
+count_vs_user_sgprs(struct nir_to_llvm_context *ctx)
+{
+	uint8_t count = 0;
+
+	count += ctx->shader_info->info.vs.has_vertex_buffers ? 2 : 0;
+	count += ctx->shader_info->info.vs.needs_draw_id ? 3 : 2;
+
+	return count;
+}
+
 static void allocate_user_sgprs(struct nir_to_llvm_context *ctx,
 				gl_shader_stage stage,
+				bool has_previous_stage,
+				gl_shader_stage previous_stage,
 				bool needs_view_index,
 				struct user_sgpr_info *user_sgpr_info)
 {
@@ -558,7 +550,6 @@ static void allocate_user_sgprs(struct nir_to_llvm_context *ctx,
 		user_sgpr_info->sgpr_count += 2;
 	}
 
-	/* FIXME: fix the number of user sgprs for merged shaders on GFX9 */
 	switch (stage) {
 	case MESA_SHADER_COMPUTE:
 		if (ctx->shader_info->info.cs.uses_grid_size)
@@ -568,24 +559,30 @@ static void allocate_user_sgprs(struct nir_to_llvm_context *ctx,
 		user_sgpr_info->sgpr_count += ctx->shader_info->info.ps.needs_sample_positions;
 		break;
 	case MESA_SHADER_VERTEX:
-		if (!ctx->is_gs_copy_shader) {
-			user_sgpr_info->sgpr_count += ctx->shader_info->info.vs.has_vertex_buffers ? 2 : 0;
-			if (ctx->shader_info->info.vs.needs_draw_id) {
-				user_sgpr_info->sgpr_count += 3;
-			} else {
-				user_sgpr_info->sgpr_count += 2;
-			}
-		}
+		if (!ctx->is_gs_copy_shader)
+			user_sgpr_info->sgpr_count += count_vs_user_sgprs(ctx);
 		if (ctx->options->key.vs.as_ls)
 			user_sgpr_info->sgpr_count++;
 		break;
 	case MESA_SHADER_TESS_CTRL:
+		if (has_previous_stage) {
+			if (previous_stage == MESA_SHADER_VERTEX)
+				user_sgpr_info->sgpr_count += count_vs_user_sgprs(ctx);
+			user_sgpr_info->sgpr_count++;
+		}
 		user_sgpr_info->sgpr_count += 4;
 		break;
 	case MESA_SHADER_TESS_EVAL:
 		user_sgpr_info->sgpr_count += 1;
 		break;
 	case MESA_SHADER_GEOMETRY:
+		if (has_previous_stage) {
+			if (previous_stage == MESA_SHADER_VERTEX) {
+				user_sgpr_info->sgpr_count += count_vs_user_sgprs(ctx);
+			} else {
+				user_sgpr_info->sgpr_count++;
+			}
+		}
 		user_sgpr_info->sgpr_count += 2;
 		break;
 	default:
@@ -767,7 +764,8 @@ static void create_function(struct nir_to_llvm_context *ctx,
 	struct arg_info args = {};
 	LLVMValueRef desc_sets;
 	bool needs_view_index = needs_view_index_sgpr(ctx, stage);
-	allocate_user_sgprs(ctx, stage, needs_view_index, &user_sgpr_info);
+	allocate_user_sgprs(ctx, stage, has_previous_stage,
+			    previous_stage, needs_view_index, &user_sgpr_info);
 
 	if (user_sgpr_info.need_ring_offsets && !ctx->options->supports_spill) {
 		add_arg(&args, ARG_SGPR, ac_array_in_const_addr_space(ctx->ac.v4i32),
@@ -782,21 +780,21 @@ static void create_function(struct nir_to_llvm_context *ctx,
 
 		if (ctx->shader_info->info.cs.uses_grid_size) {
 			add_arg(&args, ARG_SGPR, ctx->ac.v3i32,
-				&ctx->num_work_groups);
+				&ctx->abi.num_work_groups);
 		}
 
 		for (int i = 0; i < 3; i++) {
-			ctx->workgroup_ids[i] = NULL;
+			ctx->abi.workgroup_ids[i] = NULL;
 			if (ctx->shader_info->info.cs.uses_block_id[i]) {
 				add_arg(&args, ARG_SGPR, ctx->ac.i32,
-					&ctx->workgroup_ids[i]);
+					&ctx->abi.workgroup_ids[i]);
 			}
 		}
 
 		if (ctx->shader_info->info.cs.uses_local_invocation_idx)
 			add_arg(&args, ARG_SGPR, ctx->ac.i32, &ctx->tg_size);
 		add_arg(&args, ARG_VGPR, ctx->ac.v3i32,
-			&ctx->local_invocation_ids);
+			&ctx->abi.local_invocation_ids);
 		break;
 	case MESA_SHADER_VERTEX:
 		declare_global_input_sgprs(ctx, stage, has_previous_stage,
@@ -1270,7 +1268,7 @@ static LLVMValueRef emit_intrin_1f_param(struct ac_llvm_context *ctx,
 	};
 
 	MAYBE_UNUSED const int length = snprintf(name, sizeof(name), "%s.f%d", intrin,
-						 get_elem_bits(ctx, result_type));
+						 ac_get_elem_bits(ctx, result_type));
 	assert(length < sizeof(name));
 	return ac_build_intrinsic(ctx, name, result_type, params, 1, AC_FUNC_ATTR_READNONE);
 }
@@ -1287,7 +1285,7 @@ static LLVMValueRef emit_intrin_2f_param(struct ac_llvm_context *ctx,
 	};
 
 	MAYBE_UNUSED const int length = snprintf(name, sizeof(name), "%s.f%d", intrin,
-						 get_elem_bits(ctx, result_type));
+						 ac_get_elem_bits(ctx, result_type));
 	assert(length < sizeof(name));
 	return ac_build_intrinsic(ctx, name, result_type, params, 2, AC_FUNC_ATTR_READNONE);
 }
@@ -1305,7 +1303,7 @@ static LLVMValueRef emit_intrin_3f_param(struct ac_llvm_context *ctx,
 	};
 
 	MAYBE_UNUSED const int length = snprintf(name, sizeof(name), "%s.f%d", intrin,
-						 get_elem_bits(ctx, result_type));
+						 ac_get_elem_bits(ctx, result_type));
 	assert(length < sizeof(name));
 	return ac_build_intrinsic(ctx, name, result_type, params, 3, AC_FUNC_ATTR_READNONE);
 }
@@ -1744,11 +1742,6 @@ static void visit_alu(struct ac_nir_context *ctx, const nir_alu_instr *instr)
 		src[1] = ac_to_float(&ctx->ac, src[1]);
 		result = LLVMBuildFMul(ctx->ac.builder, src[0], src[1], "");
 		break;
-	case nir_op_fdiv:
-		src[0] = ac_to_float(&ctx->ac, src[0]);
-		src[1] = ac_to_float(&ctx->ac, src[1]);
-		result = ac_build_fdiv(&ctx->ac, src[0], src[1]);
-		break;
 	case nir_op_frcp:
 		src[0] = ac_to_float(&ctx->ac, src[0]);
 		result = ac_build_fdiv(&ctx->ac, instr->dest.dest.ssa.bit_size == 32 ? ctx->ac.f32_1 : ctx->ac.f64_1,
@@ -1925,7 +1918,12 @@ static void visit_alu(struct ac_nir_context *ctx, const nir_alu_instr *instr)
 		result = ac_build_intrinsic(&ctx->ac, "llvm.bitreverse.i32", ctx->ac.i32, src, 1, AC_FUNC_ATTR_READNONE);
 		break;
 	case nir_op_bit_count:
-		result = ac_build_intrinsic(&ctx->ac, "llvm.ctpop.i32", ctx->ac.i32, src, 1, AC_FUNC_ATTR_READNONE);
+		if (ac_get_elem_bits(&ctx->ac, LLVMTypeOf(src[0])) == 32)
+			result = ac_build_intrinsic(&ctx->ac, "llvm.ctpop.i32", ctx->ac.i32, src, 1, AC_FUNC_ATTR_READNONE);
+		else {
+			result = ac_build_intrinsic(&ctx->ac, "llvm.ctpop.i64", ctx->ac.i64, src, 1, AC_FUNC_ATTR_READNONE);
+			result = LLVMBuildTrunc(ctx->ac.builder, result, ctx->ac.i32, "");
+		}
 		break;
 	case nir_op_vec2:
 	case nir_op_vec3:
@@ -1959,12 +1957,13 @@ static void visit_alu(struct ac_nir_context *ctx, const nir_alu_instr *instr)
 		result = LLVMBuildFPExt(ctx->ac.builder, src[0], ac_to_float_type(&ctx->ac, def_type), "");
 		break;
 	case nir_op_f2f32:
+		src[0] = ac_to_float(&ctx->ac, src[0]);
 		result = LLVMBuildFPTrunc(ctx->ac.builder, src[0], ac_to_float_type(&ctx->ac, def_type), "");
 		break;
 	case nir_op_u2u32:
 	case nir_op_u2u64:
 		src[0] = ac_to_integer(&ctx->ac, src[0]);
-		if (get_elem_bits(&ctx->ac, LLVMTypeOf(src[0])) < get_elem_bits(&ctx->ac, def_type))
+		if (ac_get_elem_bits(&ctx->ac, LLVMTypeOf(src[0])) < ac_get_elem_bits(&ctx->ac, def_type))
 			result = LLVMBuildZExt(ctx->ac.builder, src[0], def_type, "");
 		else
 			result = LLVMBuildTrunc(ctx->ac.builder, src[0], def_type, "");
@@ -1972,7 +1971,7 @@ static void visit_alu(struct ac_nir_context *ctx, const nir_alu_instr *instr)
 	case nir_op_i2i32:
 	case nir_op_i2i64:
 		src[0] = ac_to_integer(&ctx->ac, src[0]);
-		if (get_elem_bits(&ctx->ac, LLVMTypeOf(src[0])) < get_elem_bits(&ctx->ac, def_type))
+		if (ac_get_elem_bits(&ctx->ac, LLVMTypeOf(src[0])) < ac_get_elem_bits(&ctx->ac, def_type))
 			result = LLVMBuildSExt(ctx->ac.builder, src[0], def_type, "");
 		else
 			result = LLVMBuildTrunc(ctx->ac.builder, src[0], def_type, "");
@@ -2044,7 +2043,7 @@ static void visit_alu(struct ac_nir_context *ctx, const nir_alu_instr *instr)
 		break;
 
 	case nir_op_unpack_64_2x32_split_x: {
-		assert(instr->src[0].src.ssa->num_components == 1);
+		assert(ac_get_llvm_num_components(src[0]) == 1);
 		LLVMValueRef tmp = LLVMBuildBitCast(ctx->ac.builder, src[0],
 						    ctx->ac.v2i32,
 						    "");
@@ -2054,7 +2053,7 @@ static void visit_alu(struct ac_nir_context *ctx, const nir_alu_instr *instr)
 	}
 
 	case nir_op_unpack_64_2x32_split_y: {
-		assert(instr->src[0].src.ssa->num_components == 1);
+		assert(ac_get_llvm_num_components(src[0]) == 1);
 		LLVMValueRef tmp = LLVMBuildBitCast(ctx->ac.builder, src[0],
 						    ctx->ac.v2i32,
 						    "");
@@ -2467,7 +2466,7 @@ static void visit_store_ssbo(struct ac_nir_context *ctx,
 	const char *store_name;
 	LLVMValueRef src_data = get_src(ctx, instr->src[0]);
 	LLVMTypeRef data_type = ctx->ac.f32;
-	int elem_size_mult = get_elem_bits(&ctx->ac, LLVMTypeOf(src_data)) / 32;
+	int elem_size_mult = ac_get_elem_bits(&ctx->ac, LLVMTypeOf(src_data)) / 32;
 	int components_32bit = elem_size_mult * instr->num_components;
 	unsigned writemask = nir_intrinsic_write_mask(instr);
 	LLVMValueRef base_data, base_offset;
@@ -3074,10 +3073,13 @@ load_gs_input(struct ac_shader_abi *abi,
 							ctx->ac.i32_0,
 							vtx_offset, soffset,
 							0, 1, 0, true, false);
+
+			value[i] = LLVMBuildBitCast(ctx->builder, value[i],
+						    type, "");
 		}
 	}
 	result = ac_build_varying_gather_values(&ctx->ac, value, num_components, component);
-
+	result = ac_to_integer(&ctx->ac, result);
 	return result;
 }
 
@@ -3273,7 +3275,7 @@ visit_store_var(struct ac_nir_context *ctx,
 	get_deref_offset(ctx, instr->variables[0], false,
 		         NULL, NULL, &const_index, &indir_index);
 
-	if (get_elem_bits(&ctx->ac, LLVMTypeOf(src)) == 64) {
+	if (ac_get_elem_bits(&ctx->ac, LLVMTypeOf(src)) == 64) {
 
 		src = LLVMBuildBitCast(ctx->ac.builder, src,
 		                       LLVMVectorType(ctx->ac.f32, ac_get_llvm_num_components(src) * 2),
@@ -3835,7 +3837,7 @@ static LLVMValueRef visit_image_size(struct ac_nir_context *ctx,
 #define LGKM_CNT 0x07f
 #define VM_CNT 0xf70
 
-static void emit_membar(struct nir_to_llvm_context *ctx,
+static void emit_membar(struct ac_llvm_context *ac,
 			const nir_intrinsic_instr *instr)
 {
 	unsigned waitcnt = NOOP_WAITCNT;
@@ -3857,7 +3859,7 @@ static void emit_membar(struct nir_to_llvm_context *ctx,
 		break;
 	}
 	if (waitcnt != NOOP_WAITCNT)
-		ac_build_waitcnt(&ctx->ac, waitcnt);
+		ac_build_waitcnt(ac, waitcnt);
 }
 
 static void emit_barrier(struct ac_llvm_context *ac, gl_shader_stage stage)
@@ -4301,8 +4303,8 @@ static void visit_intrinsic(struct ac_nir_context *ctx,
 		LLVMValueRef values[3];
 
 		for (int i = 0; i < 3; i++) {
-			values[i] = ctx->nctx->workgroup_ids[i] ?
-				    ctx->nctx->workgroup_ids[i] : ctx->ac.i32_0;
+			values[i] = ctx->abi->workgroup_ids[i] ?
+				    ctx->abi->workgroup_ids[i] : ctx->ac.i32_0;
 		}
 
 		result = ac_build_gather_values(&ctx->ac, values, 3);
@@ -4312,12 +4314,15 @@ static void visit_intrinsic(struct ac_nir_context *ctx,
 		result = ctx->abi->base_vertex;
 		break;
 	}
+	case nir_intrinsic_load_local_group_size:
+		result = ctx->abi->load_local_group_size(ctx->abi);
+		break;
 	case nir_intrinsic_load_vertex_id_zero_base: {
 		result = ctx->abi->vertex_id;
 		break;
 	}
 	case nir_intrinsic_load_local_invocation_id: {
-		result = ctx->nctx->local_invocation_ids;
+		result = ctx->abi->local_invocation_ids;
 		break;
 	}
 	case nir_intrinsic_load_base_instance:
@@ -4377,7 +4382,7 @@ static void visit_intrinsic(struct ac_nir_context *ctx,
 		result = ctx->abi->instance_id;
 		break;
 	case nir_intrinsic_load_num_work_groups:
-		result = ctx->nctx->num_work_groups;
+		result = ctx->abi->num_work_groups;
 		break;
 	case nir_intrinsic_load_local_invocation_index:
 		result = visit_load_local_invocation_index(ctx->nctx);
@@ -4440,6 +4445,9 @@ static void visit_intrinsic(struct ac_nir_context *ctx,
 	case nir_intrinsic_image_size:
 		result = visit_image_size(ctx, instr);
 		break;
+	case nir_intrinsic_shader_clock:
+		result = ac_build_shader_clock(&ctx->ac);
+		break;
 	case nir_intrinsic_discard:
 	case nir_intrinsic_discard_if:
 		emit_discard(ctx, instr);
@@ -4450,7 +4458,7 @@ static void visit_intrinsic(struct ac_nir_context *ctx,
 	case nir_intrinsic_memory_barrier_buffer:
 	case nir_intrinsic_memory_barrier_image:
 	case nir_intrinsic_memory_barrier_shared:
-		emit_membar(ctx->nctx, instr);
+		emit_membar(&ctx->ac, instr);
 		break;
 	case nir_intrinsic_barrier:
 		emit_barrier(&ctx->ac, ctx->stage);
@@ -5316,6 +5324,9 @@ handle_vs_input_decl(struct nir_to_llvm_context *ctx,
 	int index = variable->data.location - VERT_ATTRIB_GENERIC0;
 	int idx = variable->data.location;
 	unsigned attrib_count = glsl_count_attribute_slots(variable->type, true);
+	uint8_t input_usage_mask =
+		ctx->shader_info->info.vs.input_usage_mask[variable->data.location];
+	unsigned num_channels = util_last_bit(input_usage_mask);
 
 	variable->data.driver_location = idx * 4;
 
@@ -5340,7 +5351,9 @@ handle_vs_input_decl(struct nir_to_llvm_context *ctx,
 		input = ac_build_buffer_load_format(&ctx->ac, t_list,
 						    buffer_index,
 						    ctx->ac.i32_0,
-						    4, false, true);
+						    num_channels, false, true);
+
+		input = ac_build_expand_to_vec4(&ctx->ac, input, num_channels);
 
 		for (unsigned chan = 0; chan < 4; chan++) {
 			LLVMValueRef llvm_chan = LLVMConstInt(ctx->ac.i32, chan, false);
@@ -5732,27 +5745,6 @@ setup_shared(struct ac_nir_context *ctx,
 	}
 }
 
-static LLVMValueRef
-emit_float_saturate(struct ac_llvm_context *ctx, LLVMValueRef v, float lo, float hi)
-{
-	v = ac_to_float(ctx, v);
-	v = emit_intrin_2f_param(ctx, "llvm.maxnum", ctx->f32, v, LLVMConstReal(ctx->f32, lo));
-	return emit_intrin_2f_param(ctx, "llvm.minnum", ctx->f32, v, LLVMConstReal(ctx->f32, hi));
-}
-
-
-static LLVMValueRef emit_pack_int16(struct nir_to_llvm_context *ctx,
-					LLVMValueRef src0, LLVMValueRef src1)
-{
-	LLVMValueRef const16 = LLVMConstInt(ctx->ac.i32, 16, false);
-	LLVMValueRef comp[2];
-
-	comp[0] = LLVMBuildAnd(ctx->builder, src0, LLVMConstInt(ctx->ac.i32, 65535, 0), "");
-	comp[1] = LLVMBuildAnd(ctx->builder, src1, LLVMConstInt(ctx->ac.i32, 65535, 0), "");
-	comp[1] = LLVMBuildShl(ctx->builder, comp[1], const16, "");
-	return LLVMBuildOr(ctx->builder, comp[0], comp[1], "");
-}
-
 /* Initialize arguments for the shader export intrinsic */
 static void
 si_llvm_init_export_args(struct nir_to_llvm_context *ctx,
@@ -5778,15 +5770,16 @@ si_llvm_init_export_args(struct nir_to_llvm_context *ctx,
 	args->out[2] = LLVMGetUndef(ctx->ac.f32);
 	args->out[3] = LLVMGetUndef(ctx->ac.f32);
 
-	if (!values)
-		return;
-
 	if (ctx->stage == MESA_SHADER_FRAGMENT && target >= V_008DFC_SQ_EXP_MRT) {
-		LLVMValueRef val[4];
 		unsigned index = target - V_008DFC_SQ_EXP_MRT;
 		unsigned col_format = (ctx->options->key.fs.col_format >> (4 * index)) & 0xf;
 		bool is_int8 = (ctx->options->key.fs.is_int8 >> index) & 1;
 		bool is_int10 = (ctx->options->key.fs.is_int10 >> index) & 1;
+		unsigned chan;
+
+		LLVMValueRef (*packf)(struct ac_llvm_context *ctx, LLVMValueRef args[2]) = NULL;
+		LLVMValueRef (*packi)(struct ac_llvm_context *ctx, LLVMValueRef args[2],
+				      unsigned bits, bool hi) = NULL;
 
 		switch(col_format) {
 		case V_028714_SPI_SHADER_ZERO:
@@ -5812,104 +5805,89 @@ si_llvm_init_export_args(struct nir_to_llvm_context *ctx,
 			break;
 
 		case V_028714_SPI_SHADER_FP16_ABGR:
-			args->compr = 1;
-
-			for (unsigned chan = 0; chan < 2; chan++) {
-				LLVMValueRef pack_args[2] = {
-					values[2 * chan],
-					values[2 * chan + 1]
-				};
-				LLVMValueRef packed;
-
-				packed = ac_build_cvt_pkrtz_f16(&ctx->ac, pack_args);
-				args->out[chan] = packed;
-			}
+			packf = ac_build_cvt_pkrtz_f16;
 			break;
 
 		case V_028714_SPI_SHADER_UNORM16_ABGR:
-			for (unsigned chan = 0; chan < 4; chan++) {
-				val[chan] = ac_build_clamp(&ctx->ac, values[chan]);
-				val[chan] = LLVMBuildFMul(ctx->builder, val[chan],
-							LLVMConstReal(ctx->ac.f32, 65535), "");
-				val[chan] = LLVMBuildFAdd(ctx->builder, val[chan],
-							LLVMConstReal(ctx->ac.f32, 0.5), "");
-				val[chan] = LLVMBuildFPToUI(ctx->builder, val[chan],
-							ctx->ac.i32, "");
-			}
-
-			args->compr = 1;
-			args->out[0] = emit_pack_int16(ctx, val[0], val[1]);
-			args->out[1] = emit_pack_int16(ctx, val[2], val[3]);
+			packf = ac_build_cvt_pknorm_u16;
 			break;
 
 		case V_028714_SPI_SHADER_SNORM16_ABGR:
-			for (unsigned chan = 0; chan < 4; chan++) {
-				val[chan] = emit_float_saturate(&ctx->ac, values[chan], -1, 1);
-				val[chan] = LLVMBuildFMul(ctx->builder, val[chan],
-							LLVMConstReal(ctx->ac.f32, 32767), "");
-
-				/* If positive, add 0.5, else add -0.5. */
-				val[chan] = LLVMBuildFAdd(ctx->builder, val[chan],
-						LLVMBuildSelect(ctx->builder,
-							LLVMBuildFCmp(ctx->builder, LLVMRealOGE,
-								val[chan], ctx->ac.f32_0, ""),
-							LLVMConstReal(ctx->ac.f32, 0.5),
-							LLVMConstReal(ctx->ac.f32, -0.5), ""), "");
-				val[chan] = LLVMBuildFPToSI(ctx->builder, val[chan], ctx->ac.i32, "");
-			}
-
-			args->compr = 1;
-			args->out[0] = emit_pack_int16(ctx, val[0], val[1]);
-			args->out[1] = emit_pack_int16(ctx, val[2], val[3]);
+			packf = ac_build_cvt_pknorm_i16;
 			break;
 
-		case V_028714_SPI_SHADER_UINT16_ABGR: {
-			LLVMValueRef max_rgb = LLVMConstInt(ctx->ac.i32,
-							    is_int8 ? 255 : is_int10 ? 1023 : 65535, 0);
-			LLVMValueRef max_alpha = !is_int10 ? max_rgb : LLVMConstInt(ctx->ac.i32, 3, 0);
-
-			for (unsigned chan = 0; chan < 4; chan++) {
-				val[chan] = ac_to_integer(&ctx->ac, values[chan]);
-				val[chan] = emit_minmax_int(&ctx->ac, LLVMIntULT, val[chan], chan == 3 ? max_alpha : max_rgb);
-			}
-
-			args->compr = 1;
-			args->out[0] = emit_pack_int16(ctx, val[0], val[1]);
-			args->out[1] = emit_pack_int16(ctx, val[2], val[3]);
+		case V_028714_SPI_SHADER_UINT16_ABGR:
+			packi = ac_build_cvt_pk_u16;
 			break;
-		}
 
-		case V_028714_SPI_SHADER_SINT16_ABGR: {
-			LLVMValueRef max_rgb = LLVMConstInt(ctx->ac.i32,
-							    is_int8 ? 127 : is_int10 ? 511 : 32767, 0);
-			LLVMValueRef min_rgb = LLVMConstInt(ctx->ac.i32,
-							    is_int8 ? -128 : is_int10 ? -512 : -32768, 0);
-			LLVMValueRef max_alpha = !is_int10 ? max_rgb : ctx->ac.i32_1;
-			LLVMValueRef min_alpha = !is_int10 ? min_rgb : LLVMConstInt(ctx->ac.i32, -2, 0);
-
-			/* Clamp. */
-			for (unsigned chan = 0; chan < 4; chan++) {
-				val[chan] = ac_to_integer(&ctx->ac, values[chan]);
-				val[chan] = emit_minmax_int(&ctx->ac, LLVMIntSLT, val[chan], chan == 3 ? max_alpha : max_rgb);
-				val[chan] = emit_minmax_int(&ctx->ac, LLVMIntSGT, val[chan], chan == 3 ? min_alpha : min_rgb);
-			}
-
-			args->compr = 1;
-			args->out[0] = emit_pack_int16(ctx, val[0], val[1]);
-			args->out[1] = emit_pack_int16(ctx, val[2], val[3]);
+		case V_028714_SPI_SHADER_SINT16_ABGR:
+			packi = ac_build_cvt_pk_i16;
 			break;
-		}
 
 		default:
 		case V_028714_SPI_SHADER_32_ABGR:
 			memcpy(&args->out[0], values, sizeof(values[0]) * 4);
 			break;
 		}
-	} else
-		memcpy(&args->out[0], values, sizeof(values[0]) * 4);
+
+		/* Pack f16 or norm_i16/u16. */
+		if (packf) {
+			for (chan = 0; chan < 2; chan++) {
+				LLVMValueRef pack_args[2] = {
+					values[2 * chan],
+					values[2 * chan + 1]
+				};
+				LLVMValueRef packed;
+
+				packed = packf(&ctx->ac, pack_args);
+				args->out[chan] = ac_to_float(&ctx->ac, packed);
+			}
+			args->compr = 1; /* COMPR flag */
+		}
+
+		/* Pack i16/u16. */
+		if (packi) {
+			for (chan = 0; chan < 2; chan++) {
+				LLVMValueRef pack_args[2] = {
+					ac_to_integer(&ctx->ac, values[2 * chan]),
+					ac_to_integer(&ctx->ac, values[2 * chan + 1])
+				};
+				LLVMValueRef packed;
+
+				packed = packi(&ctx->ac, pack_args,
+					       is_int8 ? 8 : is_int10 ? 10 : 16,
+					       chan == 1);
+				args->out[chan] = ac_to_float(&ctx->ac, packed);
+			}
+			args->compr = 1; /* COMPR flag */
+		}
+		return;
+	}
+
+	memcpy(&args->out[0], values, sizeof(values[0]) * 4);
 
 	for (unsigned i = 0; i < 4; ++i)
 		args->out[i] = ac_to_float(&ctx->ac, args->out[i]);
+}
+
+static void
+radv_export_param(struct nir_to_llvm_context *ctx, unsigned index,
+		  LLVMValueRef *values)
+{
+	struct ac_export_args args;
+
+	si_llvm_init_export_args(ctx, values,
+				 V_008DFC_SQ_EXP_PARAM + index, &args);
+	ac_build_export(&ctx->ac, &args);
+}
+
+static LLVMValueRef
+radv_load_output(struct nir_to_llvm_context *ctx, unsigned index, unsigned chan)
+{
+	LLVMValueRef output =
+		ctx->nir->outputs[radeon_llvm_reg_index_soa(index, chan)];
+
+	return LLVMBuildLoad(ctx->builder, output, "");
 }
 
 static void
@@ -5948,8 +5926,7 @@ handle_vs_outputs_post(struct nir_to_llvm_context *ctx,
 
 		i = VARYING_SLOT_CLIP_DIST0;
 		for (j = 0; j < ctx->num_output_clips + ctx->num_output_culls; j++)
-			slots[j] = ac_to_float(&ctx->ac, LLVMBuildLoad(ctx->builder,
-							       ctx->nir->outputs[radeon_llvm_reg_index_soa(i, j)], ""));
+			slots[j] = ac_to_float(&ctx->ac, radv_load_output(ctx, i, j));
 
 		for (i = ctx->num_output_clips + ctx->num_output_culls; i < 8; i++)
 			slots[i] = LLVMGetUndef(ctx->ac.f32);
@@ -5971,27 +5948,23 @@ handle_vs_outputs_post(struct nir_to_llvm_context *ctx,
 	LLVMValueRef pos_values[4] = {ctx->ac.f32_0, ctx->ac.f32_0, ctx->ac.f32_0, ctx->ac.f32_1};
 	if (ctx->output_mask & (1ull << VARYING_SLOT_POS)) {
 		for (unsigned j = 0; j < 4; j++)
-			pos_values[j] = LLVMBuildLoad(ctx->builder,
-			                         ctx->nir->outputs[radeon_llvm_reg_index_soa(VARYING_SLOT_POS, j)], "");
+			pos_values[j] = radv_load_output(ctx, VARYING_SLOT_POS, j);
 	}
 	si_llvm_init_export_args(ctx, pos_values, V_008DFC_SQ_EXP_POS, &pos_args[0]);
 
 	if (ctx->output_mask & (1ull << VARYING_SLOT_PSIZ)) {
 		outinfo->writes_pointsize = true;
-		psize_value = LLVMBuildLoad(ctx->builder,
-		                            ctx->nir->outputs[radeon_llvm_reg_index_soa(VARYING_SLOT_PSIZ, 0)], "");
+		psize_value = radv_load_output(ctx, VARYING_SLOT_PSIZ, 0);
 	}
 
 	if (ctx->output_mask & (1ull << VARYING_SLOT_LAYER)) {
 		outinfo->writes_layer = true;
-		layer_value = LLVMBuildLoad(ctx->builder,
-		                            ctx->nir->outputs[radeon_llvm_reg_index_soa(VARYING_SLOT_LAYER, 0)], "");
+		layer_value = radv_load_output(ctx, VARYING_SLOT_LAYER, 0);
 	}
 
 	if (ctx->output_mask & (1ull << VARYING_SLOT_VIEWPORT)) {
 		outinfo->writes_viewport_index = true;
-		viewport_index_value = LLVMBuildLoad(ctx->builder,
-		                                     ctx->nir->outputs[radeon_llvm_reg_index_soa(VARYING_SLOT_VIEWPORT, 0)], "");
+		viewport_index_value = radv_load_output(ctx, VARYING_SLOT_VIEWPORT, 0);
 	}
 
 	if (outinfo->writes_pointsize ||
@@ -6055,50 +6028,31 @@ handle_vs_outputs_post(struct nir_to_llvm_context *ctx,
 		if (!(ctx->output_mask & (1ull << i)))
 			continue;
 
-		for (unsigned j = 0; j < 4; j++)
-			values[j] = ac_to_float(&ctx->ac, LLVMBuildLoad(ctx->builder,
-					        ctx->nir->outputs[radeon_llvm_reg_index_soa(i, j)], ""));
-
-		if (i == VARYING_SLOT_LAYER) {
-			target = V_008DFC_SQ_EXP_PARAM + param_count;
-			outinfo->vs_output_param_offset[VARYING_SLOT_LAYER] = param_count;
-			param_count++;
-		} else if (i == VARYING_SLOT_PRIMITIVE_ID) {
-			target = V_008DFC_SQ_EXP_PARAM + param_count;
-			outinfo->vs_output_param_offset[VARYING_SLOT_PRIMITIVE_ID] = param_count;
-			param_count++;
-		} else if (i >= VARYING_SLOT_VAR0) {
-			outinfo->export_mask |= 1u << (i - VARYING_SLOT_VAR0);
-			target = V_008DFC_SQ_EXP_PARAM + param_count;
-			outinfo->vs_output_param_offset[i] = param_count;
-			param_count++;
-		} else
+		if (i != VARYING_SLOT_LAYER &&
+		    i != VARYING_SLOT_PRIMITIVE_ID &&
+		    i < VARYING_SLOT_VAR0)
 			continue;
 
-		si_llvm_init_export_args(ctx, values, target, &args);
+		for (unsigned j = 0; j < 4; j++)
+			values[j] = ac_to_float(&ctx->ac, radv_load_output(ctx, i, j));
 
-		if (target >= V_008DFC_SQ_EXP_POS &&
-		    target <= (V_008DFC_SQ_EXP_POS + 3)) {
-			memcpy(&pos_args[target - V_008DFC_SQ_EXP_POS],
-			       &args, sizeof(args));
-		} else {
-			ac_build_export(&ctx->ac, &args);
-		}
+		radv_export_param(ctx, param_count, values);
+
+		outinfo->vs_output_param_offset[i] = param_count++;
 	}
 
 	if (export_prim_id) {
 		LLVMValueRef values[4];
-		target = V_008DFC_SQ_EXP_PARAM + param_count;
-		outinfo->vs_output_param_offset[VARYING_SLOT_PRIMITIVE_ID] = param_count;
-		param_count++;
 
 		values[0] = ctx->vs_prim_id;
 		ctx->shader_info->vs.vgpr_comp_cnt = MAX2(2,
 							  ctx->shader_info->vs.vgpr_comp_cnt);
 		for (unsigned j = 1; j < 4; j++)
 			values[j] = ctx->ac.f32_0;
-		si_llvm_init_export_args(ctx, values, target, &args);
-		ac_build_export(&ctx->ac, &args);
+
+		radv_export_param(ctx, param_count, values);
+
+		outinfo->vs_output_param_offset[VARYING_SLOT_PRIMITIVE_ID] = param_count++;
 		outinfo->export_prim_id = true;
 	}
 
@@ -6457,12 +6411,12 @@ handle_tcs_outputs_post(struct nir_to_llvm_context *ctx)
 
 static bool
 si_export_mrt_color(struct nir_to_llvm_context *ctx,
-		    LLVMValueRef *color, unsigned param, bool is_last,
+		    LLVMValueRef *color, unsigned index, bool is_last,
 		    struct ac_export_args *args)
 {
 	/* Export */
-	si_llvm_init_export_args(ctx, color, param,
-				 args);
+	si_llvm_init_export_args(ctx, color,
+				 V_008DFC_SQ_EXP_MRT + index, args);
 
 	if (is_last) {
 		args->valid_mask = 1; /* whether the EXEC mask is valid */
@@ -6494,45 +6448,52 @@ handle_fs_outputs_post(struct nir_to_llvm_context *ctx)
 
 	for (unsigned i = 0; i < RADEON_LLVM_MAX_OUTPUTS; ++i) {
 		LLVMValueRef values[4];
+		bool last = false;
 
 		if (!(ctx->output_mask & (1ull << i)))
 			continue;
 
-		if (i == FRAG_RESULT_DEPTH) {
-			ctx->shader_info->fs.writes_z = true;
-			depth = ac_to_float(&ctx->ac, LLVMBuildLoad(ctx->builder,
-							    ctx->nir->outputs[radeon_llvm_reg_index_soa(i, 0)], ""));
-		} else if (i == FRAG_RESULT_STENCIL) {
-			ctx->shader_info->fs.writes_stencil = true;
-			stencil = ac_to_float(&ctx->ac, LLVMBuildLoad(ctx->builder,
-							      ctx->nir->outputs[radeon_llvm_reg_index_soa(i, 0)], ""));
-		} else if (i == FRAG_RESULT_SAMPLE_MASK) {
-			ctx->shader_info->fs.writes_sample_mask = true;
-			samplemask = ac_to_float(&ctx->ac, LLVMBuildLoad(ctx->builder,
-								  ctx->nir->outputs[radeon_llvm_reg_index_soa(i, 0)], ""));
-		} else {
-			bool last = false;
-			for (unsigned j = 0; j < 4; j++)
-				values[j] = ac_to_float(&ctx->ac, LLVMBuildLoad(ctx->builder,
-									ctx->nir->outputs[radeon_llvm_reg_index_soa(i, j)], ""));
+		if (i < FRAG_RESULT_DATA0)
+			continue;
 
-			if (!ctx->shader_info->fs.writes_z && !ctx->shader_info->fs.writes_stencil && !ctx->shader_info->fs.writes_sample_mask)
-				last = ctx->output_mask <= ((1ull << (i + 1)) - 1);
+		for (unsigned j = 0; j < 4; j++)
+			values[j] = ac_to_float(&ctx->ac,
+						radv_load_output(ctx, i, j));
 
-			bool ret = si_export_mrt_color(ctx, values, V_008DFC_SQ_EXP_MRT + (i - FRAG_RESULT_DATA0), last, &color_args[index]);
-			if (ret)
-				index++;
-		}
+		if (!ctx->shader_info->info.ps.writes_z &&
+		    !ctx->shader_info->info.ps.writes_stencil &&
+		    !ctx->shader_info->info.ps.writes_sample_mask)
+			last = ctx->output_mask <= ((1ull << (i + 1)) - 1);
+
+		bool ret = si_export_mrt_color(ctx, values,
+					       i - FRAG_RESULT_DATA0,
+					       last, &color_args[index]);
+		if (ret)
+			index++;
 	}
 
+	/* Process depth, stencil, samplemask. */
+	if (ctx->shader_info->info.ps.writes_z) {
+		depth = ac_to_float(&ctx->ac,
+				    radv_load_output(ctx, FRAG_RESULT_DEPTH, 0));
+	}
+	if (ctx->shader_info->info.ps.writes_stencil) {
+		stencil = ac_to_float(&ctx->ac,
+				      radv_load_output(ctx, FRAG_RESULT_STENCIL, 0));
+	}
+	if (ctx->shader_info->info.ps.writes_sample_mask) {
+		samplemask = ac_to_float(&ctx->ac,
+					 radv_load_output(ctx, FRAG_RESULT_SAMPLE_MASK, 0));
+	}
+
+	/* Export PS outputs. */
 	for (unsigned i = 0; i < index; i++)
 		ac_build_export(&ctx->ac, &color_args[i]);
+
 	if (depth || stencil || samplemask)
 		radv_export_mrt_z(ctx, depth, stencil, samplemask);
-	else if (!index) {
-		si_export_mrt_color(ctx, NULL, V_008DFC_SQ_EXP_NULL, true, &color_args[0]);
-		ac_build_export(&ctx->ac, &color_args[0]);
-	}
+	else if (!index)
+		ac_build_export_null(&ctx->ac);
 }
 
 static void
@@ -6753,8 +6714,9 @@ void ac_nir_translate(struct ac_llvm_context *ac, struct ac_shader_abi *abi,
 	visit_cf_list(&ctx, &func->impl->body);
 	phi_post_pass(&ctx);
 
-	ctx.abi->emit_outputs(ctx.abi, RADEON_LLVM_MAX_OUTPUTS,
-			      ctx.outputs);
+	if (nir->info.stage != MESA_SHADER_COMPUTE)
+		ctx.abi->emit_outputs(ctx.abi, RADEON_LLVM_MAX_OUTPUTS,
+				      ctx.outputs);
 
 	free(ctx.locals);
 	ralloc_free(ctx.defs);

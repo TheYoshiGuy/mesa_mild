@@ -86,6 +86,27 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		case nir_intrinsic_load_invocation_id:
 			info->uses_invocationid = true;
 			break;
+		case nir_intrinsic_load_num_work_groups:
+			info->uses_grid_size = true;
+			break;
+		case nir_intrinsic_load_local_group_size:
+			/* The block size is translated to IMM with a fixed block size. */
+			if (info->properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH] == 0)
+				info->uses_block_size = true;
+			break;
+		case nir_intrinsic_load_local_invocation_id:
+		case nir_intrinsic_load_work_group_id: {
+			unsigned mask = nir_ssa_def_components_read(&intr->dest.ssa);
+			while (mask) {
+				unsigned i = u_bit_scan(&mask);
+
+				if (intr->intrinsic == nir_intrinsic_load_work_group_id)
+					info->uses_block_id[i] = true;
+				else
+					info->uses_thread_id[i] = true;
+			}
+			break;
+		}
 		case nir_intrinsic_load_vertex_id:
 			info->uses_vertexid = 1;
 			break;
@@ -222,12 +243,6 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	nir_function *func;
 	unsigned i;
 
-	assert(nir->info.stage == MESA_SHADER_VERTEX ||
-	       nir->info.stage == MESA_SHADER_GEOMETRY ||
-	       nir->info.stage == MESA_SHADER_TESS_CTRL ||
-	       nir->info.stage == MESA_SHADER_TESS_EVAL ||
-	       nir->info.stage == MESA_SHADER_FRAGMENT);
-
 	info->processor = pipe_shader_type_from_mesa(nir->info.stage);
 	info->num_tokens = 2; /* indicate that the shader is non-empty */
 	info->num_instructions = 2;
@@ -261,6 +276,36 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		info->properties[TGSI_PROPERTY_GS_INVOCATIONS] = nir->info.gs.invocations;
 	}
 
+	if (nir->info.stage == MESA_SHADER_FRAGMENT) {
+		info->properties[TGSI_PROPERTY_FS_EARLY_DEPTH_STENCIL] = nir->info.fs.early_fragment_tests;
+		info->properties[TGSI_PROPERTY_FS_POST_DEPTH_COVERAGE] = nir->info.fs.post_depth_coverage;
+
+		if (nir->info.fs.depth_layout != FRAG_DEPTH_LAYOUT_NONE) {
+			switch (nir->info.fs.depth_layout) {
+			case FRAG_DEPTH_LAYOUT_ANY:
+				info->properties[TGSI_PROPERTY_FS_DEPTH_LAYOUT] = TGSI_FS_DEPTH_LAYOUT_ANY;
+				break;
+			case FRAG_DEPTH_LAYOUT_GREATER:
+				info->properties[TGSI_PROPERTY_FS_DEPTH_LAYOUT] = TGSI_FS_DEPTH_LAYOUT_GREATER;
+				break;
+			case FRAG_DEPTH_LAYOUT_LESS:
+				info->properties[TGSI_PROPERTY_FS_DEPTH_LAYOUT] = TGSI_FS_DEPTH_LAYOUT_LESS;
+				break;
+			case FRAG_DEPTH_LAYOUT_UNCHANGED:
+				info->properties[TGSI_PROPERTY_FS_DEPTH_LAYOUT] = TGSI_FS_DEPTH_LAYOUT_UNCHANGED;
+				break;
+			default:
+				unreachable("Unknow depth layout");
+			}
+		}
+	}
+
+	if (nir->info.stage == MESA_SHADER_COMPUTE) {
+		info->properties[TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH] = nir->info.cs.local_size[0];
+		info->properties[TGSI_PROPERTY_CS_FIXED_BLOCK_HEIGHT] = nir->info.cs.local_size[1];
+		info->properties[TGSI_PROPERTY_CS_FIXED_BLOCK_DEPTH] = nir->info.cs.local_size[2];
+	}
+
 	i = 0;
 	uint64_t processed_inputs = 0;
 	unsigned num_inputs = 0;
@@ -276,14 +321,22 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		unsigned attrib_count = glsl_count_attribute_slots(type,
 								   nir->info.stage == MESA_SHADER_VERTEX);
 
+		i = variable->data.driver_location;
+
 		/* Vertex shader inputs don't have semantics. The state
 		 * tracker has already mapped them to attributes via
 		 * variable->data.driver_location.
 		 */
 		if (nir->info.stage == MESA_SHADER_VERTEX) {
-			if (glsl_type_is_dual_slot(variable->type))
+			/* TODO: gather the actual input useage and remove this. */
+			info->input_usage_mask[i] = TGSI_WRITEMASK_XYZW;
+
+			if (glsl_type_is_dual_slot(variable->type)) {
 				num_inputs += 2;
-			else
+
+				/* TODO: gather the actual input useage and remove this. */
+				info->input_usage_mask[i+1] = TGSI_WRITEMASK_XYZW;
+			} else
 				num_inputs++;
 			continue;
 		}
@@ -298,8 +351,6 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 			num_inputs++;
 			continue;
 		}
-
-		i = variable->data.driver_location;
 
 		for (unsigned j = 0; j < attrib_count; j++, i++) {
 
@@ -484,6 +535,12 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 			default:
 				info->reads_pervertex_outputs = true;
 			}
+		}
+
+		unsigned loc = variable->data.location;
+		if (loc == FRAG_RESULT_COLOR &&
+		    nir->info.outputs_written & (1ull << loc)) {
+			info->properties[TGSI_PROPERTY_FS_COLOR0_WRITES_ALL_CBUFS] = true;
 		}
 	}
 

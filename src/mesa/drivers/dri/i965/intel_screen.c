@@ -36,6 +36,7 @@
 #include "main/version.h"
 #include "swrast/s_renderbuffer.h"
 #include "util/ralloc.h"
+#include "util/disk_cache.h"
 #include "brw_defines.h"
 #include "brw_state.h"
 #include "compiler/nir/nir.h"
@@ -1495,6 +1496,19 @@ brw_query_renderer_string(__DRIscreen *dri_screen,
    return -1;
 }
 
+static void
+brw_set_cache_funcs(__DRIscreen *dri_screen,
+                    __DRIblobCacheSet set, __DRIblobCacheGet get)
+{
+   const struct intel_screen *const screen =
+      (struct intel_screen *) dri_screen->driverPrivate;
+
+   if (!screen->disk_cache)
+      return;
+
+   disk_cache_set_callbacks(screen->disk_cache, set, get);
+}
+
 static const __DRI2rendererQueryExtension intelRendererQueryExtension = {
    .base = { __DRI2_RENDERER_QUERY, 1 },
 
@@ -1506,6 +1520,11 @@ static const __DRIrobustnessExtension dri2Robustness = {
    .base = { __DRI2_ROBUSTNESS, 1 }
 };
 
+static const __DRI2blobExtension intelBlobExtension = {
+   .base = { __DRI2_BLOB, 1 },
+   .set_cache_funcs = brw_set_cache_funcs
+};
+
 static const __DRIextension *screenExtensions[] = {
     &intelTexBufferExtension.base,
     &intelFenceExtension.base,
@@ -1514,6 +1533,7 @@ static const __DRIextension *screenExtensions[] = {
     &intelRendererQueryExtension.base,
     &dri2ConfigQueryExtension.base,
     &dri2NoErrorExtension.base,
+    &intelBlobExtension.base,
     NULL
 };
 
@@ -1526,6 +1546,7 @@ static const __DRIextension *intelRobustScreenExtensions[] = {
     &dri2ConfigQueryExtension.base,
     &dri2Robustness.base,
     &dri2NoErrorExtension.base,
+    &intelBlobExtension.base,
     NULL
 };
 

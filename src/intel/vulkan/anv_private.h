@@ -2490,6 +2490,16 @@ struct anv_image {
    } planes[3];
 };
 
+/* The ordering of this enum is important */
+enum anv_fast_clear_type {
+   /** Image does not have/support any fast-clear blocks */
+   ANV_FAST_CLEAR_NONE = 0,
+   /** Image has/supports fast-clear but only to the default value */
+   ANV_FAST_CLEAR_DEFAULT_VALUE = 1,
+   /** Image has/supports fast-clear with an arbitrary fast-clear value */
+   ANV_FAST_CLEAR_ANY = 2,
+};
+
 /* Returns the number of auxiliary buffer levels attached to an image. */
 static inline uint8_t
 anv_image_aux_levels(const struct anv_image * const image,
@@ -2523,47 +2533,55 @@ anv_image_aux_layers(const struct anv_image * const image,
    }
 }
 
-static inline unsigned
-anv_fast_clear_state_entry_size(const struct anv_device *device)
-{
-   assert(device);
-   /* Entry contents:
-    *   +--------------------------------------------+
-    *   | clear value dword(s) | needs resolve dword |
-    *   +--------------------------------------------+
-    */
-
-   /* Ensure that the needs resolve dword is in fact dword-aligned to enable
-    * GPU memcpy operations.
-    */
-   assert(device->isl_dev.ss.clear_value_size % 4 == 0);
-   return device->isl_dev.ss.clear_value_size + 4;
-}
-
 static inline struct anv_address
 anv_image_get_clear_color_addr(const struct anv_device *device,
                                const struct anv_image *image,
-                               VkImageAspectFlagBits aspect,
-                               unsigned level)
+                               VkImageAspectFlagBits aspect)
 {
+   assert(image->aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV);
+
    uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
    return (struct anv_address) {
       .bo = image->planes[plane].bo,
       .offset = image->planes[plane].bo_offset +
-                image->planes[plane].fast_clear_state_offset +
-                anv_fast_clear_state_entry_size(device) * level,
+                image->planes[plane].fast_clear_state_offset,
    };
 }
 
 static inline struct anv_address
-anv_image_get_needs_resolve_addr(const struct anv_device *device,
-                                 const struct anv_image *image,
-                                 VkImageAspectFlagBits aspect,
-                                 unsigned level)
+anv_image_get_fast_clear_type_addr(const struct anv_device *device,
+                                   const struct anv_image *image,
+                                   VkImageAspectFlagBits aspect)
 {
    struct anv_address addr =
-      anv_image_get_clear_color_addr(device, image, aspect, level);
+      anv_image_get_clear_color_addr(device, image, aspect);
    addr.offset += device->isl_dev.ss.clear_value_size;
+   return addr;
+}
+
+static inline struct anv_address
+anv_image_get_compression_state_addr(const struct anv_device *device,
+                                     const struct anv_image *image,
+                                     VkImageAspectFlagBits aspect,
+                                     uint32_t level, uint32_t array_layer)
+{
+   assert(level < anv_image_aux_levels(image, aspect));
+   assert(array_layer < anv_image_aux_layers(image, aspect, level));
+   UNUSED uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
+   assert(image->planes[plane].aux_usage == ISL_AUX_USAGE_CCS_E);
+
+   struct anv_address addr =
+      anv_image_get_fast_clear_type_addr(device, image, aspect);
+   addr.offset += 4; /* Go past the fast clear type */
+
+   if (image->type == VK_IMAGE_TYPE_3D) {
+      for (uint32_t l = 0; l < level; l++)
+         addr.offset += anv_minify(image->extent.depth, l) * 4;
+   } else {
+      addr.offset += level * image->array_size * 4;
+   }
+   addr.offset += array_layer * 4;
+
    return addr;
 }
 
@@ -2582,23 +2600,32 @@ anv_can_sample_with_hiz(const struct gen_device_info * const devinfo,
 }
 
 void
-anv_gen8_hiz_op_resolve(struct anv_cmd_buffer *cmd_buffer,
-                        const struct anv_image *image,
-                        enum blorp_hiz_op op);
-void
-anv_ccs_resolve(struct anv_cmd_buffer * const cmd_buffer,
-                const struct anv_image * const image,
-                VkImageAspectFlagBits aspect,
-                const uint8_t level,
-                const uint32_t start_layer, const uint32_t layer_count,
-                const enum blorp_fast_clear_op op);
+anv_cmd_buffer_mark_image_written(struct anv_cmd_buffer *cmd_buffer,
+                                  const struct anv_image *image,
+                                  VkImageAspectFlagBits aspect,
+                                  enum isl_aux_usage aux_usage,
+                                  uint32_t level,
+                                  uint32_t base_layer,
+                                  uint32_t layer_count);
 
 void
-anv_image_fast_clear(struct anv_cmd_buffer *cmd_buffer,
-                     const struct anv_image *image,
-                     VkImageAspectFlagBits aspect,
-                     const uint32_t base_level, const uint32_t level_count,
-                     const uint32_t base_layer, uint32_t layer_count);
+anv_image_hiz_op(struct anv_cmd_buffer *cmd_buffer,
+                 const struct anv_image *image,
+                 VkImageAspectFlagBits aspect, uint32_t level,
+                 uint32_t base_layer, uint32_t layer_count,
+                 enum isl_aux_op hiz_op);
+void
+anv_image_mcs_op(struct anv_cmd_buffer *cmd_buffer,
+                 const struct anv_image *image,
+                 VkImageAspectFlagBits aspect,
+                 uint32_t base_layer, uint32_t layer_count,
+                 enum isl_aux_op mcs_op, bool predicate);
+void
+anv_image_ccs_op(struct anv_cmd_buffer *cmd_buffer,
+                 const struct anv_image *image,
+                 VkImageAspectFlagBits aspect, uint32_t level,
+                 uint32_t base_layer, uint32_t layer_count,
+                 enum isl_aux_op ccs_op, bool predicate);
 
 void
 anv_image_copy_to_shadow(struct anv_cmd_buffer *cmd_buffer,
@@ -2611,6 +2638,12 @@ anv_layout_to_aux_usage(const struct gen_device_info * const devinfo,
                         const struct anv_image *image,
                         const VkImageAspectFlagBits aspect,
                         const VkImageLayout layout);
+
+enum anv_fast_clear_type
+anv_layout_to_fast_clear_type(const struct gen_device_info * const devinfo,
+                              const struct anv_image * const image,
+                              const VkImageAspectFlagBits aspect,
+                              const VkImageLayout layout);
 
 /* This is defined as a macro so that it works for both
  * VkImageSubresourceRange and VkImageSubresourceLayers

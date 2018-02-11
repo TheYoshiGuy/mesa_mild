@@ -389,9 +389,6 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 		break;
 	case PIPE_SHADER_COMPUTE:
 		switch (param) {
-		case PIPE_SHADER_CAP_PREFERRED_IR:
-			return PIPE_SHADER_IR_NATIVE;
-
 		case PIPE_SHADER_CAP_SUPPORTED_IRS: {
 			int ir = 1 << PIPE_SHADER_IR_NATIVE;
 
@@ -583,8 +580,10 @@ static int si_get_video_param(struct pipe_screen *screen,
 	if (entrypoint == PIPE_VIDEO_ENTRYPOINT_ENCODE) {
 		switch (param) {
 		case PIPE_VIDEO_CAP_SUPPORTED:
-			return codec == PIPE_VIDEO_FORMAT_MPEG4_AVC &&
+			return (codec == PIPE_VIDEO_FORMAT_MPEG4_AVC &&
 				(si_vce_is_fw_version_supported(sscreen) ||
+				sscreen->info.family == CHIP_RAVEN)) ||
+				(profile == PIPE_VIDEO_PROFILE_HEVC_MAIN &&
 				sscreen->info.family == CHIP_RAVEN);
 		case PIPE_VIDEO_CAP_NPOT_TEXTURES:
 			return 1;
@@ -719,7 +718,7 @@ static boolean si_vid_is_format_supported(struct pipe_screen *screen,
 static unsigned get_max_threads_per_block(struct si_screen *screen,
 					  enum pipe_shader_ir ir_type)
 {
-	if (ir_type != PIPE_SHADER_IR_TGSI)
+	if (ir_type == PIPE_SHADER_IR_NATIVE)
 		return 256;
 
 	/* Only 16 waves per thread-group on gfx9. */
@@ -867,10 +866,10 @@ static int si_get_compute_param(struct pipe_screen *screen,
 	case PIPE_COMPUTE_CAP_MAX_VARIABLE_THREADS_PER_BLOCK:
 		if (ret) {
 			uint64_t *max_variable_threads_per_block = ret;
-			if (ir_type == PIPE_SHADER_IR_TGSI)
-				*max_variable_threads_per_block = SI_MAX_VARIABLE_THREADS_PER_BLOCK;
-			else
+			if (ir_type == PIPE_SHADER_IR_NATIVE)
 				*max_variable_threads_per_block = 0;
+			else
+				*max_variable_threads_per_block = SI_MAX_VARIABLE_THREADS_PER_BLOCK;
 		}
 		return sizeof(uint64_t);
 	}

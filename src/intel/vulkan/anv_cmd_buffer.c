@@ -314,24 +314,49 @@ VkResult anv_ResetCommandBuffer(
    return anv_cmd_buffer_reset(cmd_buffer);
 }
 
+#define anv_genX_call(devinfo, func, ...)          \
+   switch ((devinfo)->gen) {                       \
+   case 7:                                         \
+      if ((devinfo)->is_haswell) {                 \
+         gen75_##func(__VA_ARGS__);                \
+      } else {                                     \
+         gen7_##func(__VA_ARGS__);                 \
+      }                                            \
+      break;                                       \
+   case 8:                                         \
+      gen8_##func(__VA_ARGS__);                    \
+      break;                                       \
+   case 9:                                         \
+      gen9_##func(__VA_ARGS__);                    \
+      break;                                       \
+   case 10:                                        \
+      gen10_##func(__VA_ARGS__);                   \
+      break;                                       \
+   default:                                        \
+      assert(!"Unknown hardware generation");      \
+   }
+
 void
 anv_cmd_buffer_emit_state_base_address(struct anv_cmd_buffer *cmd_buffer)
 {
-   switch (cmd_buffer->device->info.gen) {
-   case 7:
-      if (cmd_buffer->device->info.is_haswell)
-         return gen75_cmd_buffer_emit_state_base_address(cmd_buffer);
-      else
-         return gen7_cmd_buffer_emit_state_base_address(cmd_buffer);
-   case 8:
-      return gen8_cmd_buffer_emit_state_base_address(cmd_buffer);
-   case 9:
-      return gen9_cmd_buffer_emit_state_base_address(cmd_buffer);
-   case 10:
-      return gen10_cmd_buffer_emit_state_base_address(cmd_buffer);
-   default:
-      unreachable("unsupported gen\n");
-   }
+   anv_genX_call(&cmd_buffer->device->info,
+                 cmd_buffer_emit_state_base_address,
+                 cmd_buffer);
+}
+
+void
+anv_cmd_buffer_mark_image_written(struct anv_cmd_buffer *cmd_buffer,
+                                  const struct anv_image *image,
+                                  VkImageAspectFlagBits aspect,
+                                  enum isl_aux_usage aux_usage,
+                                  uint32_t level,
+                                  uint32_t base_layer,
+                                  uint32_t layer_count)
+{
+   anv_genX_call(&cmd_buffer->device->info,
+                 cmd_buffer_mark_image_written,
+                 cmd_buffer, image, aspect, aux_usage,
+                 level, base_layer, layer_count);
 }
 
 void anv_CmdBindPipeline(

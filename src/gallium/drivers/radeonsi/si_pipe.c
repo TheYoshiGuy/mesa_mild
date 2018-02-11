@@ -619,10 +619,6 @@ static void si_disk_cache_create(struct si_screen *sscreen)
 	if (sscreen->debug_flags & DBG_ALL_SHADERS)
 		return;
 
-	/* TODO: remove this once gallium supports a nir cache */
-	if (sscreen->debug_flags & DBG(NIR))
-		return;
-
 	uint32_t mesa_timestamp;
 	if (disk_cache_get_function_timestamp(si_disk_cache_create,
 					      &mesa_timestamp)) {
@@ -642,7 +638,8 @@ static void si_disk_cache_create(struct si_screen *sscreen)
 				sscreen->debug_flags &
 				(DBG(FS_CORRECT_DERIVS_AFTER_KILL) |
 				 DBG(SI_SCHED) |
-				 DBG(UNSAFE_MATH));
+				 DBG(UNSAFE_MATH) |
+				 DBG(NIR));
 
 			sscreen->disk_shader_cache =
 				disk_cache_create(si_get_family_name(sscreen),

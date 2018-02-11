@@ -128,6 +128,25 @@ ac_llvm_extract_elem(struct ac_llvm_context *ac,
 				       LLVMConstInt(ac->i32, index, false), "");
 }
 
+int
+ac_get_elem_bits(struct ac_llvm_context *ctx, LLVMTypeRef type)
+{
+	if (LLVMGetTypeKind(type) == LLVMVectorTypeKind)
+		type = LLVMGetElementType(type);
+
+	if (LLVMGetTypeKind(type) == LLVMIntegerTypeKind)
+		return LLVMGetIntTypeWidth(type);
+
+	if (type == ctx->f16)
+		return 16;
+	if (type == ctx->f32)
+		return 32;
+	if (type == ctx->f64)
+		return 64;
+
+	unreachable("Unhandled type kind in get_elem_bits");
+}
+
 unsigned
 ac_get_type_size(LLVMTypeRef type)
 {
@@ -341,6 +360,14 @@ ac_build_optimization_barrier(struct ac_llvm_context *ctx,
 
 		*pvgpr = vgpr;
 	}
+}
+
+LLVMValueRef
+ac_build_shader_clock(struct ac_llvm_context *ctx)
+{
+	LLVMValueRef tmp = ac_build_intrinsic(ctx, "llvm.readcyclecounter",
+					      ctx->i64, NULL, 0, 0);
+	return LLVMBuildBitCast(ctx->builder, tmp, ctx->v2i32, "");
 }
 
 LLVMValueRef
@@ -1339,6 +1366,23 @@ void ac_build_export(struct ac_llvm_context *ctx, struct ac_export_args *a)
 			   AC_FUNC_ATTR_LEGACY);
 }
 
+void ac_build_export_null(struct ac_llvm_context *ctx)
+{
+	struct ac_export_args args;
+
+	args.enabled_channels = 0x0; /* enabled channels */
+	args.valid_mask = 1; /* whether the EXEC mask is valid */
+	args.done = 1; /* DONE bit */
+	args.target = V_008DFC_SQ_EXP_NULL;
+	args.compr = 0; /* COMPR flag (0 = 32-bit export) */
+	args.out[0] = LLVMGetUndef(ctx->f32); /* R */
+	args.out[1] = LLVMGetUndef(ctx->f32); /* G */
+	args.out[2] = LLVMGetUndef(ctx->f32); /* B */
+	args.out[3] = LLVMGetUndef(ctx->f32); /* A */
+
+	ac_build_export(ctx, &args);
+}
+
 LLVMValueRef ac_build_image_opcode(struct ac_llvm_context *ctx,
 				   struct ac_image_args *a)
 {
@@ -1957,6 +2001,20 @@ LLVMValueRef ac_find_lsb(struct ac_llvm_context *ctx,
 			 LLVMTypeRef dst_type,
 			 LLVMValueRef src0)
 {
+	unsigned src0_bitsize = ac_get_elem_bits(ctx, LLVMTypeOf(src0));
+	const char *intrin_name;
+	LLVMTypeRef type;
+	LLVMValueRef zero;
+	if (src0_bitsize == 64) {
+		intrin_name = "llvm.cttz.i64";
+		type = ctx->i64;
+		zero = ctx->i64_0;
+	} else {
+		intrin_name = "llvm.cttz.i32";
+		type = ctx->i32;
+		zero = ctx->i32_0;
+	}
+
 	LLVMValueRef params[2] = {
 		src0,
 
@@ -1972,15 +2030,19 @@ LLVMValueRef ac_find_lsb(struct ac_llvm_context *ctx,
 		LLVMConstInt(ctx->i1, 1, false),
 	};
 
-	LLVMValueRef lsb = ac_build_intrinsic(ctx, "llvm.cttz.i32", ctx->i32,
+	LLVMValueRef lsb = ac_build_intrinsic(ctx, intrin_name, type,
 					      params, 2,
 					      AC_FUNC_ATTR_READNONE);
+
+	if (src0_bitsize == 64) {
+		lsb = LLVMBuildTrunc(ctx->builder, lsb, ctx->i32, "");
+	}
 
 	/* TODO: We need an intrinsic to skip this conditional. */
 	/* Check for zero: */
 	return LLVMBuildSelect(ctx->builder, LLVMBuildICmp(ctx->builder,
 							   LLVMIntEQ, src0,
-							   ctx->i32_0, ""),
+							   zero, ""),
 			       LLVMConstInt(ctx->i32, -1, 0), lsb, "");
 }
 

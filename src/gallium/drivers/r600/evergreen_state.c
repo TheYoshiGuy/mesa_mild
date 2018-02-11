@@ -616,6 +616,7 @@ struct eg_buf_res_params {
 	unsigned char swizzle[4];
 	bool uncached;
 	bool force_swizzle;
+	bool size_in_bytes;
 };
 
 static void evergreen_fill_buffer_resource_words(struct r600_context *rctx,
@@ -658,7 +659,7 @@ static void evergreen_fill_buffer_resource_words(struct r600_context *rctx,
 	 * albeit the amd gpu shader analyser
 	 * uses a const buffer to store the element sizes for buffer txq
 	 */
-	tex_resource_words[4] = params->size / stride;
+	tex_resource_words[4] = params->size_in_bytes ? params->size : (params->size / stride);
 
 	tex_resource_words[5] = tex_resource_words[6] = 0;
 	tex_resource_words[7] = S_03001C_TYPE(V_03001C_SQ_TEX_VTX_VALID_BUFFER);
@@ -811,18 +812,21 @@ static int evergreen_fill_tex_resource_words(struct r600_context *rctx,
 	}
 	nbanks = eg_num_banks(rscreen->b.info.r600_num_banks);
 
-	if (params->target == PIPE_TEXTURE_1D_ARRAY) {
-	        height = 1;
-		depth = texture->array_size;
-	} else if (params->target == PIPE_TEXTURE_2D_ARRAY) {
-		depth = texture->array_size;
-	} else if (params->target == PIPE_TEXTURE_CUBE_ARRAY)
-		depth = texture->array_size / 6;
 
 	va = tmp->resource.gpu_address;
 
 	/* array type views and views into array types need to use layer offset */
 	dim = r600_tex_dim(tmp, params->target, texture->nr_samples);
+
+	if (dim == V_030000_SQ_TEX_DIM_1D_ARRAY) {
+	        height = 1;
+		depth = texture->array_size;
+	} else if (dim == V_030000_SQ_TEX_DIM_2D_ARRAY ||
+		   dim == V_030000_SQ_TEX_DIM_2D_ARRAY_MSAA) {
+		depth = texture->array_size;
+	} else if (dim == V_030000_SQ_TEX_DIM_CUBEMAP)
+		depth = texture->array_size / 6;
+
 	tex_resource_words[0] = (S_030000_DIM(dim) |
 				 S_030000_PITCH((pitch / 8) - 1) |
 				 S_030000_TEX_WIDTH(width - 1));
@@ -1432,7 +1436,7 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 	struct r600_surface *surf;
 	struct r600_texture *rtex;
 	uint32_t i, log_samples;
-
+	uint32_t target_mask = 0;
 	/* Flush TC when changing the framebuffer state, because the only
 	 * client not using TC that can change textures is the framebuffer.
 	 * Other places don't typically have to flush TC.
@@ -1458,6 +1462,8 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 		surf = (struct r600_surface*)state->cbufs[i];
 		if (!surf)
 			continue;
+
+		target_mask |= (0xf << (i * 4));
 
 		rtex = (struct r600_texture*)surf->base.texture;
 
@@ -1524,7 +1530,9 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 		r600_mark_atom_dirty(rctx, &rctx->db_misc_state.atom);
 	}
 
-	if (rctx->cb_misc_state.nr_cbufs != state->nr_cbufs) {
+	if (rctx->cb_misc_state.nr_cbufs != state->nr_cbufs ||
+	    rctx->cb_misc_state.bound_cbufs_target_mask != target_mask) {
+		rctx->cb_misc_state.bound_cbufs_target_mask = target_mask;
 		rctx->cb_misc_state.nr_cbufs = state->nr_cbufs;
 		r600_mark_atom_dirty(rctx, &rctx->cb_misc_state.atom);
 	}
@@ -1948,14 +1956,8 @@ static void evergreen_emit_framebuffer_state(struct r600_context *rctx, struct r
 	if (rctx->b.chip_class == EVERGREEN) {
 		evergreen_emit_msaa_state(rctx, rctx->framebuffer.nr_samples, rctx->ps_iter_samples);
 	} else {
-		unsigned sc_mode_cntl_1 =
-			EG_S_028A4C_FORCE_EOV_CNTDWN_ENABLE(1) |
-			EG_S_028A4C_FORCE_EOV_REZ_ENABLE(1);
-
-		if (rctx->framebuffer.nr_samples > 1)
-			cayman_emit_msaa_sample_locs(cs, rctx->framebuffer.nr_samples);
-		cayman_emit_msaa_config(cs, rctx->framebuffer.nr_samples,
-					rctx->ps_iter_samples, 0, sc_mode_cntl_1);
+		cayman_emit_msaa_state(cs, rctx->framebuffer.nr_samples,
+				       rctx->ps_iter_samples, 0);
 	}
 }
 
@@ -2021,8 +2023,8 @@ static void evergreen_emit_cb_misc_state(struct r600_context *rctx, struct r600_
 {
 	struct radeon_winsys_cs *cs = rctx->b.gfx.cs;
 	struct r600_cb_misc_state *a = (struct r600_cb_misc_state*)atom;
-	unsigned fb_colormask = (1ULL << ((unsigned)a->nr_cbufs * 4)) - 1;
-	unsigned ps_colormask = (1ULL << ((unsigned)a->nr_ps_color_outputs * 4)) - 1;
+	unsigned fb_colormask = a->bound_cbufs_target_mask;
+	unsigned ps_colormask = a->ps_color_export_mask;
 	unsigned rat_colormask = evergreen_construct_rat_mask(rctx, a, a->nr_cbufs);
 	radeon_set_context_reg_seq(cs, R_028238_CB_TARGET_MASK, 2);
 	radeon_emit(cs, (a->blend_colormask & fb_colormask) | rat_colormask); /* R_028238_CB_TARGET_MASK */
@@ -2293,6 +2295,30 @@ static void evergreen_emit_tcs_constant_buffers(struct r600_context *rctx, struc
 					R_028F80_ALU_CONST_BUFFER_SIZE_HS_0,
 					R_028F00_ALU_CONST_CACHE_HS_0,
 					0);
+}
+
+void evergreen_setup_scratch_buffers(struct r600_context *rctx) {
+	static const struct {
+		unsigned ring_base;
+		unsigned item_size;
+		unsigned ring_size;
+	} regs[EG_NUM_HW_STAGES] = {
+		[R600_HW_STAGE_PS] = { R_008C68_SQ_PSTMP_RING_BASE, R_028914_SQ_PSTMP_RING_ITEMSIZE, R_008C6C_SQ_PSTMP_RING_SIZE },
+		[R600_HW_STAGE_VS] = { R_008C60_SQ_VSTMP_RING_BASE, R_028910_SQ_VSTMP_RING_ITEMSIZE, R_008C64_SQ_VSTMP_RING_SIZE },
+		[R600_HW_STAGE_GS] = { R_008C58_SQ_GSTMP_RING_BASE, R_02890C_SQ_GSTMP_RING_ITEMSIZE, R_008C5C_SQ_GSTMP_RING_SIZE },
+		[R600_HW_STAGE_ES] = { R_008C50_SQ_ESTMP_RING_BASE, R_028908_SQ_ESTMP_RING_ITEMSIZE, R_008C54_SQ_ESTMP_RING_SIZE },
+		[EG_HW_STAGE_LS] = { R_008E10_SQ_LSTMP_RING_BASE, R_028830_SQ_LSTMP_RING_ITEMSIZE, R_008E14_SQ_LSTMP_RING_SIZE },
+		[EG_HW_STAGE_HS] = { R_008E18_SQ_HSTMP_RING_BASE, R_028834_SQ_HSTMP_RING_ITEMSIZE, R_008E1C_SQ_HSTMP_RING_SIZE }
+	};
+
+	for (unsigned i = 0; i < EG_NUM_HW_STAGES; i++) {
+		struct r600_pipe_shader *stage = rctx->hw_shader_stages[i].shader;
+
+		if (stage && unlikely(stage->scratch_space_needed)) {
+			r600_setup_scratch_area_for_shader(rctx, stage,
+				&rctx->scratch_buffers[i], regs[i].ring_base, regs[i].item_size, regs[i].ring_size);
+		}
+	}
 }
 
 static void evergreen_emit_sampler_views(struct r600_context *rctx,
@@ -3361,7 +3387,7 @@ void evergreen_update_ps_state(struct pipe_context *ctx, struct r600_pipe_shader
 			exports_ps |= 1;
 	}
 
-	num_cout = rshader->nr_ps_color_exports;
+	num_cout = rshader->ps_export_highest + 1;
 
 	exports_ps |= S_02884C_EXPORT_COLORS(num_cout);
 	if (!exports_ps) {
@@ -3369,6 +3395,7 @@ void evergreen_update_ps_state(struct pipe_context *ctx, struct r600_pipe_shader
 		exports_ps = 2;
 	}
 	shader->nr_ps_color_outputs = num_cout;
+	shader->ps_color_export_mask = rshader->ps_color_export_mask;
 	if (ninterp == 0) {
 		ninterp = 1;
 		have_perspective = TRUE;
@@ -4038,6 +4065,7 @@ static void evergreen_set_shader_buffers(struct pipe_context *ctx,
 		buf_params.swizzle[3] = PIPE_SWIZZLE_W;
 		buf_params.force_swizzle = true;
 		buf_params.uncached = 1;
+		buf_params.size_in_bytes = true;
 		evergreen_fill_buffer_resource_words(rctx, &resource->b.b,
 						     &buf_params,
 						     &rview->skip_mip_address_reloc,
@@ -4057,7 +4085,8 @@ static void evergreen_set_shader_buffers(struct pipe_context *ctx,
 		r600_mark_atom_dirty(rctx, &rctx->cb_misc_state.atom);
 	}
 
-	r600_mark_atom_dirty(rctx, &istate->atom);
+	if (shader == PIPE_SHADER_FRAGMENT)
+		r600_mark_atom_dirty(rctx, &istate->atom);
 }
 
 static void evergreen_set_shader_images(struct pipe_context *ctx,
@@ -4233,7 +4262,8 @@ static void evergreen_set_shader_images(struct pipe_context *ctx,
 		r600_mark_atom_dirty(rctx, &rctx->cb_misc_state.atom);
 	}
 
-	r600_mark_atom_dirty(rctx, &istate->atom);
+	if (shader == PIPE_SHADER_FRAGMENT)
+		r600_mark_atom_dirty(rctx, &istate->atom);
 }
 
 static void evergreen_get_pipe_constant_buffer(struct r600_context *rctx,
