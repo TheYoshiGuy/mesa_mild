@@ -920,6 +920,8 @@ static int map_tgsi_reg_index_to_r600_gpr(struct r600_shader_ctx *ctx, unsigned 
 			}
 		}
 
+		if (tgsi_reg_index < ctx->array_infos[i].range.First)
+			break;
 		if (ctx->spilled_arrays[i]) {
 			spilled_size += ctx->array_infos[i].range.Last - ctx->array_infos[i].range.First + 1;
 		}
@@ -4121,6 +4123,8 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 							output[j].op = CF_OP_EXPORT;
 							output[j].type = V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_PIXEL;
 							shader->nr_ps_color_exports++;
+							if (k > shader->ps_export_highest)
+								shader->ps_export_highest = k;
 							shader->ps_color_export_mask |= (0xf << (j * 4));
 						}
 					}

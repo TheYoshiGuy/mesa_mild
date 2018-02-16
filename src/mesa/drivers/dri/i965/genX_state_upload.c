@@ -334,7 +334,9 @@ genX(emit_vertex_buffer_state)(struct brw_context *brw,
 #endif
 #endif
 
-#if GEN_GEN == 10
+#if GEN_GEN == 11
+      .VertexBufferMOCS = ICL_MOCS_WB,
+#elif GEN_GEN == 10
       .VertexBufferMOCS = CNL_MOCS_WB,
 #elif GEN_GEN == 9
       .VertexBufferMOCS = SKL_MOCS_WB,
@@ -2048,6 +2050,8 @@ genX(upload_vs_state)(struct brw_context *brw)
 
    assert(vue_prog_data->dispatch_mode == DISPATCH_MODE_SIMD8 ||
           vue_prog_data->dispatch_mode == DISPATCH_MODE_4X2_DUAL_OBJECT);
+   assert(GEN_GEN < 11 ||
+          vue_prog_data->dispatch_mode == DISPATCH_MODE_SIMD8);
 
 #if GEN_GEN == 6
    /* From the BSpec, 3D Pipeline > Geometry > Vertex Shader > State,
@@ -3815,11 +3819,12 @@ genX(upload_ps)(struct brw_context *brw)
       ps.SampleMask = genX(determine_sample_mask(brw));
 #endif
 
-      /* 3DSTATE_PS expects the number of threads per PSD, which is always 64;
-       * it implicitly scales for different GT levels (which have some # of
-       * PSDs).
+      /* 3DSTATE_PS expects the number of threads per PSD, which is always 64
+       * for pre Gen11 and 128 for gen11+; On gen11+ If a programmed value is
+       * k, it implies 2(k+1) threads. It implicitly scales for different GT
+       * levels (which have some # of PSDs).
        *
-       * In Gen8 the format is U8-2 whereas in Gen9 it is U8-1.
+       * In Gen8 the format is U8-2 whereas in Gen9+ it is U9-1.
        */
 #if GEN_GEN >= 9
       ps.MaximumNumberofThreadsPerPSD = 64 - 1;
@@ -3964,6 +3969,9 @@ genX(upload_ds_state)(struct brw_context *brw)
    if (!tes_prog_data) {
       brw_batch_emit(brw, GENX(3DSTATE_DS), ds);
    } else {
+      assert(GEN_GEN < 11 ||
+             vue_prog_data->dispatch_mode == DISPATCH_MODE_SIMD8);
+
       brw_batch_emit(brw, GENX(3DSTATE_DS), ds) {
          INIT_THREAD_DISPATCH_FIELDS(ds, Patch);
 
@@ -4220,8 +4228,10 @@ genX(upload_cs_state)(struct brw_context *brw)
       const uint32_t subslices = MAX2(brw->screen->subslice_total, 1);
       vfe.MaximumNumberofThreads = devinfo->max_cs_threads * subslices - 1;
       vfe.NumberofURBEntries = GEN_GEN >= 8 ? 2 : 0;
+#if GEN_GEN < 11
       vfe.ResetGatewayTimer =
          Resettingrelativetimerandlatchingtheglobaltimestamp;
+#endif
 #if GEN_GEN < 9
       vfe.BypassGatewayControl = BypassingOpenGatewayCloseGatewayprotocol;
 #endif

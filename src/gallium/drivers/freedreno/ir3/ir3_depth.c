@@ -49,14 +49,42 @@
  * blocks depth sorted list, which is used by the scheduling pass.
  */
 
+/* generally don't count false dependencies, since this can just be
+ * something like a barrier, or SSBO store.  The exception is array
+ * dependencies if the assigner is an array write and the consumer
+ * reads the same array.
+ */
+static bool
+ignore_dep(struct ir3_instruction *assigner,
+		struct ir3_instruction *consumer, unsigned n)
+{
+	if (!__is_false_dep(consumer, n))
+		return false;
+
+	if (assigner->barrier_class & IR3_BARRIER_ARRAY_W) {
+		struct ir3_register *dst = assigner->regs[0];
+		struct ir3_register *src;
+
+		debug_assert(dst->flags & IR3_REG_ARRAY);
+
+		foreach_src(src, consumer) {
+			if ((src->flags & IR3_REG_ARRAY) &&
+					(dst->array.id == src->array.id)) {
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
 /* calculate required # of delay slots between the instruction that
  * assigns a value and the one that consumes
  */
 int ir3_delayslots(struct ir3_instruction *assigner,
 		struct ir3_instruction *consumer, unsigned n)
 {
-	/* don't count false-dependencies: */
-	if (__is_false_dep(consumer, n))
+	if (ignore_dep(assigner, consumer, n))
 		return 0;
 
 	/* worst case is cat1-3 (alu) -> cat4/5 needing 6 cycles, normal
@@ -105,7 +133,7 @@ ir3_insert_by_depth(struct ir3_instruction *instr, struct list_head *list)
 }
 
 static void
-ir3_instr_depth(struct ir3_instruction *instr)
+ir3_instr_depth(struct ir3_instruction *instr, unsigned boost)
 {
 	struct ir3_instruction *src;
 
@@ -119,13 +147,14 @@ ir3_instr_depth(struct ir3_instruction *instr)
 		unsigned sd;
 
 		/* visit child to compute it's depth: */
-		ir3_instr_depth(src);
+		ir3_instr_depth(src, boost);
 
 		/* for array writes, no need to delay on previous write: */
 		if (i == 0)
 			continue;
 
 		sd = ir3_delayslots(src, instr, i) + src->depth;
+		sd += boost;
 
 		instr->depth = MAX2(instr->depth, sd);
 	}
@@ -161,15 +190,15 @@ ir3_depth(struct ir3 *ir)
 	ir3_clear_mark(ir);
 	for (i = 0; i < ir->noutputs; i++)
 		if (ir->outputs[i])
-			ir3_instr_depth(ir->outputs[i]);
+			ir3_instr_depth(ir->outputs[i], 0);
 
 	list_for_each_entry (struct ir3_block, block, &ir->block_list, node) {
 		for (i = 0; i < block->keeps_count; i++)
-			ir3_instr_depth(block->keeps[i]);
+			ir3_instr_depth(block->keeps[i], 0);
 
 		/* We also need to account for if-condition: */
 		if (block->condition)
-			ir3_instr_depth(block->condition);
+			ir3_instr_depth(block->condition, 6);
 	}
 
 	/* mark un-used instructions: */

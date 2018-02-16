@@ -1652,7 +1652,7 @@ intel_miptree_init_mcs(struct brw_context *brw,
     *
     * Note: the clear value for MCS buffers is all 1's, so we memset to 0xff.
     */
-   void *map = brw_bo_map(brw, mt->mcs_buf->bo, MAP_WRITE);
+   void *map = brw_bo_map(brw, mt->mcs_buf->bo, MAP_WRITE | MAP_RAW);
    if (unlikely(map == NULL)) {
       fprintf(stderr, "Failed to map mcs buffer into GTT\n");
       brw_bo_unreference(mt->mcs_buf->bo);
@@ -1911,10 +1911,7 @@ intel_miptree_sample_with_hiz(struct brw_context *brw,
 {
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   /* It's unclear how well supported sampling from the hiz buffer is on GEN8,
-    * so keep things conservative for now and never enable it unless we're SKL+.
-    */
-   if (devinfo->gen < 9) {
+   if (!devinfo->has_sample_with_hiz) {
       return false;
    }
 

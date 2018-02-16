@@ -127,7 +127,7 @@ brw_create_nir(struct brw_context *brw,
       NIR_PASS(progress, nir, nir_lower_wpos_ytransform, &wpos_options);
       if (progress) {
          _mesa_add_state_reference(prog->Parameters,
-                                   (gl_state_index *) wpos_options.state_tokens);
+                                   wpos_options.state_tokens);
       }
    }
 
@@ -280,7 +280,7 @@ brw_memory_barrier(struct gl_context *ctx, GLbitfield barriers)
    unsigned bits = (PIPE_CONTROL_DATA_CACHE_FLUSH |
                     PIPE_CONTROL_NO_WRITE |
                     PIPE_CONTROL_CS_STALL);
-   assert(devinfo->gen >= 7 && devinfo->gen <= 10);
+   assert(devinfo->gen >= 7 && devinfo->gen <= 11);
 
    if (barriers & (GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT |
                    GL_ELEMENT_ARRAY_BARRIER_BIT |

@@ -51,6 +51,9 @@ struct ir3_info {
 	int8_t   max_reg;   /* highest GPR # used by shader */
 	int8_t   max_half_reg;
 	int16_t  max_const;
+
+	/* number of sync bits: */
+	uint16_t ss, sy;
 };
 
 struct ir3_register {
@@ -90,7 +93,6 @@ struct ir3_register {
 		 */
 		IR3_REG_SSA    = 0x4000,   /* 'instr' is ptr to assigning instr */
 		IR3_REG_ARRAY  = 0x8000,
-		IR3_REG_PHI_SRC= 0x10000,  /* phi src, regs[0]->instr points to phi */
 
 	} flags;
 	union {
@@ -201,6 +203,7 @@ struct ir3_instruction {
 		IR3_INSTR_S     = 0x100,
 		IR3_INSTR_S2EN  = 0x200,
 		IR3_INSTR_G     = 0x400,
+		IR3_INSTR_SAT   = 0x800,
 		/* meta-flags, for intermediate stages of IR, ie.
 		 * before register assignment is done:
 		 */
@@ -257,12 +260,6 @@ struct ir3_instruction {
 		struct {
 			int off;              /* component/offset */
 		} fo;
-		struct {
-			/* used to temporarily hold reference to nir_phi_instr
-			 * until we resolve the phi srcs
-			 */
-			void *nphi;
-		} phi;
 		struct {
 			struct ir3_block *block;
 		} inout;
@@ -363,6 +360,8 @@ struct ir3_instruction {
 	/* Entry in ir3_block's instruction list: */
 	struct list_head node;
 
+	int use_count;      /* currently just updated/used by cp */
+
 #ifdef DEBUG
 	uint32_t serialno;
 #endif
@@ -440,6 +439,10 @@ struct ir3 {
 
 	/* List of ir3_array's: */
 	struct list_head array_list;
+
+#ifdef DEBUG
+	unsigned block_count, instr_count;
+#endif
 };
 
 typedef struct nir_register nir_register;
@@ -473,7 +476,7 @@ struct ir3_block {
 	struct list_head node;
 	struct ir3 *shader;
 
-	nir_block *nblock;
+	const nir_block *nblock;
 
 	struct list_head instr_list;  /* list of ir3_instruction */
 
@@ -483,6 +486,9 @@ struct ir3_block {
 	 */
 	struct ir3_instruction *condition;
 	struct ir3_block *successors[2];
+
+	unsigned predecessors_count;
+	struct ir3_block **predecessors;
 
 	uint16_t start_ip, end_ip;
 
@@ -612,6 +618,8 @@ static inline bool is_same_type_mov(struct ir3_instruction *instr)
 		break;
 	case OPC_ABSNEG_F:
 	case OPC_ABSNEG_S:
+		if (instr->flags & IR3_INSTR_SAT)
+			return false;
 		break;
 	default:
 		return false;

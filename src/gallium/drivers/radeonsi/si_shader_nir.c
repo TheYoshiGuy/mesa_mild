@@ -277,7 +277,8 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 	}
 
 	if (nir->info.stage == MESA_SHADER_FRAGMENT) {
-		info->properties[TGSI_PROPERTY_FS_EARLY_DEPTH_STENCIL] = nir->info.fs.early_fragment_tests;
+		info->properties[TGSI_PROPERTY_FS_EARLY_DEPTH_STENCIL] =
+			nir->info.fs.early_fragment_tests | nir->info.fs.post_depth_coverage;
 		info->properties[TGSI_PROPERTY_FS_POST_DEPTH_COVERAGE] = nir->info.fs.post_depth_coverage;
 
 		if (nir->info.fs.depth_layout != FRAG_DEPTH_LAYOUT_NONE) {
@@ -630,7 +631,7 @@ si_lower_nir(struct si_shader_selector* sel)
 
 	const nir_lower_subgroups_options subgroups_options = {
 		.subgroup_size = 64,
-		.ballot_bit_size = 32,
+		.ballot_bit_size = 64,
 		.lower_to_scalar = true,
 		.lower_subgroup_masks = true,
 		.lower_vote_trivial = false,
@@ -857,7 +858,11 @@ bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir)
 	ctx->num_samplers = util_last_bit(info->samplers_declared);
 	ctx->num_images = util_last_bit(info->images_declared);
 
-	ac_nir_translate(&ctx->ac, &ctx->abi, nir, NULL);
+	if (ctx->shader->selector->local_size) {
+		assert(nir->info.stage == MESA_SHADER_COMPUTE);
+		si_declare_compute_memory(ctx);
+	}
+	ac_nir_translate(&ctx->ac, &ctx->abi, nir);
 
 	return true;
 }

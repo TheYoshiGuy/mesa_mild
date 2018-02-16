@@ -138,7 +138,7 @@ static unsigned pointer_size(struct ir3_context *ctx)
 }
 
 static struct ir3_instruction * create_immed(struct ir3_block *block, uint32_t val);
-static struct ir3_block * get_block(struct ir3_context *ctx, nir_block *nblock);
+static struct ir3_block * get_block(struct ir3_context *ctx, const nir_block *nblock);
 
 
 static struct ir3_context *
@@ -194,6 +194,7 @@ compile_init(struct ir3_compiler *compiler,
 	 * in ir3_optimize_nir():
 	 */
 	NIR_PASS_V(ctx->s, nir_lower_locals_to_regs);
+	NIR_PASS_V(ctx->s, nir_convert_from_ssa, true);
 
 	if (fd_mesa_debug & FD_DBG_DISASM) {
 		DBG("dump nir%dv%d: type=%d, k={bp=%u,cts=%u,hp=%u}",
@@ -348,13 +349,35 @@ create_array_load(struct ir3_context *ctx, struct ir3_array *arr, int n,
 }
 
 /* relative (indirect) if address!=NULL */
-static struct ir3_instruction *
+static void
 create_array_store(struct ir3_context *ctx, struct ir3_array *arr, int n,
 		struct ir3_instruction *src, struct ir3_instruction *address)
 {
 	struct ir3_block *block = ctx->block;
 	struct ir3_instruction *mov;
 	struct ir3_register *dst;
+
+	/* if not relative store, don't create an extra mov, since that
+	 * ends up being difficult for cp to remove.
+	 */
+	if (!address) {
+		dst = src->regs[0];
+
+		src->barrier_class |= IR3_BARRIER_ARRAY_W;
+		src->barrier_conflict |= IR3_BARRIER_ARRAY_R | IR3_BARRIER_ARRAY_W;
+
+		dst->flags |= IR3_REG_ARRAY;
+		dst->instr = arr->last_write;
+		dst->size = arr->length;
+		dst->array.id = arr->id;
+		dst->array.offset = n;
+
+		arr->last_write = src;
+
+		array_insert(block, block->keeps, src);
+
+		return;
+	}
 
 	mov = ir3_instr_create(block, OPC_MOV);
 	mov->cat1.src_type = TYPE_U32;
@@ -374,7 +397,11 @@ create_array_store(struct ir3_context *ctx, struct ir3_array *arr, int n,
 
 	arr->last_write = mov;
 
-	return mov;
+	/* the array store may only matter to something in an earlier
+	 * block (ie. loops), but since arrays are not in SSA, depth
+	 * pass won't know this.. so keep all array stores:
+	 */
+	array_insert(block, block->keeps, mov);
 }
 
 /* allocate a n element value array (to be populated by caller) and
@@ -881,8 +908,6 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
 		return;
 	}
 
-	compile_assert(ctx, alu->dest.dest.is_ssa);
-
 	/* General case: We can just grab the one used channel per src. */
 	for (int i = 0; i < info->num_inputs; i++) {
 		unsigned chan = ffs(alu->dest.write_mask) - 1;
@@ -937,6 +962,27 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
 		break;
 	case nir_op_fmin:
 		dst[0] = ir3_MIN_F(b, src[0], 0, src[1], 0);
+		break;
+	case nir_op_fsat:
+		/* if there is just a single use of the src, and it supports
+		 * (sat) bit, we can just fold the (sat) flag back to the
+		 * src instruction and create a mov.  This is easier for cp
+		 * to eliminate.
+		 *
+		 * TODO probably opc_cat==4 is ok too
+		 */
+		if (alu->src[0].src.is_ssa &&
+				(list_length(&alu->src[0].src.ssa->uses) == 1) &&
+				((opc_cat(src[0]->opc) == 2) || (opc_cat(src[0]->opc) == 3))) {
+			src[0]->flags |= IR3_INSTR_SAT;
+			dst[0] = ir3_MOV(b, src[0], TYPE_U32);
+		} else {
+			/* otherwise generate a max.f that saturates.. blob does
+			 * similar (generating a cat2 mov using max.f)
+			 */
+			dst[0] = ir3_MAX_F(b, src[0], 0, src[0], 0);
+			dst[0]->flags |= IR3_INSTR_SAT;
+		}
 		break;
 	case nir_op_fmul:
 		dst[0] = ir3_MUL_F(b, src[0], 0, src[1], 0);
@@ -2548,64 +2594,6 @@ emit_tex_txs(struct ir3_context *ctx, nir_tex_instr *tex)
 }
 
 static void
-emit_phi(struct ir3_context *ctx, nir_phi_instr *nphi)
-{
-	struct ir3_instruction *phi, **dst;
-
-	/* NOTE: phi's should be lowered to scalar at this point */
-	compile_assert(ctx, nphi->dest.ssa.num_components == 1);
-
-	dst = get_dst(ctx, &nphi->dest, 1);
-
-	phi = ir3_instr_create2(ctx->block, OPC_META_PHI,
-			1 + exec_list_length(&nphi->srcs));
-	ir3_reg_create(phi, 0, 0);         /* dst */
-	phi->phi.nphi = nphi;
-
-	dst[0] = phi;
-
-	put_dst(ctx, &nphi->dest);
-}
-
-/* phi instructions are left partially constructed.  We don't resolve
- * their srcs until the end of the block, since (eg. loops) one of
- * the phi's srcs might be defined after the phi due to back edges in
- * the CFG.
- */
-static void
-resolve_phis(struct ir3_context *ctx, struct ir3_block *block)
-{
-	list_for_each_entry (struct ir3_instruction, instr, &block->instr_list, node) {
-		nir_phi_instr *nphi;
-
-		/* phi's only come at start of block: */
-		if (instr->opc != OPC_META_PHI)
-			break;
-
-		if (!instr->phi.nphi)
-			break;
-
-		nphi = instr->phi.nphi;
-		instr->phi.nphi = NULL;
-
-		foreach_list_typed(nir_phi_src, nsrc, node, &nphi->srcs) {
-			struct ir3_instruction *src = get_src(ctx, &nsrc->src)[0];
-
-			/* NOTE: src might not be in the same block as it comes from
-			 * according to the phi.. but in the end the backend assumes
-			 * it will be able to assign the same register to each (which
-			 * only works if it is assigned in the src block), so insert
-			 * an extra mov to make sure the phi src is assigned in the
-			 * block it comes from:
-			 */
-			src = ir3_MOV(get_block(ctx, nsrc->pred), src, TYPE_U32);
-
-			ir3_reg_create(instr, 0, IR3_REG_SSA)->instr = src;
-		}
-	}
-}
-
-static void
 emit_jump(struct ir3_context *ctx, nir_jump_instr *jump)
 {
 	switch (jump->type) {
@@ -2655,11 +2643,12 @@ emit_instr(struct ir3_context *ctx, nir_instr *instr)
 		}
 		break;
 	}
-	case nir_instr_type_phi:
-		emit_phi(ctx, nir_instr_as_phi(instr));
-		break;
 	case nir_instr_type_jump:
 		emit_jump(ctx, nir_instr_as_jump(instr));
+		break;
+	case nir_instr_type_phi:
+		/* we have converted phi webs to regs in NIR by now */
+		compile_error(ctx, "Unexpected NIR instruction type: %d\n", instr->type);
 		break;
 	case nir_instr_type_call:
 	case nir_instr_type_parallel_copy:
@@ -2669,17 +2658,28 @@ emit_instr(struct ir3_context *ctx, nir_instr *instr)
 }
 
 static struct ir3_block *
-get_block(struct ir3_context *ctx, nir_block *nblock)
+get_block(struct ir3_context *ctx, const nir_block *nblock)
 {
 	struct ir3_block *block;
-	struct hash_entry *entry;
-	entry = _mesa_hash_table_search(ctx->block_ht, nblock);
-	if (entry)
-		return entry->data;
+	struct hash_entry *hentry;
+	struct set_entry *sentry;
+	unsigned i;
+
+	hentry = _mesa_hash_table_search(ctx->block_ht, nblock);
+	if (hentry)
+		return hentry->data;
 
 	block = ir3_block_create(ctx->ir);
 	block->nblock = nblock;
 	_mesa_hash_table_insert(ctx->block_ht, nblock, block);
+
+	block->predecessors_count = nblock->predecessors->entries;
+	block->predecessors = ralloc_array_size(block,
+		sizeof(block->predecessors[0]), block->predecessors_count);
+	i = 0;
+	set_foreach(nblock->predecessors, sentry) {
+		block->predecessors[i++] = get_block(ctx, sentry->key);
+	}
 
 	return block;
 }
@@ -2796,6 +2796,10 @@ emit_stream_out(struct ir3_context *ctx)
 	 * append stream-out block and new-end block
 	 */
 	orig_end_block = ctx->block;
+
+// TODO these blocks need to update predecessors..
+// maybe w/ store_global intrinsic, we could do this
+// stuff in nir->nir pass
 
 	stream_out_block = ir3_block_create(ir);
 	list_addtail(&stream_out_block->node, &ir->block_list);
@@ -3134,10 +3138,6 @@ emit_instructions(struct ir3_context *ctx)
 	/* And emit the body: */
 	ctx->impl = fxn;
 	emit_function(ctx, fxn);
-
-	list_for_each_entry (struct ir3_block, block, &ctx->ir->block_list, node) {
-		resolve_phis(ctx, block);
-	}
 }
 
 /* from NIR perspective, we actually have inputs.  But most of the "inputs"
@@ -3351,6 +3351,11 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 	 * solve conflicts:
 	 */
 	ir3_group(ir);
+
+	if (fd_mesa_debug & FD_DBG_OPTMSGS) {
+		printf("AFTER GROUPING:\n");
+		ir3_print(ir);
+	}
 
 	ir3_depth(ir);
 

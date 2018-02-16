@@ -258,6 +258,7 @@ static int emit_cat2(struct ir3_instruction *instr, void *ptr,
 	cat2->dst      = reg(dst, info, instr->repeat,
 			IR3_REG_R | IR3_REG_EI | IR3_REG_HALF);
 	cat2->repeat   = instr->repeat;
+	cat2->sat      = !!(instr->flags & IR3_INSTR_SAT);
 	cat2->ss       = !!(instr->flags & IR3_INSTR_SS);
 	cat2->ul       = !!(instr->flags & IR3_INSTR_UL);
 	cat2->dst_half = !!((src1->flags ^ dst->flags) & IR3_REG_HALF);
@@ -354,6 +355,7 @@ static int emit_cat3(struct ir3_instruction *instr, void *ptr,
 
 	cat3->dst      = reg(dst, info, instr->repeat, IR3_REG_R | IR3_REG_HALF);
 	cat3->repeat   = instr->repeat;
+	cat3->sat      = !!(instr->flags & IR3_INSTR_SAT);
 	cat3->ss       = !!(instr->flags & IR3_INSTR_SS);
 	cat3->ul       = !!(instr->flags & IR3_INSTR_UL);
 	cat3->dst_half = !!((src_flags ^ dst->flags) & IR3_REG_HALF);
@@ -401,6 +403,7 @@ static int emit_cat4(struct ir3_instruction *instr, void *ptr,
 
 	cat4->dst      = reg(dst, info, instr->repeat, IR3_REG_R | IR3_REG_HALF);
 	cat4->repeat   = instr->repeat;
+	cat4->sat      = !!(instr->flags & IR3_INSTR_SAT);
 	cat4->ss       = !!(instr->flags & IR3_INSTR_SS);
 	cat4->ul       = !!(instr->flags & IR3_INSTR_UL);
 	cat4->dst_half = !!((src->flags ^ dst->flags) & IR3_REG_HALF);
@@ -683,6 +686,7 @@ void * ir3_assemble(struct ir3 *shader, struct ir3_info *info,
 	info->max_const     = -1;
 	info->instrs_count  = 0;
 	info->sizedwords    = 0;
+	info->ss = info->sy = 0;
 
 	list_for_each_entry (struct ir3_block, block, &shader->block_list, node) {
 		list_for_each_entry (struct ir3_instruction, instr, &block->instr_list, node) {
@@ -709,6 +713,12 @@ void * ir3_assemble(struct ir3 *shader, struct ir3_info *info,
 				goto fail;
 			info->instrs_count += 1 + instr->repeat;
 			dwords += 2;
+
+			if (instr->flags & IR3_INSTR_SS)
+				info->ss++;
+
+			if (instr->flags & IR3_INSTR_SY)
+				info->sy++;
 		}
 	}
 
@@ -735,8 +745,7 @@ static void insert_instr(struct ir3_block *block,
 {
 	struct ir3 *shader = block->shader;
 #ifdef DEBUG
-	static uint32_t serialno = 0;
-	instr->serialno = ++serialno;
+	instr->serialno = ++shader->instr_count;
 #endif
 	list_addtail(&instr->node, &block->instr_list);
 
@@ -748,8 +757,7 @@ struct ir3_block * ir3_block_create(struct ir3 *shader)
 {
 	struct ir3_block *block = ir3_alloc(shader, sizeof(*block));
 #ifdef DEBUG
-	static uint32_t serialno = 0;
-	block->serialno = ++serialno;
+	block->serialno = ++shader->block_count;
 #endif
 	block->shader = shader;
 	list_inithead(&block->node);

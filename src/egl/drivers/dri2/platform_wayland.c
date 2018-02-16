@@ -814,13 +814,10 @@ create_wl_buffer(struct dri2_egl_display *dri2_dpy,
          int stride, offset;
          int fd = -1;
 
-         if (i == 0)
-            p_image = image;
-         else
-            p_image = dri2_dpy->image->fromPlanar(image, i, NULL);
+         p_image = dri2_dpy->image->fromPlanar(image, i, NULL);
          if (!p_image) {
-            zwp_linux_buffer_params_v1_destroy(params);
-            return NULL;
+            assert(i == 0);
+            p_image = image;
          }
 
          query = dri2_dpy->image->queryImage(p_image,
@@ -1454,6 +1451,8 @@ static int
 dri2_wl_swrast_get_stride_for_format(int format, int w)
 {
    int visual_idx = dri2_wl_visual_idx_from_shm_format(format);
+
+   assume(visual_idx != -1);
 
    return w * (dri2_wl_visuals[visual_idx].bpp / 8);
 }

@@ -88,7 +88,7 @@ nvc0_screen_is_format_supported(struct pipe_screen *pscreen,
                  PIPE_BIND_SHARED);
 
    if (bindings & PIPE_BIND_SHADER_IMAGE) {
-      if (sample_count > 1 &&
+      if (sample_count > 0 &&
           nouveau_screen(pscreen)->class_3d >= GM107_3D_CLASS) {
          /* MS images are currently unsupported on Maxwell because they have to
           * be handled explicitly. */
@@ -449,12 +449,6 @@ nvc0_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
       return 16.0f;
    case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
       return 15.0f;
-   case PIPE_CAPF_GUARD_BAND_LEFT:
-   case PIPE_CAPF_GUARD_BAND_TOP:
-      return 0.0f;
-   case PIPE_CAPF_GUARD_BAND_RIGHT:
-   case PIPE_CAPF_GUARD_BAND_BOTTOM:
-      return 0.0f; /* that or infinity */
    }
 
    NOUVEAU_ERR("unknown PIPE_CAPF %d\n", param);

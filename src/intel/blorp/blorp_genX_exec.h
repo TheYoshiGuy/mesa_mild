@@ -572,6 +572,8 @@ blorp_emit_vs_config(struct blorp_batch *batch,
                      const struct blorp_params *params)
 {
    struct brw_vs_prog_data *vs_prog_data = params->vs_prog_data;
+   assert(!vs_prog_data || GEN_GEN < 11 ||
+          vs_prog_data->base.dispatch_mode == DISPATCH_MODE_SIMD8);
 
    blorp_emit(batch, GENX(3DSTATE_VS), vs) {
       if (vs_prog_data) {
@@ -738,11 +740,12 @@ blorp_emit_ps_config(struct blorp_batch *batch,
             params->wm_prog_kernel + prog_data->prog_offset_2;
       }
 
-      /* 3DSTATE_PS expects the number of threads per PSD, which is always 64;
-       * it implicitly scales for different GT levels (which have some # of
-       * PSDs).
+      /* 3DSTATE_PS expects the number of threads per PSD, which is always 64
+       * for pre Gen11 and 128 for gen11+; On gen11+ If a programmed value is
+       * k, it implies 2(k+1) threads. It implicitly scales for different GT
+       * levels (which have some # of PSDs).
        *
-       * In Gen8 the format is U8-2 whereas in Gen9 it is U8-1.
+       * In Gen8 the format is U8-2 whereas in Gen9+ it is U9-1.
        */
       if (GEN_GEN >= 9)
          ps.MaximumNumberofThreadsPerPSD = 64 - 1;
@@ -1391,7 +1394,7 @@ blorp_emit_surface_states(struct blorp_batch *batch,
       }
    }
 
-#if GEN_GEN >= 7 && GEN_GEN <= 10
+#if GEN_GEN >= 7
    if (has_indirect_clear_color) {
       /* Updating a surface state object may require that the state cache be
        * invalidated. From the SKL PRM, Shared Functions -> State -> State

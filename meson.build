@@ -452,9 +452,6 @@ with_gallium_xvmc = _xvmc == 'true'
 dep_xvmc = []
 if with_gallium_xvmc
   dep_xvmc = dependency('xvmc', version : '>= 1.0.6')
-  dep_xvmc = declare_dependency(
-    compile_args : run_command(prog_pkgconfig, ['xvmc', '--cflags']).stdout().split()
-  )
 endif
 
 xvmc_drivers_path = get_option('xvmc-libs-path')
@@ -514,11 +511,6 @@ if with_gallium_omx
     endif
   endif
 endif
-if with_gallium_omx
-  dep_omx = declare_dependency(
-    compile_args : run_command(prog_pkgconfig, ['libomxil-bellagio', '--cflags']).stdout().split()
-  )
-endif
 
 _va = get_option('gallium-va')
 if not system_has_kms_drm
@@ -546,7 +538,7 @@ with_gallium_va = _va == 'true'
 dep_va = []
 if with_gallium_va
   dep_va = dependency('libva', version : '>= 0.38.0')
-  dep_va = declare_dependency(
+  dep_va_headers = declare_dependency(
     compile_args : run_command(prog_pkgconfig, ['libva', '--cflags']).stdout().split()
   )
 endif

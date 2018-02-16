@@ -1254,11 +1254,20 @@ static LLVMValueRef si_nir_load_tcs_varyings(struct ac_shader_abi *abi,
 		param_index = LLVMConstInt(ctx->i32, const_index, 0);
 	}
 
+	ubyte *names;
+	ubyte *indices;
+	if (load_input) {
+		names = info->input_semantic_name;
+		indices = info->input_semantic_index;
+	} else {
+		names = info->output_semantic_name;
+		indices = info->output_semantic_index;
+	}
+
 	dw_addr = get_dw_address_from_generic_indices(ctx, stride, dw_addr,
 						      vertex_index, param_index,
 						      driver_location,
-						      info->input_semantic_name,
-						      info->input_semantic_index,
+						      names, indices,
 						      is_patch);
 
 	LLVMValueRef value[4];
@@ -1934,9 +1943,12 @@ static LLVMValueRef load_sample_position(struct ac_shader_abi *abi, LLVMValueRef
 	return lp_build_gather_values(&ctx->gallivm, pos, 4);
 }
 
-static LLVMValueRef si_load_tess_coord(struct ac_shader_abi *abi,
-				       LLVMTypeRef type,
-				       unsigned num_components)
+static LLVMValueRef load_sample_mask_in(struct ac_shader_abi *abi)
+{
+	return abi->sample_coverage;
+}
+
+static LLVMValueRef si_load_tess_coord(struct ac_shader_abi *abi)
 {
 	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
 	struct lp_build_context *bld = &ctx->bld_base.base;
@@ -2111,7 +2123,7 @@ void si_load_system_value(struct si_shader_context *ctx,
 		break;
 
 	case TGSI_SEMANTIC_TESSCOORD:
-		value = si_load_tess_coord(&ctx->abi, NULL, 4);
+		value = si_load_tess_coord(&ctx->abi);
 		break;
 
 	case TGSI_SEMANTIC_VERTICESIN:
@@ -2228,16 +2240,13 @@ void si_load_system_value(struct si_shader_context *ctx,
 	ctx->system_values[index] = value;
 }
 
-void si_declare_compute_memory(struct si_shader_context *ctx,
-			       const struct tgsi_full_declaration *decl)
+void si_declare_compute_memory(struct si_shader_context *ctx)
 {
 	struct si_shader_selector *sel = ctx->shader->selector;
 
 	LLVMTypeRef i8p = LLVMPointerType(ctx->i8, AC_LOCAL_ADDR_SPACE);
 	LLVMValueRef var;
 
-	assert(decl->Declaration.MemType == TGSI_MEMORY_TYPE_SHARED);
-	assert(decl->Range.First == decl->Range.Last);
 	assert(!ctx->ac.lds);
 
 	var = LLVMAddGlobalInAddressSpace(ctx->ac.module,
@@ -2247,6 +2256,15 @@ void si_declare_compute_memory(struct si_shader_context *ctx,
 	LLVMSetAlignment(var, 4);
 
 	ctx->ac.lds = LLVMBuildBitCast(ctx->ac.builder, var, i8p, "");
+}
+
+void si_tgsi_declare_compute_memory(struct si_shader_context *ctx,
+				    const struct tgsi_full_declaration *decl)
+{
+	assert(decl->Declaration.MemType == TGSI_MEMORY_TYPE_SHARED);
+	assert(decl->Range.First == decl->Range.Last);
+
+	si_declare_compute_memory(ctx);
 }
 
 static LLVMValueRef load_const_buffer_desc(struct si_shader_context *ctx, int i)
@@ -5960,6 +5978,7 @@ static bool si_compile_tgsi_main(struct si_shader_context *ctx,
 		bld_base->emit_epilogue = si_tgsi_emit_epilogue;
 		ctx->abi.lookup_interp_param = si_nir_lookup_interp_param;
 		ctx->abi.load_sample_position = load_sample_position;
+		ctx->abi.load_sample_mask_in = load_sample_mask_in;
 		break;
 	case PIPE_SHADER_COMPUTE:
 		ctx->abi.load_local_group_size = get_block_size;
