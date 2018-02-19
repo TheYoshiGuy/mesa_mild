@@ -273,6 +273,9 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_FENCE_SIGNAL:
 		return sscreen->info.has_syncobj;
 
+	case PIPE_CAP_CONSTBUF0_FLAGS:
+		return R600_RESOURCE_FLAG_32BIT;
+
 	case PIPE_CAP_NATIVE_FENCE_FD:
 		return sscreen->info.has_fence_to_handle;
 

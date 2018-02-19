@@ -1148,6 +1148,17 @@ _anv_combine_address(struct anv_batch *batch, void *location,
       .IndextoMOCSTables                           = 1  \
    }
 
+/* Ice Lake MOCS defines are duplicates of Skylake MOCS defines. */
+#define GEN11_MOCS (struct GEN11_MEMORY_OBJECT_CONTROL_STATE) {  \
+      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */              \
+      .IndextoMOCSTables                           = 2         \
+   }
+
+#define GEN11_MOCS_PTE {                                 \
+      /* TC=LLC/eLLC, LeCC=WB, LRUM=3, L3CC=WB */       \
+      .IndextoMOCSTables                           = 1  \
+   }
+
 struct anv_device_memory {
    struct anv_bo *                              bo;
    struct anv_memory_type *                     type;
@@ -3029,6 +3040,9 @@ ANV_DEFINE_NONDISP_HANDLE_CASTS(anv_ycbcr_conversion, VkSamplerYcbcrConversionKH
 #  include "anv_genX.h"
 #  undef genX
 #  define genX(x) gen10_##x
+#  include "anv_genX.h"
+#  undef genX
+#  define genX(x) gen11_##x
 #  include "anv_genX.h"
 #  undef genX
 #endif

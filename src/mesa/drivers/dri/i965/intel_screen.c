@@ -751,6 +751,7 @@ intel_create_image_common(__DRIscreen *dri_screen,
    if (aux_surf.size) {
       image->aux_offset = surf.size;
       image->aux_pitch = aux_surf.row_pitch;
+      image->aux_size = aux_surf.size;
    }
 
    return image;
@@ -1138,6 +1139,8 @@ intel_create_image_from_fds_common(__DRIscreen *dri_screen,
          return NULL;
       }
 
+      image->aux_size = aux_surf.size;
+
       const int end = image->aux_offset + aux_surf.size;
       if (size < end)
          size = end;
@@ -1313,7 +1316,7 @@ intel_query_dma_buf_modifiers(__DRIscreen *_screen, int fourcc, int max,
 static __DRIimage *
 intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
 {
-    int width, height, offset, stride, dri_format;
+    int width, height, offset, stride, size, dri_format;
     __DRIimage *image;
 
     if (parent == NULL)
@@ -1332,24 +1335,27 @@ intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
        int index = f->planes[plane].buffer_index;
        offset = parent->offsets[index];
        stride = parent->strides[index];
+       size = height * stride;
     } else if (plane == 0) {
        /* The only plane of a non-planar image: copy the parent definition
         * directly. */
        dri_format = parent->dri_format;
        offset = parent->offset;
        stride = parent->pitch;
+       size = height * stride;
     } else if (plane == 1 && parent->modifier != DRM_FORMAT_MOD_INVALID &&
                isl_drm_modifier_has_aux(parent->modifier)) {
        /* Auxiliary plane */
        dri_format = parent->dri_format;
        offset = parent->aux_offset;
        stride = parent->aux_pitch;
+       size = parent->aux_size;
     } else {
        return NULL;
     }
 
-    if (offset + height * stride > parent->bo->size) {
-       _mesa_warning(NULL, "intel_create_sub_image: subimage out of bounds");
+    if (offset + size > parent->bo->size) {
+       _mesa_warning(NULL, "intel_from_planar: subimage out of bounds");
        return NULL;
     }
 
@@ -2655,6 +2661,9 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
    if (devinfo->gen >= 8 || screen->cmd_parser_version >= 5)
       screen->kernel_features |= KERNEL_ALLOWS_COMPUTE_DISPATCH;
 
+   if (intel_get_boolean(screen, I915_PARAM_HAS_CONTEXT_ISOLATION))
+      screen->kernel_features |= KERNEL_ALLOWS_CONTEXT_ISOLATION;
+
    const char *force_msaa = getenv("INTEL_FORCE_MSAA");
    if (force_msaa) {
       screen->winsys_msaa_samples_override =
@@ -2692,7 +2701,14 @@ __DRIconfig **intelInitScreen2(__DRIscreen *dri_screen)
    screen->compiler = brw_compiler_create(screen, devinfo);
    screen->compiler->shader_debug_log = shader_debug_log_mesa;
    screen->compiler->shader_perf_log = shader_perf_log_mesa;
-   screen->compiler->constant_buffer_0_is_relative = true;
+
+   /* Changing the meaning of constant buffer pointers from a dynamic state
+    * offset to an absolute address is only safe if the kernel isolates other
+    * contexts from our changes.
+    */
+   screen->compiler->constant_buffer_0_is_relative = devinfo->gen < 8 ||
+      !(screen->kernel_features & KERNEL_ALLOWS_CONTEXT_ISOLATION);
+
    screen->compiler->supports_pull_constants = true;
 
    screen->has_exec_fence =

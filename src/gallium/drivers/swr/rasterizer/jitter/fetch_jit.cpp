@@ -130,7 +130,6 @@ struct FetchJit :
     void CreateGatherOddFormats(SWR_FORMAT format, Value* pMask, Value* pBase, Value* offsets, Value* result[4]);
     void ConvertFormat(SWR_FORMAT format, Value *texels[4]);
 
-    Value* mpPrivateContext;
     Value* mpFetchInfo;
 };
 
@@ -149,8 +148,9 @@ Function* FetchJit::Create(const FETCH_COMPILE_STATE& fetchState)
     auto    argitr = fetch->arg_begin();
 
     // Fetch shader arguments
-    mpPrivateContext = &*argitr; ++argitr;
-    mpPrivateContext->setName("privateContext");
+    Value* privateContext = &*argitr; ++argitr;
+    privateContext->setName("privateContext");
+    SetPrivateContext(privateContext);
 
     mpFetchInfo = &*argitr; ++argitr;
     mpFetchInfo->setName("fetchInfo");
@@ -445,7 +445,7 @@ void FetchJit::JitLoadVertices(const FETCH_COMPILE_STATE &fetchState, Value* str
         }
 
         // load SWR_VERTEX_BUFFER_STATE::pData
-        Value *stream = LOAD(streams, {ied.StreamIndex, SWR_VERTEX_BUFFER_STATE_pData});
+        Value *stream = LOAD(streams, {ied.StreamIndex, SWR_VERTEX_BUFFER_STATE_xpData});
 
         // load SWR_VERTEX_BUFFER_STATE::pitch
         Value *stride = LOAD(streams, {ied.StreamIndex, SWR_VERTEX_BUFFER_STATE_pitch});
@@ -933,10 +933,10 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
         SWR_ASSERT((info.bpp != 0), "Unsupported format in JitGatherVertices.");
         uint32_t bpc = info.bpp / info.numComps;  ///@todo Code below assumes all components are same size. Need to fix.
 
-        Value *stream = LOAD(streams, {ied.StreamIndex, SWR_VERTEX_BUFFER_STATE_pData});
+        Value *stream = LOAD(streams, {ied.StreamIndex, SWR_VERTEX_BUFFER_STATE_xpData});
 
         // VGATHER* takes an *i8 src pointer
-        Value *pStreamBase = BITCAST(stream, PointerType::get(mInt8Ty, 0));
+        Value *pStreamBase = INT_TO_PTR(stream, PointerType::get(mInt8Ty, 0));
 
         Value *stride = LOAD(streams, {ied.StreamIndex, SWR_VERTEX_BUFFER_STATE_pitch});
 #if USE_SIMD16_GATHERS
@@ -1039,6 +1039,7 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
         // calculate byte offset to the start of the VB
         Value* baseOffset = MUL(Z_EXT(startOffset, mInt64Ty), Z_EXT(stride, mInt64Ty));
         pStreamBase = GEP(pStreamBase, baseOffset);
+        Value* pStreamBaseGFX = ADD(stream, baseOffset);
 
         // if we have a start offset, subtract from max vertex. Used for OOB check
         maxVertex = SUB(Z_EXT(maxVertex, mInt64Ty), Z_EXT(startOffset, mInt64Ty));
@@ -1364,7 +1365,7 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                                 // But, we know that elements must be aligned for FETCH. :)
                                 // Right shift the offset by a bit and then scale by 2 to remove the sign extension.
                                 Value *vShiftedOffsets = LSHR(vOffsets, 1);
-                                vVertexElements[currentVertexElement++] = GATHERPS(gatherSrc, pStreamBase, vShiftedOffsets, vGatherMask, 2, mpPrivateContext);
+                                vVertexElements[currentVertexElement++] = GATHERPS(gatherSrc, pStreamBaseGFX, vShiftedOffsets, vGatherMask, 2);
                             }
                             else
                             {
@@ -1385,6 +1386,7 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
 
                         // offset base to the next component in the vertex to gather
                         pStreamBase = GEP(pStreamBase, C((char)4));
+                        pStreamBaseGFX = ADD(pStreamBaseGFX, C((int64_t)4));
 #endif
                     }
                 }
@@ -1828,11 +1830,15 @@ Value* FetchJit::GetSimdValid16bitIndices(Value* pIndices, Value* pLastIndex)
     Value* pZeroIndex = ALLOCA(mInt16Ty);
     STORE(C((uint16_t)0), pZeroIndex);
 
+    pLastIndex = TRANSLATE_ADDRESS(pLastIndex);
+
     // Load a SIMD of index pointers
     for(int64_t lane = 0; lane < mVWidth; lane++)
     {
         // Calculate the address of the requested index
         Value *pIndex = GEP(pIndices, C(lane));
+
+        pIndex = TRANSLATE_ADDRESS(pIndex);
 
         // check if the address is less than the max index, 
         Value* mask = ICMP_ULT(pIndex, pLastIndex);

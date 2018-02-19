@@ -50,7 +50,9 @@ namespace ArchRast
 
     struct CStats
     {
-        uint32_t clippedVerts = 0;
+        uint32_t trivialRejectCount;
+        uint32_t trivialAcceptCount;
+        uint32_t mustClipCount;
     };
 
     struct TEStats
@@ -73,10 +75,6 @@ namespace ArchRast
     {
     public:
         EventHandlerStatsFile(uint32_t id) : EventHandlerFile(id), mNeedFlush(false) {}
-
-        // These are events that we're not interested in saving in stats event files.
-        virtual void Handle(const Start& event) {}
-        virtual void Handle(const End& event) {}
 
         virtual void Handle(const EarlyDepthStencilInfoSingleSample& event)
         {
@@ -168,6 +166,41 @@ namespace ArchRast
         }
 
 
+        virtual void Handle(const ClipInfoEvent& event)
+        {
+            mClipper.mustClipCount += _mm_popcnt_u32(event.data.clipMask);
+            mClipper.trivialRejectCount += event.data.numInvocations - _mm_popcnt_u32(event.data.validMask);
+            mClipper.trivialAcceptCount += _mm_popcnt_u32(event.data.validMask & ~event.data.clipMask);
+        }
+
+        virtual void Handle(const DrawInstancedEvent& event)
+        {
+            DrawInfoEvent e(event.data.drawId, event.data.type, event.data.topology, event.data.numVertices, 0, 0, event.data.startVertex, event.data.numInstances, event.data.startInstance);
+
+            EventHandlerFile::Handle(e);
+        }
+
+        virtual void Handle(const DrawIndexedInstancedEvent& event)
+        {
+            DrawInfoEvent e(event.data.drawId, event.data.type, event.data.topology, 0, event.data.numIndices, event.data.indexOffset, event.data.baseVertex, event.data.numInstances, event.data.startInstance);
+
+            EventHandlerFile::Handle(e);
+        }
+
+        virtual void Handle(const DrawInstancedSplitEvent& event)
+        {
+            DrawInfoEvent e(event.data.drawId, event.data.type, 0, 0, 0, 0, 0, 0, 0);
+
+            EventHandlerFile::Handle(e);
+        }
+
+        virtual void Handle(const DrawIndexedInstancedSplitEvent& event)
+        {
+            DrawInfoEvent e(event.data.drawId, event.data.type, 0, 0, 0, 0, 0, 0, 0);
+
+            EventHandlerFile::Handle(e);
+        }
+
         // Flush cached events for this draw
         virtual void FlushDraw(uint32_t drawId)
         {
@@ -206,7 +239,7 @@ namespace ArchRast
         virtual void Handle(const FrontendDrawEndEvent& event)
         {
             //Clipper
-            EventHandlerFile::Handle(VertsClipped(event.data.drawId, mClipper.clippedVerts));
+            EventHandlerFile::Handle(ClipperEvent(event.data.drawId, mClipper.trivialRejectCount, mClipper.trivialAcceptCount, mClipper.mustClipCount));
 
             //Tesselator
             EventHandlerFile::Handle(TessPrims(event.data.drawId, mTS.inputPrims));
@@ -227,11 +260,6 @@ namespace ArchRast
             mGS.inputPrimCount += event.data.inputPrimCount;
             mGS.primGeneratedCount += event.data.primGeneratedCount;
             mGS.vertsInput += event.data.vertsInput;
-        }
-
-        virtual void Handle(const ClipVertexCount& event)
-        {
-            mClipper.clippedVerts += (_mm_popcnt_u32(event.data.primMask) * event.data.vertsPerPrim);
         }
 
         virtual void Handle(const TessPrimCount& event)
