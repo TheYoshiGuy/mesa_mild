@@ -1308,7 +1308,8 @@ intel_miptree_match_image(struct intel_mipmap_tree *mt,
    if (mt->etc_format != MESA_FORMAT_NONE)
       mt_format = mt->etc_format;
 
-   if (image->TexFormat != mt_format)
+   if (_mesa_get_srgb_format_linear(image->TexFormat) !=
+       _mesa_get_srgb_format_linear(mt_format))
       return false;
 
    intel_get_image_dims(image, &width, &height, &depth);
@@ -1547,7 +1548,8 @@ intel_miptree_copy_slice(struct brw_context *brw,
    assert(src_layer < get_num_phys_layers(&src_mt->surf,
                                           src_level - src_mt->first_level));
 
-   assert(src_mt->format == dst_mt->format);
+   assert(_mesa_get_srgb_format_linear(src_mt->format) ==
+          _mesa_get_srgb_format_linear(dst_mt->format));
 
    if (dst_mt->compressed) {
       unsigned int i, j;
@@ -2792,6 +2794,25 @@ intel_miptree_prepare_external(struct brw_context *brw,
    intel_miptree_prepare_access(brw, mt, 0, INTEL_REMAINING_LEVELS,
                                 0, INTEL_REMAINING_LAYERS,
                                 aux_usage, supports_fast_clear);
+}
+
+void
+intel_miptree_finish_external(struct brw_context *brw,
+                              struct intel_mipmap_tree *mt)
+{
+   if (!mt->mcs_buf)
+      return;
+
+   /* We don't know the actual aux state of the aux surface.  The previous
+    * owner could have given it to us in a number of different states.
+    * Because we don't know the aux state, we reset the aux state to the
+    * least common denominator of possible valid states.
+    */
+   enum isl_aux_state default_aux_state =
+      isl_drm_modifier_get_default_aux_state(mt->drm_modifier);
+   assert(mt->last_level == mt->first_level);
+   intel_miptree_set_aux_state(brw, mt, 0, 0, INTEL_REMAINING_LAYERS,
+                               default_aux_state);
 }
 
 /**

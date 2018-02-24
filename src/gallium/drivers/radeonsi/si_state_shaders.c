@@ -26,6 +26,7 @@
 #include "gfx9d.h"
 #include "radeon/r600_cs.h"
 
+#include "compiler/nir/nir_serialize.h"
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_ureg.h"
 #include "util/hash_table.h"
@@ -42,22 +43,40 @@
 /* SHADER_CACHE */
 
 /**
- * Return the TGSI binary in a buffer. The first 4 bytes contain its size as
- * integer.
+ * Return the IR binary in a buffer. For TGSI the first 4 bytes contain its
+ * size as integer.
  */
-static void *si_get_tgsi_binary(struct si_shader_selector *sel)
+static void *si_get_ir_binary(struct si_shader_selector *sel)
 {
-	unsigned tgsi_size = tgsi_num_tokens(sel->tokens) *
-			     sizeof(struct tgsi_token);
-	unsigned size = 4 + tgsi_size + sizeof(sel->so);
-	char *result = (char*)MALLOC(size);
+	struct blob blob;
+	unsigned ir_size;
+	void *ir_binary;
 
+	if (sel->tokens) {
+		ir_binary = sel->tokens;
+		ir_size = tgsi_num_tokens(sel->tokens) *
+					  sizeof(struct tgsi_token);
+	} else {
+		assert(sel->nir);
+
+		blob_init(&blob);
+		nir_serialize(&blob, sel->nir);
+		ir_binary = blob.data;
+		ir_size = blob.size;
+	}
+
+	unsigned size = 4 + ir_size + sizeof(sel->so);
+	char *result = (char*)MALLOC(size);
 	if (!result)
 		return NULL;
 
 	*((uint32_t*)result) = size;
-	memcpy(result + 4, sel->tokens, tgsi_size);
-	memcpy(result + 4 + tgsi_size, &sel->so, sizeof(sel->so));
+	memcpy(result + 4, ir_binary, ir_size);
+	memcpy(result + 4 + ir_size, &sel->so, sizeof(sel->so));
+
+	if (sel->nir)
+		blob_finish(&blob);
+
 	return result;
 }
 
@@ -182,10 +201,10 @@ static bool si_load_shader_binary(struct si_shader *shader, void *binary)
  * Insert a shader into the cache. It's assumed the shader is not in the cache.
  * Use si_shader_cache_load_shader before calling this.
  *
- * Returns false on failure, in which case the tgsi_binary should be freed.
+ * Returns false on failure, in which case the ir_binary should be freed.
  */
 static bool si_shader_cache_insert_shader(struct si_screen *sscreen,
-					  void *tgsi_binary,
+					  void *ir_binary,
 					  struct si_shader *shader,
 					  bool insert_into_disk_cache)
 {
@@ -193,7 +212,7 @@ static bool si_shader_cache_insert_shader(struct si_screen *sscreen,
 	struct hash_entry *entry;
 	uint8_t key[CACHE_KEY_SIZE];
 
-	entry = _mesa_hash_table_search(sscreen->shader_cache, tgsi_binary);
+	entry = _mesa_hash_table_search(sscreen->shader_cache, ir_binary);
 	if (entry)
 		return false; /* already added */
 
@@ -201,15 +220,15 @@ static bool si_shader_cache_insert_shader(struct si_screen *sscreen,
 	if (!hw_binary)
 		return false;
 
-	if (_mesa_hash_table_insert(sscreen->shader_cache, tgsi_binary,
+	if (_mesa_hash_table_insert(sscreen->shader_cache, ir_binary,
 				    hw_binary) == NULL) {
 		FREE(hw_binary);
 		return false;
 	}
 
 	if (sscreen->disk_shader_cache && insert_into_disk_cache) {
-		disk_cache_compute_key(sscreen->disk_shader_cache, tgsi_binary,
-				       *((uint32_t *)tgsi_binary), key);
+		disk_cache_compute_key(sscreen->disk_shader_cache, ir_binary,
+				       *((uint32_t *)ir_binary), key);
 		disk_cache_put(sscreen->disk_shader_cache, key, hw_binary,
 			       *((uint32_t *) hw_binary), NULL);
 	}
@@ -218,18 +237,18 @@ static bool si_shader_cache_insert_shader(struct si_screen *sscreen,
 }
 
 static bool si_shader_cache_load_shader(struct si_screen *sscreen,
-					void *tgsi_binary,
+					void *ir_binary,
 				        struct si_shader *shader)
 {
 	struct hash_entry *entry =
-		_mesa_hash_table_search(sscreen->shader_cache, tgsi_binary);
+		_mesa_hash_table_search(sscreen->shader_cache, ir_binary);
 	if (!entry) {
 		if (sscreen->disk_shader_cache) {
 			unsigned char sha1[CACHE_KEY_SIZE];
-			size_t tg_size = *((uint32_t *) tgsi_binary);
+			size_t tg_size = *((uint32_t *) ir_binary);
 
 			disk_cache_compute_key(sscreen->disk_shader_cache,
-					       tgsi_binary, tg_size, sha1);
+					       ir_binary, tg_size, sha1);
 
 			size_t binary_size;
 			uint8_t *buffer =
@@ -260,15 +279,15 @@ static bool si_shader_cache_load_shader(struct si_screen *sscreen,
 			}
 			free(buffer);
 
-			if (!si_shader_cache_insert_shader(sscreen, tgsi_binary,
+			if (!si_shader_cache_insert_shader(sscreen, ir_binary,
 							   shader, false))
-				FREE(tgsi_binary);
+				FREE(ir_binary);
 		} else {
 			return false;
 		}
 	} else {
 		if (si_load_shader_binary(shader, entry->data))
-			FREE(tgsi_binary);
+			FREE(ir_binary);
 		else
 			return false;
 	}
@@ -1797,7 +1816,7 @@ static void si_init_shader_selector_async(void *job, int thread_index)
 	 */
 	if (!sscreen->use_monolithic_shaders) {
 		struct si_shader *shader = CALLOC_STRUCT(si_shader);
-		void *tgsi_binary = NULL;
+		void *ir_binary = NULL;
 
 		if (!shader) {
 			fprintf(stderr, "radeonsi: can't allocate a main shader part\n");
@@ -1813,14 +1832,14 @@ static void si_init_shader_selector_async(void *job, int thread_index)
 					      sel->so.num_outputs != 0,
 					      &shader->key);
 
-		if (sel->tokens)
-			tgsi_binary = si_get_tgsi_binary(sel);
+		if (sel->tokens || sel->nir)
+			ir_binary = si_get_ir_binary(sel);
 
 		/* Try to load the shader from the shader cache. */
 		mtx_lock(&sscreen->shader_cache_mutex);
 
-		if (tgsi_binary &&
-		    si_shader_cache_load_shader(sscreen, tgsi_binary, shader)) {
+		if (ir_binary &&
+		    si_shader_cache_load_shader(sscreen, ir_binary, shader)) {
 			mtx_unlock(&sscreen->shader_cache_mutex);
 			si_shader_dump_stats_for_shader_db(shader, debug);
 		} else {
@@ -1830,15 +1849,15 @@ static void si_init_shader_selector_async(void *job, int thread_index)
 			if (si_compile_tgsi_shader(sscreen, tm, shader, false,
 						   debug) != 0) {
 				FREE(shader);
-				FREE(tgsi_binary);
+				FREE(ir_binary);
 				fprintf(stderr, "radeonsi: can't compile a main shader part\n");
 				return;
 			}
 
-			if (tgsi_binary) {
+			if (ir_binary) {
 				mtx_lock(&sscreen->shader_cache_mutex);
-				if (!si_shader_cache_insert_shader(sscreen, tgsi_binary, shader, true))
-					FREE(tgsi_binary);
+				if (!si_shader_cache_insert_shader(sscreen, ir_binary, shader, true))
+					FREE(ir_binary);
 				mtx_unlock(&sscreen->shader_cache_mutex);
 			}
 		}

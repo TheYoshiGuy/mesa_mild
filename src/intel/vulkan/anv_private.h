@@ -1689,6 +1689,7 @@ struct anv_attachment_state {
 
    VkImageLayout                                current_layout;
    VkImageAspectFlags                           pending_clear_aspects;
+   VkImageAspectFlags                           pending_load_aspects;
    bool                                         fast_clear;
    VkClearValue                                 clear_value;
    bool                                         clear_color_is_zero_one;
@@ -1934,7 +1935,6 @@ anv_cmd_buffer_push_constants(struct anv_cmd_buffer *cmd_buffer,
 struct anv_state
 anv_cmd_buffer_cs_push_constants(struct anv_cmd_buffer *cmd_buffer);
 
-void anv_cmd_buffer_clear_subpass(struct anv_cmd_buffer *cmd_buffer);
 void anv_cmd_buffer_resolve_subpass(struct anv_cmd_buffer *cmd_buffer);
 
 const struct anv_image_view *
@@ -2403,8 +2403,18 @@ struct anv_image {
    VkImageUsageFlags usage; /**< Superset of VkImageCreateInfo::usage. */
    VkImageTiling tiling; /** VkImageCreateInfo::tiling */
 
+   /** True if this is needs to be bound to an appropriately tiled BO.
+    *
+    * When not using modifiers, consumers such as X11, Wayland, and KMS need
+    * the tiling passed via I915_GEM_SET_TILING.  When exporting these buffers
+    * we require a dedicated allocation so that we can know to allocate a
+    * tiled buffer.
+    */
+   bool needs_set_tiling;
+
    /**
-    * DRM format modifier for this image or DRM_FORMAT_MOD_INVALID.
+    * Must be DRM_FORMAT_MOD_INVALID unless tiling is
+    * VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT.
     */
    uint64_t drm_format_mod;
 
@@ -2620,11 +2630,35 @@ anv_cmd_buffer_mark_image_written(struct anv_cmd_buffer *cmd_buffer,
                                   uint32_t layer_count);
 
 void
+anv_image_clear_color(struct anv_cmd_buffer *cmd_buffer,
+                      const struct anv_image *image,
+                      VkImageAspectFlagBits aspect,
+                      enum isl_aux_usage aux_usage,
+                      enum isl_format format, struct isl_swizzle swizzle,
+                      uint32_t level, uint32_t base_layer, uint32_t layer_count,
+                      VkRect2D area, union isl_color_value clear_color);
+void
+anv_image_clear_depth_stencil(struct anv_cmd_buffer *cmd_buffer,
+                              const struct anv_image *image,
+                              VkImageAspectFlags aspects,
+                              enum isl_aux_usage depth_aux_usage,
+                              uint32_t level,
+                              uint32_t base_layer, uint32_t layer_count,
+                              VkRect2D area,
+                              float depth_value, uint8_t stencil_value);
+void
 anv_image_hiz_op(struct anv_cmd_buffer *cmd_buffer,
                  const struct anv_image *image,
                  VkImageAspectFlagBits aspect, uint32_t level,
                  uint32_t base_layer, uint32_t layer_count,
                  enum isl_aux_op hiz_op);
+void
+anv_image_hiz_clear(struct anv_cmd_buffer *cmd_buffer,
+                    const struct anv_image *image,
+                    VkImageAspectFlags aspects,
+                    uint32_t level,
+                    uint32_t base_layer, uint32_t layer_count,
+                    VkRect2D area, uint8_t stencil_value);
 void
 anv_image_mcs_op(struct anv_cmd_buffer *cmd_buffer,
                  const struct anv_image *image,
@@ -2852,6 +2886,12 @@ struct anv_framebuffer {
    struct anv_image_view *                      attachments[0];
 };
 
+struct anv_subpass_attachment {
+   VkImageUsageFlagBits usage;
+   uint32_t attachment;
+   VkImageLayout layout;
+};
+
 struct anv_subpass {
    uint32_t                                     attachment_count;
 
@@ -2859,14 +2899,14 @@ struct anv_subpass {
     * A pointer to all attachment references used in this subpass.
     * Only valid if ::attachment_count > 0.
     */
-   VkAttachmentReference *                      attachments;
+   struct anv_subpass_attachment *              attachments;
    uint32_t                                     input_count;
-   VkAttachmentReference *                      input_attachments;
+   struct anv_subpass_attachment *              input_attachments;
    uint32_t                                     color_count;
-   VkAttachmentReference *                      color_attachments;
-   VkAttachmentReference *                      resolve_attachments;
+   struct anv_subpass_attachment *              color_attachments;
+   struct anv_subpass_attachment *              resolve_attachments;
 
-   VkAttachmentReference                        depth_stencil_attachment;
+   struct anv_subpass_attachment                depth_stencil_attachment;
 
    uint32_t                                     view_mask;
 

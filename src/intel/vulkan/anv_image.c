@@ -93,7 +93,8 @@ choose_isl_surf_usage(VkImageCreateFlags vk_create_flags,
 
 static isl_tiling_flags_t
 choose_isl_tiling_flags(const struct anv_image_create_info *anv_info,
-                        const struct isl_drm_modifier_info *isl_mod_info)
+                        const struct isl_drm_modifier_info *isl_mod_info,
+                        bool legacy_scanout)
 {
    const VkImageCreateInfo *base_info = anv_info->vk_info;
    isl_tiling_flags_t flags = 0;
@@ -111,6 +112,9 @@ choose_isl_tiling_flags(const struct anv_image_create_info *anv_info,
 
    if (anv_info->isl_tiling_flags)
       flags &= anv_info->isl_tiling_flags;
+
+   if (legacy_scanout)
+      flags &= ISL_TILING_LINEAR_BIT | ISL_TILING_X_BIT;
 
    if (isl_mod_info)
       flags &= 1 << isl_mod_info->tiling;
@@ -504,17 +508,36 @@ make_surface(const struct anv_device *dev,
    return VK_SUCCESS;
 }
 
-static const struct isl_drm_modifier_info *
-get_legacy_scanout_drm_format_mod(VkImageTiling tiling)
+static uint32_t
+score_drm_format_mod(uint64_t modifier)
 {
-   switch (tiling) {
-   case VK_IMAGE_TILING_OPTIMAL:
-      return isl_drm_modifier_get_info(I915_FORMAT_MOD_X_TILED);
-   case VK_IMAGE_TILING_LINEAR:
-      return isl_drm_modifier_get_info(DRM_FORMAT_MOD_LINEAR);
-   default:
-      unreachable("bad VkImageTiling");
+   switch (modifier) {
+   case DRM_FORMAT_MOD_LINEAR: return 1;
+   case I915_FORMAT_MOD_X_TILED: return 2;
+   case I915_FORMAT_MOD_Y_TILED: return 3;
+   default: unreachable("bad DRM format modifier");
    }
+}
+
+static const struct isl_drm_modifier_info *
+choose_drm_format_mod(const struct anv_physical_device *device,
+                      uint32_t modifier_count, const uint64_t *modifiers)
+{
+   uint64_t best_mod = UINT64_MAX;
+   uint32_t best_score = 0;
+
+   for (uint32_t i = 0; i < modifier_count; ++i) {
+      uint32_t score = score_drm_format_mod(modifiers[i]);
+      if (score > best_score) {
+         best_mod = modifiers[i];
+         best_score = score;
+      }
+   }
+
+   if (best_score > 0)
+      return isl_drm_modifier_get_info(best_mod);
+   else
+      return NULL;
 }
 
 VkResult
@@ -533,8 +556,12 @@ anv_image_create(VkDevice _device,
 
    const struct wsi_image_create_info *wsi_info =
       vk_find_struct_const(pCreateInfo->pNext, WSI_IMAGE_CREATE_INFO_MESA);
-   if (wsi_info && wsi_info->scanout)
-      isl_mod_info = get_legacy_scanout_drm_format_mod(pCreateInfo->tiling);
+   if (wsi_info && wsi_info->modifier_count > 0) {
+      isl_mod_info = choose_drm_format_mod(&device->instance->physicalDevice,
+                                           wsi_info->modifier_count,
+                                           wsi_info->modifiers);
+      assert(isl_mod_info);
+   }
 
    anv_assert(pCreateInfo->mipLevels > 0);
    anv_assert(pCreateInfo->arrayLayers > 0);
@@ -559,6 +586,7 @@ anv_image_create(VkDevice _device,
    image->usage = pCreateInfo->usage;
    image->tiling = pCreateInfo->tiling;
    image->disjoint = pCreateInfo->flags & VK_IMAGE_CREATE_DISJOINT_BIT_KHR;
+   image->needs_set_tiling = wsi_info && wsi_info->scanout;
    image->drm_format_mod = isl_mod_info ? isl_mod_info->modifier :
                                           DRM_FORMAT_MOD_INVALID;
 
@@ -566,7 +594,8 @@ anv_image_create(VkDevice _device,
    assert(format != NULL);
 
    const isl_tiling_flags_t isl_tiling_flags =
-      choose_isl_tiling_flags(create_info, isl_mod_info);
+      choose_isl_tiling_flags(create_info, isl_mod_info,
+                              image->needs_set_tiling);
 
    image->n_planes = format->n_planes;
 

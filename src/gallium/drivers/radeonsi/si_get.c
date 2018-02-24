@@ -24,6 +24,7 @@
 #include "si_pipe.h"
 #include "radeon/radeon_video.h"
 #include "radeon/radeon_vce.h"
+#include "radeon/radeon_uvd_enc.h"
 #include "ac_llvm_util.h"
 #include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
@@ -440,6 +441,8 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
 		return SI_NUM_IMAGES;
 	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
+		if (sscreen->debug_flags & DBG(NIR))
+			return 0;
 		return 32;
 	case PIPE_SHADER_CAP_PREFERRED_IR:
 		if (sscreen->debug_flags & DBG(NIR))
@@ -582,7 +585,8 @@ static int si_get_video_param(struct pipe_screen *screen,
 				(si_vce_is_fw_version_supported(sscreen) ||
 				sscreen->info.family == CHIP_RAVEN)) ||
 				(profile == PIPE_VIDEO_PROFILE_HEVC_MAIN &&
-				sscreen->info.family == CHIP_RAVEN);
+				(sscreen->info.family == CHIP_RAVEN ||
+				si_radeon_uvd_enc_supported(sscreen)));
 		case PIPE_VIDEO_CAP_NPOT_TEXTURES:
 			return 1;
 		case PIPE_VIDEO_CAP_MAX_WIDTH:
