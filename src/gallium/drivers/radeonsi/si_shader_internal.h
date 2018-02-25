@@ -162,15 +162,15 @@ struct si_shader_context {
 	/* Layout of TCS outputs / TES inputs:
 	 *   [0:12] = stride between output patches in DW, num_outputs * num_vertices * 4
 	 *            max = 32*32*4 + 32*4
-	 *   [26:31] = gl_PatchVerticesIn, max = 32
+	 *   [13:18] = gl_PatchVerticesIn, max = 32
+	 *   [19:31] = high 13 bits of the 32-bit address of tessellation ring buffers
 	 */
 	int param_tcs_out_lds_layout;
-	int param_tcs_offchip_addr_base64k;
-	int param_tcs_factor_addr_base64k;
 	int param_tcs_offchip_offset;
 	int param_tcs_factor_offset;
 
 	/* API TES */
+	int param_tes_offchip_addr;
 	int param_tes_u;
 	int param_tes_v;
 	int param_tes_rel_patch_id;
@@ -191,6 +191,7 @@ struct si_shader_context {
 	/* Preloaded descriptors. */
 	LLVMValueRef esgs_ring;
 	LLVMValueRef gsvs_ring[4];
+	LLVMValueRef tess_offchip_ring;
 
 	LLVMValueRef invoc0_tess_factors[6]; /* outer[4], inner[2] */
 	LLVMValueRef gs_next_vertex[4];

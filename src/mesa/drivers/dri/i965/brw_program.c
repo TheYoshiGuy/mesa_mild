@@ -313,12 +313,12 @@ brw_memory_barrier(struct gl_context *ctx, GLbitfield barriers)
 }
 
 static void
-brw_blend_barrier(struct gl_context *ctx)
+brw_framebuffer_fetch_barrier(struct gl_context *ctx)
 {
    struct brw_context *brw = brw_context(ctx);
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
-   if (!ctx->Extensions.MESA_shader_framebuffer_fetch) {
+   if (!ctx->Extensions.EXT_shader_framebuffer_fetch) {
       if (devinfo->gen >= 6) {
          brw_emit_pipe_control_flush(brw,
                                      PIPE_CONTROL_RENDER_TARGET_FLUSH |
@@ -443,7 +443,7 @@ void brwInitFragProgFuncs( struct dd_function_table *functions )
    functions->LinkShader = brw_link_shader;
 
    functions->MemoryBarrier = brw_memory_barrier;
-   functions->BlendBarrier = brw_blend_barrier;
+   functions->FramebufferFetchBarrier = brw_framebuffer_fetch_barrier;
 }
 
 struct shader_times {

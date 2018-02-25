@@ -104,6 +104,9 @@ struct si_screen {
 
 	unsigned			gs_table_depth;
 	unsigned			tess_offchip_block_dw_size;
+	unsigned			tess_offchip_ring_size;
+	unsigned			tess_factor_ring_size;
+	unsigned			vgt_hs_offchip_param;
 	bool				has_clear_state;
 	bool				has_distributed_tess;
 	bool				has_draw_indirect_multi;
@@ -509,8 +512,7 @@ struct si_context {
 	struct pipe_constant_buffer	null_const_buf; /* used for set_constant_buffer(NULL) on CIK */
 	struct pipe_resource		*esgs_ring;
 	struct pipe_resource		*gsvs_ring;
-	struct pipe_resource		*tf_ring;
-	struct pipe_resource		*tess_offchip_ring;
+	struct pipe_resource		*tess_rings;
 	union pipe_color_union		*border_color_table; /* in CPU memory, any endian */
 	struct r600_resource		*border_color_buffer;
 	union pipe_color_union		*border_color_map; /* in VRAM (slow access), little endian */
