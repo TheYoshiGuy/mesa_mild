@@ -25,37 +25,24 @@
 #include "brw_eu.h"
 #include "util/ralloc.h"
 
-enum subgen {
-   IS_G45 = 1,
-   IS_BYT,
-   IS_HSW,
-   IS_CHV,
-   IS_BXT,
-   IS_KBL,
-   IS_GLK,
-   IS_CFL,
-};
-
 static const struct gen_info {
    const char *name;
-   int gen;
-   enum subgen subgen;
 } gens[] = {
-   { "brw", 4 },
-   { "g45", 4, IS_G45 },
-   { "ilk", 5 },
-   { "snb", 6 },
-   { "ivb", 7 },
-   { "byt", 7, IS_BYT },
-   { "hsw", 7, IS_HSW },
-   { "bdw", 8 },
-   { "chv", 8, IS_CHV },
-   { "skl", 9 },
-   { "bxt", 9, IS_BXT },
-   { "kbl", 9, IS_KBL },
-   { "glk", 9, IS_GLK },
-   { "cfl", 9, IS_CFL },
-   { "cnl", 10 },
+   { "brw", },
+   { "g4x", },
+   { "ilk", },
+   { "snb", },
+   { "ivb", },
+   { "byt", },
+   { "hsw", },
+   { "bdw", },
+   { "chv", },
+   { "skl", },
+   { "bxt", },
+   { "kbl", },
+   { "glk", },
+   { "cfl", },
+   { "cnl", },
 };
 
 class validation_test: public ::testing::TestWithParam<struct gen_info> {
@@ -83,16 +70,9 @@ validation_test::~validation_test()
 void validation_test::SetUp()
 {
    struct gen_info info = GetParam();
+   int devid = gen_device_name_to_pci_device_id(info.name);
 
-   devinfo.gen           = info.gen;
-   devinfo.is_g4x        = info.subgen == IS_G45;
-   devinfo.is_baytrail   = info.subgen == IS_BYT;
-   devinfo.is_haswell    = info.subgen == IS_HSW;
-   devinfo.is_cherryview = info.subgen == IS_CHV;
-   devinfo.is_broxton    = info.subgen == IS_BXT;
-   devinfo.is_kabylake   = info.subgen == IS_KBL;
-   devinfo.is_geminilake = info.subgen == IS_GLK;
-   devinfo.is_coffeelake = info.subgen == IS_CFL;
+   gen_get_device_info(devid, &devinfo);
 
    brw_init_codegen(&devinfo, p, p);
 }
@@ -374,6 +354,10 @@ TEST_P(validation_test, dst_horizontal_stride_0)
 
    clear_instructions(p);
 
+   /* Align16 does not exist on Gen11+ */
+   if (devinfo.gen >= 11)
+      return;
+
    brw_set_default_access_mode(p, BRW_ALIGN_16);
 
    brw_ADD(p, g0, g0, g0);
@@ -421,6 +405,10 @@ TEST_P(validation_test, must_not_cross_grf_boundary_in_a_width)
 /* Destination Horizontal must be 1 in Align16 */
 TEST_P(validation_test, dst_hstride_on_align16_must_be_1)
 {
+   /* Align16 does not exist on Gen11+ */
+   if (devinfo.gen >= 11)
+      return;
+
    brw_set_default_access_mode(p, BRW_ALIGN_16);
 
    brw_ADD(p, g0, g0, g0);
@@ -439,6 +427,10 @@ TEST_P(validation_test, dst_hstride_on_align16_must_be_1)
 /* VertStride must be 0 or 4 in Align16 */
 TEST_P(validation_test, vstride_on_align16_must_be_0_or_4)
 {
+   /* Align16 does not exist on Gen11+ */
+   if (devinfo.gen >= 11)
+      return;
+
    const struct {
       enum brw_vertical_stride vstride;
       bool expected_result;
@@ -1417,6 +1409,10 @@ TEST_P(validation_test, align16_64_bit_integer)
 
    /* 64-bit integer types exist on Gen8+ */
    if (devinfo.gen < 8)
+      return;
+
+   /* Align16 does not exist on Gen11+ */
+   if (devinfo.gen >= 11)
       return;
 
    brw_set_default_access_mode(p, BRW_ALIGN_16);

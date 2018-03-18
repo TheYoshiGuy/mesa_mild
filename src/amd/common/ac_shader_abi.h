@@ -28,6 +28,8 @@
 
 #include "compiler/shader_enums.h"
 
+struct nir_variable;
+
 #define AC_LLVM_MAX_OUTPUTS (VARYING_SLOT_VAR31 + 1)
 
 enum ac_descriptor_type {
@@ -86,6 +88,8 @@ struct ac_shader_abi {
 	void (*emit_primitive)(struct ac_shader_abi *abi,
 			       unsigned stream);
 
+	void (*emit_kill)(struct ac_shader_abi *abi, LLVMValueRef visible);
+
 	LLVMValueRef (*load_inputs)(struct ac_shader_abi *abi,
 				    unsigned location,
 				    unsigned driver_location,
@@ -109,15 +113,11 @@ struct ac_shader_abi {
 					   bool load_inputs);
 
 	void (*store_tcs_outputs)(struct ac_shader_abi *abi,
+				  const struct nir_variable *var,
 				  LLVMValueRef vertex_index,
 				  LLVMValueRef param_index,
 				  unsigned const_index,
-				  unsigned location,
-				  unsigned driver_location,
 				  LLVMValueRef src,
-				  unsigned component,
-				  bool is_patch,
-				  bool is_compact,
 				  unsigned writemask);
 
 	LLVMValueRef (*load_tess_coord)(struct ac_shader_abi *abi);
@@ -181,6 +181,8 @@ struct ac_shader_abi {
 	LLVMValueRef (*load_local_group_size)(struct ac_shader_abi *abi);
 
 	LLVMValueRef (*load_sample_mask_in)(struct ac_shader_abi *abi);
+
+	LLVMValueRef (*load_base_vertex)(struct ac_shader_abi *abi);
 
 	/* Whether to clamp the shadow reference value to [0,1]on VI. Radeonsi currently
 	 * uses it due to promoting D16 to D32, but radv needs it off. */

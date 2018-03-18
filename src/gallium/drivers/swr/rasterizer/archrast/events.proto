@@ -48,6 +48,11 @@ event DrawInfoEvent
     int32_t  baseVertex;
     uint32_t numInstances;
     uint32_t startInstance;
+    uint32_t tsEnable;
+    uint32_t gsEnable;
+    uint32_t soEnable;
+    uint32_t soTopology;
+    uint32_t splitId; // Split draw count or id.
 };
 
 event DispatchEvent
@@ -175,6 +180,34 @@ event LateStencilSampleRate
     uint64_t failCount;
 };
 
+event EarlyZ
+{
+    uint32_t drawId;
+    uint64_t passCount;
+    uint64_t failCount;
+};	
+
+event LateZ
+{
+    uint32_t drawId;
+    uint64_t passCount;
+    uint64_t failCount;
+};
+
+event EarlyStencil
+{
+    uint32_t drawId; 
+    uint64_t passCount;
+    uint64_t failCount;
+};
+
+event LateStencil
+{
+    uint32_t drawId; 
+    uint64_t passCount;
+    uint64_t failCount;
+};
+
 event EarlyZNullPS
 {
     uint32_t drawId;
@@ -254,6 +287,12 @@ event TessPrims
 {
     uint32_t drawId;
     uint64_t primCount;
+};
+
+event RasterTiles
+{
+    uint32_t drawId;
+    uint32_t rastTileCount;
 };
 
 event ClipperEvent

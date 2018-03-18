@@ -800,10 +800,11 @@ static void amdgpu_set_ib_size(struct amdgpu_ib *ib)
    }
 }
 
-static void amdgpu_ib_finalize(struct amdgpu_ib *ib)
+static void amdgpu_ib_finalize(struct amdgpu_winsys *ws, struct amdgpu_ib *ib)
 {
    amdgpu_set_ib_size(ib);
    ib->used_ib_space += ib->base.current.cdw * 4;
+   ib->used_ib_space = align(ib->used_ib_space, ws->info.ib_start_alignment);
    ib->max_ib_size = MAX2(ib->max_ib_size, ib->base.prev_dw + ib->base.current.cdw);
 }
 
@@ -1527,6 +1528,7 @@ static int amdgpu_cs_flush(struct radeon_winsys_cs *rcs,
       }
       break;
    case RING_GFX:
+   case RING_COMPUTE:
       /* pad GFX ring to 8 DWs to meet CP fetch alignment requirements */
       if (ws->info.gfx_ib_pad_with_type2) {
          while (rcs->current.cdw & 7)
@@ -1535,7 +1537,8 @@ static int amdgpu_cs_flush(struct radeon_winsys_cs *rcs,
          while (rcs->current.cdw & 7)
             radeon_emit(rcs, 0xffff1000); /* type3 nop packet */
       }
-      ws->gfx_ib_size_counter += (rcs->prev_dw + rcs->current.cdw) * 4;
+      if (cs->ring_type == RING_GFX)
+         ws->gfx_ib_size_counter += (rcs->prev_dw + rcs->current.cdw) * 4;
       break;
    case RING_UVD:
    case RING_UVD_ENC:
@@ -1561,7 +1564,7 @@ static int amdgpu_cs_flush(struct radeon_winsys_cs *rcs,
       struct amdgpu_cs_context *cur = cs->csc;
 
       /* Set IB sizes. */
-      amdgpu_ib_finalize(&cs->main);
+      amdgpu_ib_finalize(ws, &cs->main);
 
       /* Create a fence. */
       amdgpu_fence_reference(&cur->fence, NULL);

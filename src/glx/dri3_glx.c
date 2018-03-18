@@ -357,7 +357,10 @@ dri3_create_drawable(struct glx_screen *base, XID xDrawable,
 {
    struct dri3_drawable *pdraw;
    struct dri3_screen *psc = (struct dri3_screen *) base;
+   const struct dri3_display *const pdp = (struct dri3_display *)
+      base->display->dri3Display;
    __GLXDRIconfigPrivate *config = (__GLXDRIconfigPrivate *) config_base;
+   bool has_multibuffer = false;
 
    pdraw = calloc(1, sizeof(*pdraw));
    if (!pdraw)
@@ -368,11 +371,18 @@ dri3_create_drawable(struct glx_screen *base, XID xDrawable,
    pdraw->base.drawable = drawable;
    pdraw->base.psc = &psc->base;
 
+   if ((psc->image && psc->image->base.version >= 15) &&
+       (pdp->dri3Major > 1 || (pdp->dri3Major == 1 && pdp->dri3Minor >= 2)) &&
+       (pdp->presentMajor > 1 ||
+        (pdp->presentMajor == 1 && pdp->presentMinor >= 2)))
+      has_multibuffer = true;
+
    (void) __glXInitialize(psc->base.dpy);
 
    if (loader_dri3_drawable_init(XGetXCBConnection(base->dpy),
                                  xDrawable, psc->driScreen,
-                                 psc->is_different_gpu, config->driConfig,
+                                 psc->is_different_gpu, has_multibuffer,
+                                 config->driConfig,
                                  &psc->loader_dri3_ext, &glx_dri3_vtable,
                                  &pdraw->loader_drawable)) {
       free(pdraw);
@@ -721,7 +731,6 @@ dri3_bind_extensions(struct dri3_screen *psc, struct glx_display * priv,
 
    extensions = psc->core->getExtensions(psc->driScreen);
 
-   __glXEnableDirectExtension(&psc->base, "GLX_SGI_video_sync");
    __glXEnableDirectExtension(&psc->base, "GLX_SGI_swap_control");
    __glXEnableDirectExtension(&psc->base, "GLX_MESA_swap_control");
    __glXEnableDirectExtension(&psc->base, "GLX_SGI_make_current_read");
@@ -955,6 +964,11 @@ dri3_create_screen(int screen, struct glx_display * priv)
                                  "glx_disable_oml_sync_control",
                                  &disable) || !disable)
       __glXEnableDirectExtension(&psc->base, "GLX_OML_sync_control");
+
+   if (psc->config->configQueryb(psc->driScreen,
+                                 "glx_disable_sgi_video_sync",
+                                 &disable) || !disable)
+      __glXEnableDirectExtension(&psc->base, "GLX_SGI_video_sync");
 
    psp->copySubBuffer = dri3_copy_sub_buffer;
    __glXEnableDirectExtension(&psc->base, "GLX_MESA_copy_sub_buffer");

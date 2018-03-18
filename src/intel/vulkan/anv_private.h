@@ -42,7 +42,7 @@
 #endif
 
 #include "common/gen_clflush.h"
-#include "common/gen_device_info.h"
+#include "dev/gen_device_info.h"
 #include "blorp/blorp.h"
 #include "compiler/brw_compiler.h"
 #include "util/macros.h"
@@ -103,6 +103,25 @@ struct gen_l3_config;
 #define MAX_DYNAMIC_BUFFERS 16
 #define MAX_IMAGES 8
 #define MAX_PUSH_DESCRIPTORS 32 /* Minimum requirement */
+
+/* The kernel relocation API has a limitation of a 32-bit delta value
+ * applied to the address before it is written which, in spite of it being
+ * unsigned, is treated as signed .  Because of the way that this maps to
+ * the Vulkan API, we cannot handle an offset into a buffer that does not
+ * fit into a signed 32 bits.  The only mechanism we have for dealing with
+ * this at the moment is to limit all VkDeviceMemory objects to a maximum
+ * of 2GB each.  The Vulkan spec allows us to do this:
+ *
+ *    "Some platforms may have a limit on the maximum size of a single
+ *    allocation. For example, certain systems may fail to create
+ *    allocations with a size greater than or equal to 4GB. Such a limit is
+ *    implementation-dependent, and if such a failure occurs then the error
+ *    VK_ERROR_OUT_OF_DEVICE_MEMORY should be returned."
+ *
+ * We don't use vk_error here because it's not an error so much as an
+ * indication to the application that the allocation is too large.
+ */
+#define MAX_MEMORY_ALLOCATION_SIZE (1ull << 31)
 
 #define ANV_SVGS_VB_INDEX    MAX_VBS
 #define ANV_DRAWID_VB_INDEX (MAX_VBS + 1)
@@ -749,6 +768,7 @@ struct anv_physical_device {
 
     struct anv_instance *                       instance;
     uint32_t                                    chipset_id;
+    bool                                        no_hw;
     char                                        path[20];
     const char *                                name;
     struct gen_device_info                      info;
@@ -769,6 +789,7 @@ struct anv_physical_device {
     bool                                        has_exec_fence;
     bool                                        has_syncobj;
     bool                                        has_syncobj_wait;
+    bool                                        has_context_priority;
 
     struct anv_device_extension_table           supported_extensions;
 
@@ -818,6 +839,8 @@ struct anv_queue {
     struct anv_device *                         device;
 
     struct anv_state_pool *                     pool;
+
+    VkDeviceQueueCreateFlags                    flags;
 };
 
 struct anv_pipeline_cache {
@@ -852,6 +875,7 @@ struct anv_device {
 
     struct anv_instance *                       instance;
     uint32_t                                    chipset_id;
+    bool                                        no_hw;
     struct gen_device_info                      info;
     struct isl_device                           isl_dev;
     int                                         context_id;
@@ -921,7 +945,10 @@ int anv_gem_execbuffer(struct anv_device *device,
 int anv_gem_set_tiling(struct anv_device *device, uint32_t gem_handle,
                        uint32_t stride, uint32_t tiling);
 int anv_gem_create_context(struct anv_device *device);
+bool anv_gem_has_context_priority(int fd);
 int anv_gem_destroy_context(struct anv_device *device, int context);
+int anv_gem_set_context_param(int fd, int context, uint32_t param,
+                              uint64_t value);
 int anv_gem_get_context_param(int fd, int context, uint32_t param,
                               uint64_t *value);
 int anv_gem_get_param(int fd, uint32_t param);
@@ -1581,13 +1608,13 @@ anv_pipe_invalidate_bits_for_access_flags(VkAccessFlags flags)
 
 #define VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV (         \
    VK_IMAGE_ASPECT_COLOR_BIT | \
-   VK_IMAGE_ASPECT_PLANE_0_BIT_KHR | \
-   VK_IMAGE_ASPECT_PLANE_1_BIT_KHR | \
-   VK_IMAGE_ASPECT_PLANE_2_BIT_KHR)
+   VK_IMAGE_ASPECT_PLANE_0_BIT | \
+   VK_IMAGE_ASPECT_PLANE_1_BIT | \
+   VK_IMAGE_ASPECT_PLANE_2_BIT)
 #define VK_IMAGE_ASPECT_PLANES_BITS_ANV ( \
-   VK_IMAGE_ASPECT_PLANE_0_BIT_KHR | \
-   VK_IMAGE_ASPECT_PLANE_1_BIT_KHR | \
-   VK_IMAGE_ASPECT_PLANE_2_BIT_KHR)
+   VK_IMAGE_ASPECT_PLANE_0_BIT | \
+   VK_IMAGE_ASPECT_PLANE_1_BIT | \
+   VK_IMAGE_ASPECT_PLANE_2_BIT)
 
 struct anv_vertex_binding {
    struct anv_buffer *                          buffer;
@@ -1606,6 +1633,9 @@ struct anv_push_constants {
 
    /* Push constant data provided by the client through vkPushConstants */
    uint8_t client_data[MAX_PUSH_CONSTANTS_SIZE];
+
+   /* Used for vkCmdDispatchBase */
+   uint32_t base_work_group_id[3];
 
    /* Image data for image_load_store on pre-SKL */
    struct brw_image_param images[MAX_IMAGES];
@@ -2281,15 +2311,15 @@ anv_image_aspect_to_plane(VkImageAspectFlags image_aspects,
    switch (aspect_mask) {
    case VK_IMAGE_ASPECT_COLOR_BIT:
    case VK_IMAGE_ASPECT_DEPTH_BIT:
-   case VK_IMAGE_ASPECT_PLANE_0_BIT_KHR:
+   case VK_IMAGE_ASPECT_PLANE_0_BIT:
       return 0;
    case VK_IMAGE_ASPECT_STENCIL_BIT:
       if ((image_aspects & VK_IMAGE_ASPECT_DEPTH_BIT) == 0)
          return 0;
       /* Fall-through */
-   case VK_IMAGE_ASPECT_PLANE_1_BIT_KHR:
+   case VK_IMAGE_ASPECT_PLANE_1_BIT:
       return 1;
-   case VK_IMAGE_ASPECT_PLANE_2_BIT_KHR:
+   case VK_IMAGE_ASPECT_PLANE_2_BIT:
       return 2;
    default:
       /* Purposefully assert with depth/stencil aspects. */
@@ -2305,11 +2335,11 @@ anv_image_aspect_get_planes(VkImageAspectFlags aspect_mask)
    if (aspect_mask & (VK_IMAGE_ASPECT_COLOR_BIT |
                       VK_IMAGE_ASPECT_DEPTH_BIT |
                       VK_IMAGE_ASPECT_STENCIL_BIT |
-                      VK_IMAGE_ASPECT_PLANE_0_BIT_KHR))
+                      VK_IMAGE_ASPECT_PLANE_0_BIT))
       planes++;
-   if (aspect_mask & VK_IMAGE_ASPECT_PLANE_1_BIT_KHR)
+   if (aspect_mask & VK_IMAGE_ASPECT_PLANE_1_BIT)
       planes++;
-   if (aspect_mask & VK_IMAGE_ASPECT_PLANE_2_BIT_KHR)
+   if (aspect_mask & VK_IMAGE_ASPECT_PLANE_2_BIT)
       planes++;
 
    return planes;
@@ -2321,7 +2351,7 @@ anv_plane_to_aspect(VkImageAspectFlags image_aspects,
 {
    if (image_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
       if (_mesa_bitcount(image_aspects) > 1)
-         return VK_IMAGE_ASPECT_PLANE_0_BIT_KHR << plane;
+         return VK_IMAGE_ASPECT_PLANE_0_BIT << plane;
       return VK_IMAGE_ASPECT_COLOR_BIT;
    }
    if (image_aspects & VK_IMAGE_ASPECT_DEPTH_BIT)
@@ -2863,10 +2893,10 @@ void anv_fill_buffer_surface_state(struct anv_device *device,
 
 struct anv_ycbcr_conversion {
    const struct anv_format *        format;
-   VkSamplerYcbcrModelConversionKHR ycbcr_model;
-   VkSamplerYcbcrRangeKHR           ycbcr_range;
+   VkSamplerYcbcrModelConversion    ycbcr_model;
+   VkSamplerYcbcrRange              ycbcr_range;
    VkComponentSwizzle               mapping[4];
-   VkChromaLocationKHR              chroma_offsets[2];
+   VkChromaLocation                 chroma_offsets[2];
    VkFilter                         chroma_filter;
    bool                             chroma_reconstruction;
 };
@@ -3061,7 +3091,7 @@ ANV_DEFINE_NONDISP_HANDLE_CASTS(anv_sampler, VkSampler)
 ANV_DEFINE_NONDISP_HANDLE_CASTS(anv_semaphore, VkSemaphore)
 ANV_DEFINE_NONDISP_HANDLE_CASTS(anv_shader_module, VkShaderModule)
 ANV_DEFINE_NONDISP_HANDLE_CASTS(vk_debug_report_callback, VkDebugReportCallbackEXT)
-ANV_DEFINE_NONDISP_HANDLE_CASTS(anv_ycbcr_conversion, VkSamplerYcbcrConversionKHR)
+ANV_DEFINE_NONDISP_HANDLE_CASTS(anv_ycbcr_conversion, VkSamplerYcbcrConversion)
 
 /* Gen-specific function declarations */
 #ifdef genX

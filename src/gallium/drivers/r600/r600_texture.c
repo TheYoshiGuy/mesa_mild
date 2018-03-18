@@ -953,10 +953,6 @@ r600_texture_create_object(struct pipe_screen *screen,
 		r600_init_resource_fields(rscreen, resource, rtex->size,
 					  rtex->surface.surf_alignment);
 
-		/* Displayable surfaces are not suballocated. */
-		if (resource->b.b.bind & PIPE_BIND_SCANOUT)
-			resource->flags |= RADEON_FLAG_NO_SUBALLOC;
-
 		if (!r600_alloc_resource(rscreen, resource)) {
 			FREE(rtex);
 			return NULL;
@@ -1051,6 +1047,11 @@ r600_choose_tiling(struct r600_common_screen *rscreen,
 			return RADEON_SURF_MODE_LINEAR_ALIGNED;
 
 		if (templ->bind & PIPE_BIND_LINEAR)
+			return RADEON_SURF_MODE_LINEAR_ALIGNED;
+
+		/* 1D textures should be linear - fixes image operations on 1d */
+		if (templ->target == PIPE_TEXTURE_1D ||
+		    templ->target == PIPE_TEXTURE_1D_ARRAY)
 			return RADEON_SURF_MODE_LINEAR_ALIGNED;
 
 		/* Textures likely to be mapped often. */

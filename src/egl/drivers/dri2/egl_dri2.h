@@ -43,9 +43,15 @@
 #endif
 
 #ifdef HAVE_WAYLAND_PLATFORM
-#include <wayland-client.h>
-#include "wayland/wayland-egl/wayland-egl-backend.h"
-/* forward declarations of protocol elements */
+/* forward declarations to avoid pulling wayland headers everywhere */
+struct wl_egl_window;
+struct wl_event_queue;
+struct wl_callback;
+struct wl_display;
+struct wl_drm;
+struct wl_registry;
+struct wl_shm;
+struct wl_surface;
 struct zwp_linux_dmabuf_v1;
 #endif
 
@@ -199,6 +205,11 @@ struct dri2_egl_display
    xcb_screen_t             *screen;
    bool                     swap_available;
 #ifdef HAVE_DRI3
+   bool                     multibuffers_available;
+   int                      dri3_major_version;
+   int                      dri3_minor_version;
+   int                      present_major_version;
+   int                      present_minor_version;
    struct loader_dri3_extensions loader_dri3_ext;
 #endif
 #endif

@@ -205,12 +205,23 @@ brw_emit_surface_state(struct brw_context *brw,
        * FIXME: move to the point of assignment.
        */
       assert((aux_offset & 0xfff) == 0);
-      uint32_t *aux_addr = state + brw->isl_dev.ss.aux_addr_offset;
-      *aux_addr = brw_state_reloc(&brw->batch,
-                                  *surf_offset +
-                                  brw->isl_dev.ss.aux_addr_offset,
-                                  aux_bo, *aux_addr,
-                                  reloc_flags);
+
+      if (devinfo->gen >= 8) {
+         uint64_t *aux_addr = state + brw->isl_dev.ss.aux_addr_offset;
+         *aux_addr = brw_state_reloc(&brw->batch,
+                                     *surf_offset +
+                                     brw->isl_dev.ss.aux_addr_offset,
+                                     aux_bo, *aux_addr,
+                                     reloc_flags);
+      } else {
+         uint32_t *aux_addr = state + brw->isl_dev.ss.aux_addr_offset;
+         *aux_addr = brw_state_reloc(&brw->batch,
+                                     *surf_offset +
+                                     brw->isl_dev.ss.aux_addr_offset,
+                                     aux_bo, *aux_addr,
+                                     reloc_flags);
+
+      }
    }
 }
 
@@ -1619,12 +1630,12 @@ brw_upload_cs_work_groups_surface(struct brw_context *brw)
 
       if (brw->compute.num_work_groups_bo == NULL) {
          bo = NULL;
-         intel_upload_data(brw,
-                           (void *)brw->compute.num_work_groups,
-                           3 * sizeof(GLuint),
-                           sizeof(GLuint),
-                           &bo,
-                           &bo_offset);
+         brw_upload_data(&brw->upload,
+                         (void *)brw->compute.num_work_groups,
+                         3 * sizeof(GLuint),
+                         sizeof(GLuint),
+                         &bo,
+                         &bo_offset);
       } else {
          bo = brw->compute.num_work_groups_bo;
          bo_offset = brw->compute.num_work_groups_offset;

@@ -1542,9 +1542,10 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
    vec4_instruction *inst = (vec4_instruction *)be_inst;
 
    if (inst->predicate) {
-      fprintf(file, "(%cf0.%d%s) ",
+      fprintf(file, "(%cf%d.%d%s) ",
               inst->predicate_inverse ? '-' : '+',
-              inst->flag_subreg,
+              inst->flag_subreg / 2,
+              inst->flag_subreg % 2,
               pred_ctrl_align16[inst->predicate]);
    }
 
@@ -1556,9 +1557,10 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
       fprintf(file, "%s", conditional_modifier[inst->conditional_mod]);
       if (!inst->predicate &&
           (devinfo->gen < 5 || (inst->opcode != BRW_OPCODE_SEL &&
+                                inst->opcode != BRW_OPCODE_CSEL &&
                                 inst->opcode != BRW_OPCODE_IF &&
                                 inst->opcode != BRW_OPCODE_WHILE))) {
-         fprintf(file, ".f0.%d", inst->flag_subreg);
+         fprintf(file, ".f%d.%d", inst->flag_subreg / 2, inst->flag_subreg % 2);
       }
    }
    fprintf(file, " ");
@@ -2882,7 +2884,7 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
          g.enable_debug(debug_name);
       }
       g.generate_code(v.cfg, 8);
-      assembly = g.get_assembly(&prog_data->base.base.program_size);
+      assembly = g.get_assembly();
    }
 
    if (!assembly) {
@@ -2898,8 +2900,7 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
       }
 
       assembly = brw_vec4_generate_assembly(compiler, log_data, mem_ctx,
-                                            shader, &prog_data->base, v.cfg,
-                                            &prog_data->base.base.program_size);
+                                            shader, &prog_data->base, v.cfg);
    }
 
    return assembly;

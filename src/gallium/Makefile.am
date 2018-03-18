@@ -89,6 +89,11 @@ if HAVE_GALLIUM_SWR
 SUBDIRS += drivers/swr
 endif
 
+## tegra
+if HAVE_GALLIUM_TEGRA
+SUBDIRS += drivers/tegra winsys/tegra/drm
+endif
+
 ## vc4/rpi
 if HAVE_GALLIUM_VC4
 SUBDIRS += drivers/vc4 winsys/vc4/drm
@@ -155,7 +160,11 @@ SUBDIRS += state_trackers/glx/xlib targets/libgl-xlib
 endif
 
 if HAVE_ST_OMX_BELLAGIO
-SUBDIRS += state_trackers/omx_bellagio targets/omx-bellagio
+SUBDIRS += state_trackers/omx targets/omx
+endif
+
+if HAVE_ST_OMX_TIZONIA
+SUBDIRS += state_trackers/omx targets/omx
 endif
 
 if HAVE_GALLIUM_OSMESA

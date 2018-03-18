@@ -76,6 +76,8 @@
 #include "util/disk_cache.h"
 #include "isl/isl.h"
 
+#include "common/gen_defines.h"
+
 /***************************************
  * Mesa's Driver Functions
  ***************************************/
@@ -985,14 +987,14 @@ brwCreateContext(gl_api api,
          return false;
       }
 
-      int hw_priority = BRW_CONTEXT_MEDIUM_PRIORITY;
+      int hw_priority = GEN_CONTEXT_MEDIUM_PRIORITY;
       if (ctx_config->attribute_mask & __DRIVER_CONTEXT_ATTRIB_PRIORITY) {
          switch (ctx_config->priority) {
          case __DRI_CTX_PRIORITY_LOW:
-            hw_priority = BRW_CONTEXT_LOW_PRIORITY;
+            hw_priority = GEN_CONTEXT_LOW_PRIORITY;
             break;
          case __DRI_CTX_PRIORITY_HIGH:
-            hw_priority = BRW_CONTEXT_HIGH_PRIORITY;
+            hw_priority = GEN_CONTEXT_HIGH_PRIORITY;
             break;
          }
       }
@@ -1011,6 +1013,15 @@ brwCreateContext(gl_api api,
       intelDestroyContext(driContextPriv);
       return false;
    }
+
+   if (devinfo->gen == 11) {
+      fprintf(stderr,
+              "WARNING: i965 does not fully support Gen11 yet.\n"
+              "Instability or lower performance might occur.\n");
+
+   }
+
+   brw_upload_init(&brw->upload, brw->bufmgr, 65536);
 
    brw_init_state(brw);
 

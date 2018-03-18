@@ -25,7 +25,7 @@
 #define BRW_COMPILER_H
 
 #include <stdio.h>
-#include "common/gen_device_info.h"
+#include "dev/gen_device_info.h"
 #include "main/macros.h"
 #include "util/ralloc.h"
 
@@ -113,6 +113,14 @@ struct brw_compiler {
    bool supports_pull_constants;
 };
 
+/**
+ * We use a constant subgroup size of 32.  It really only needs to be a
+ * maximum and, since we do SIMD32 for compute shaders in some cases, it
+ * needs to be at least 32.  SIMD8 and SIMD16 shaders will still claim a
+ * subgroup size of 32 but will act as if 16 or 24 of those channels are
+ * disabled.
+ */
+#define BRW_SUBGROUP_SIZE 32
 
 /**
  * Program key structures.
@@ -551,6 +559,9 @@ enum brw_param_builtin {
    BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_X,
    BRW_PARAM_BUILTIN_TESS_LEVEL_INNER_Y,
 
+   BRW_PARAM_BUILTIN_BASE_WORK_GROUP_ID_X,
+   BRW_PARAM_BUILTIN_BASE_WORK_GROUP_ID_Y,
+   BRW_PARAM_BUILTIN_BASE_WORK_GROUP_ID_Z,
    BRW_PARAM_BUILTIN_SUBGROUP_ID,
 };
 
@@ -1274,7 +1285,7 @@ encode_slm_size(unsigned gen, uint32_t bytes)
  * '2^n - 1' for some n.
  */
 static inline bool
-brw_stage_has_packed_dispatch(const struct gen_device_info *devinfo,
+brw_stage_has_packed_dispatch(MAYBE_UNUSED const struct gen_device_info *devinfo,
                               gl_shader_stage stage,
                               const struct brw_stage_prog_data *prog_data)
 {

@@ -540,7 +540,7 @@ radv_save_descriptors(struct radv_cmd_buffer *cmd_buffer,
 	radv_emit_write_data_packet(cs, va, MAX_SETS * 2, data);
 }
 
-struct ac_userdata_info *
+struct radv_userdata_info *
 radv_lookup_user_sgpr(struct radv_pipeline *pipeline,
 		      gl_shader_stage stage,
 		      int idx)
@@ -567,7 +567,7 @@ radv_emit_userdata_address(struct radv_cmd_buffer *cmd_buffer,
 			   gl_shader_stage stage,
 			   int idx, uint64_t va)
 {
-	struct ac_userdata_info *loc = radv_lookup_user_sgpr(pipeline, stage, idx);
+	struct radv_userdata_info *loc = radv_lookup_user_sgpr(pipeline, stage, idx);
 	uint32_t base_reg = pipeline->user_data_0[stage];
 	if (loc->sgpr_idx == -1)
 		return;
@@ -1236,7 +1236,7 @@ emit_stage_descriptor_set_userdata(struct radv_cmd_buffer *cmd_buffer,
 				   uint64_t va,
 				   gl_shader_stage stage)
 {
-	struct ac_userdata_info *desc_set_loc = &pipeline->shaders[stage]->info.user_sgprs_locs.descriptor_sets[idx];
+	struct radv_userdata_info *desc_set_loc = &pipeline->shaders[stage]->info.user_sgprs_locs.descriptor_sets[idx];
 	uint32_t base_reg = pipeline->user_data_0[stage];
 
 	if (desc_set_loc->sgpr_idx == -1 || desc_set_loc->indirect)
@@ -2290,7 +2290,7 @@ void radv_CmdBindPipeline(
 			cmd_buffer->tess_rings_needed = true;
 
 		if (radv_pipeline_has_gs(pipeline)) {
-			struct ac_userdata_info *loc = radv_lookup_user_sgpr(cmd_buffer->state.pipeline, MESA_SHADER_GEOMETRY,
+			struct radv_userdata_info *loc = radv_lookup_user_sgpr(cmd_buffer->state.pipeline, MESA_SHADER_GEOMETRY,
 									     AC_UD_SCRATCH_RING_OFFSETS);
 			if (cmd_buffer->ring_offsets_idx == -1)
 				cmd_buffer->ring_offsets_idx = loc->sgpr_idx;
@@ -2652,7 +2652,7 @@ VkResult radv_ResetCommandPool(
 	return VK_SUCCESS;
 }
 
-void radv_TrimCommandPoolKHR(
+void radv_TrimCommandPool(
     VkDevice                                    device,
     VkCommandPool                               commandPool,
     VkCommandPoolTrimFlagsKHR                   flags)
@@ -2716,7 +2716,7 @@ static void radv_emit_view_index(struct radv_cmd_buffer *cmd_buffer, unsigned in
 	for (unsigned stage = 0; stage < MESA_SHADER_STAGES; ++stage) {
 		if (!pipeline->shaders[stage])
 			continue;
-		struct ac_userdata_info *loc = radv_lookup_user_sgpr(pipeline, stage, AC_UD_VIEW_INDEX);
+		struct radv_userdata_info *loc = radv_lookup_user_sgpr(pipeline, stage, AC_UD_VIEW_INDEX);
 		if (loc->sgpr_idx == -1)
 			continue;
 		uint32_t base_reg = pipeline->user_data_0[stage];
@@ -2724,7 +2724,7 @@ static void radv_emit_view_index(struct radv_cmd_buffer *cmd_buffer, unsigned in
 
 	}
 	if (pipeline->gs_copy_shader) {
-		struct ac_userdata_info *loc = &pipeline->gs_copy_shader->info.user_sgprs_locs.shader_data[AC_UD_VIEW_INDEX];
+		struct radv_userdata_info *loc = &pipeline->gs_copy_shader->info.user_sgprs_locs.shader_data[AC_UD_VIEW_INDEX];
 		if (loc->sgpr_idx != -1) {
 			uint32_t base_reg = R_00B130_SPI_SHADER_USER_DATA_VS_0;
 			radeon_set_sh_reg(cmd_buffer->cs, base_reg + loc->sgpr_idx * 4, index);
@@ -3182,6 +3182,11 @@ struct radv_dispatch_info {
 	uint32_t blocks[3];
 
 	/**
+	 * A starting offset for the grid. If unaligned is set, the offset
+	 * must still be aligned.
+	 */
+	uint32_t offsets[3];
+	/**
 	 * Whether it's an unaligned compute dispatch.
 	 */
 	bool unaligned;
@@ -3202,7 +3207,7 @@ radv_emit_dispatch_packets(struct radv_cmd_buffer *cmd_buffer,
 	unsigned dispatch_initiator = cmd_buffer->device->dispatch_initiator;
 	struct radeon_winsys *ws = cmd_buffer->device->ws;
 	struct radeon_winsys_cs *cs = cmd_buffer->cs;
-	struct ac_userdata_info *loc;
+	struct radv_userdata_info *loc;
 
 	loc = radv_lookup_user_sgpr(pipeline, MESA_SHADER_COMPUTE,
 				    AC_UD_CS_GRID_SIZE);
@@ -3249,6 +3254,7 @@ radv_emit_dispatch_packets(struct radv_cmd_buffer *cmd_buffer,
 		}
 	} else {
 		unsigned blocks[3] = { info->blocks[0], info->blocks[1], info->blocks[2] };
+		unsigned offsets[3] = { info->offsets[0], info->offsets[1], info->offsets[2] };
 
 		if (info->unaligned) {
 			unsigned *cs_block_size = compute_shader->info.cs.block_size;
@@ -3267,6 +3273,11 @@ radv_emit_dispatch_packets(struct radv_cmd_buffer *cmd_buffer,
 			blocks[0] = round_up_u32(blocks[0], cs_block_size[0]);
 			blocks[1] = round_up_u32(blocks[1], cs_block_size[1]);
 			blocks[2] = round_up_u32(blocks[2], cs_block_size[2]);
+
+			for(unsigned i = 0; i < 3; ++i) {
+				assert(offsets[i] % cs_block_size[i] == 0);
+				offsets[i] /= cs_block_size[i];
+			}
 
 			radeon_set_sh_reg_seq(cs, R_00B81C_COMPUTE_NUM_THREAD_X, 3);
 			radeon_emit(cs,
@@ -3291,6 +3302,19 @@ radv_emit_dispatch_packets(struct radv_cmd_buffer *cmd_buffer,
 			radeon_emit(cs, blocks[0]);
 			radeon_emit(cs, blocks[1]);
 			radeon_emit(cs, blocks[2]);
+		}
+
+		if (offsets[0] || offsets[1] || offsets[2]) {
+			radeon_set_sh_reg_seq(cs, R_00B810_COMPUTE_START_X, 3);
+			radeon_emit(cs, offsets[0]);
+			radeon_emit(cs, offsets[1]);
+			radeon_emit(cs, offsets[2]);
+
+			/* The blocks in the packet are not counts but end values. */
+			for (unsigned i = 0; i < 3; ++i)
+				blocks[i] += offsets[i];
+		} else {
+			dispatch_initiator |= S_00B800_FORCE_START_AT_000(1);
 		}
 
 		radeon_emit(cs, PKT3(PKT3_DISPATCH_DIRECT, 3, 0) |
@@ -3368,8 +3392,11 @@ radv_dispatch(struct radv_cmd_buffer *cmd_buffer,
 	radv_cmd_buffer_after_draw(cmd_buffer, RADV_CMD_FLAG_CS_PARTIAL_FLUSH);
 }
 
-void radv_CmdDispatch(
+void radv_CmdDispatchBase(
 	VkCommandBuffer                             commandBuffer,
+	uint32_t                                    base_x,
+	uint32_t                                    base_y,
+	uint32_t                                    base_z,
 	uint32_t                                    x,
 	uint32_t                                    y,
 	uint32_t                                    z)
@@ -3381,7 +3408,19 @@ void radv_CmdDispatch(
 	info.blocks[1] = y;
 	info.blocks[2] = z;
 
+	info.offsets[0] = base_x;
+	info.offsets[1] = base_y;
+	info.offsets[2] = base_z;
 	radv_dispatch(cmd_buffer, &info);
+}
+
+void radv_CmdDispatch(
+	VkCommandBuffer                             commandBuffer,
+	uint32_t                                    x,
+	uint32_t                                    y,
+	uint32_t                                    z)
+{
+	radv_CmdDispatchBase(commandBuffer, 0, 0, 0, x, y, z);
 }
 
 void radv_CmdDispatchIndirect(
@@ -3770,4 +3809,11 @@ void radv_CmdWaitEvents(VkCommandBuffer commandBuffer,
 					RADV_CMD_FLAG_INV_GLOBAL_L2 |
 					RADV_CMD_FLAG_INV_VMEM_L1 |
 					RADV_CMD_FLAG_INV_SMEM_L1;
+}
+
+
+void radv_CmdSetDeviceMask(VkCommandBuffer commandBuffer,
+                           uint32_t deviceMask)
+{
+   /* No-op */
 }

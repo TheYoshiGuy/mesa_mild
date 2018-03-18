@@ -55,6 +55,28 @@
 static void
 intel_batchbuffer_reset(struct brw_context *brw);
 
+UNUSED static void
+dump_validation_list(struct intel_batchbuffer *batch)
+{
+   fprintf(stderr, "Validation list (length %d):\n", batch->exec_count);
+
+   for (int i = 0; i < batch->exec_count; i++) {
+      uint64_t flags = batch->validation_list[i].flags;
+      assert(batch->validation_list[i].handle ==
+             batch->exec_bos[i]->gem_handle);
+      fprintf(stderr, "[%2d]: %2d %-14s %p %s%-7s @ 0x%016llu%s (%"PRIu64"B)\n",
+              i,
+              batch->validation_list[i].handle,
+              batch->exec_bos[i]->name,
+              batch->exec_bos[i],
+              (flags & EXEC_OBJECT_SUPPORTS_48B_ADDRESS) ? "(48b" : "(32b",
+              (flags & EXEC_OBJECT_WRITE) ? " write)" : ")",
+              batch->validation_list[i].offset,
+              (flags & EXEC_OBJECT_PINNED) ? " (pinned)" : "",
+              batch->exec_bos[i]->size);
+   }
+}
+
 static bool
 uint_key_compare(const void *a, const void *b)
 {
@@ -995,7 +1017,7 @@ _intel_batchbuffer_flush_fence(struct brw_context *brw,
    assert(!brw->batch.no_wrap);
 
    brw_finish_batch(brw);
-   intel_upload_finish(brw);
+   brw_upload_finish(&brw->upload);
 
    finish_growing_bos(&brw->batch.batch);
    finish_growing_bos(&brw->batch.state);
@@ -1072,6 +1094,21 @@ emit_reloc(struct intel_batchbuffer *batch,
 
    unsigned int index = add_exec_bo(batch, target);
    struct drm_i915_gem_exec_object2 *entry = &batch->validation_list[index];
+
+   if (reloc_flags & RELOC_32BIT) {
+      /* Restrict this buffer to the low 32 bits of the address space.
+       *
+       * Altering the validation list flags restricts it for this batch,
+       * but we also alter the BO's kflags to restrict it permanently
+       * (until the BO is destroyed and put back in the cache).  Buffers
+       * may stay bound across batches, and we want keep it constrained.
+       */
+      target->kflags &= ~EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
+      entry->flags &= ~EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
+
+      /* RELOC_32BIT is not an EXEC_OBJECT_* flag, so get rid of it. */
+      reloc_flags &= ~RELOC_32BIT;
+   }
 
    if (reloc_flags)
       entry->flags |= reloc_flags & batch->valid_reloc_flags;
@@ -1397,7 +1434,7 @@ brw_store_data_imm64(struct brw_context *brw, struct brw_bo *bo,
    BEGIN_BATCH(5);
    OUT_BATCH(MI_STORE_DATA_IMM | (5 - 2));
    if (devinfo->gen >= 8)
-      OUT_RELOC64(bo, 0, offset);
+      OUT_RELOC64(bo, RELOC_WRITE, offset);
    else {
       OUT_BATCH(0); /* MBZ */
       OUT_RELOC(bo, RELOC_WRITE, offset);

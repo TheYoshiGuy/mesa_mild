@@ -22,6 +22,7 @@
  * IN THE SOFTWARE.
  */
 
+#include "pipe/p_defines.h"
 #include "util/u_blit.h"
 #include "util/u_memory.h"
 #include "util/u_format.h"
@@ -37,10 +38,6 @@
 #include "vc5_resource.h"
 #include "vc5_tiling.h"
 #include "broadcom/cle/v3d_packet_v33_pack.h"
-
-#ifndef DRM_FORMAT_MOD_INVALID
-#define DRM_FORMAT_MOD_INVALID ((1ULL << 56) - 1)
-#endif
 
 static void
 vc5_debug_resource_layout(struct vc5_resource *rsc, const char *caller)
@@ -488,8 +485,7 @@ vc5_setup_slices(struct vc5_resource *rsc)
                 slice->padded_height = level_height;
                 slice->size = level_height * slice->stride;
 
-                offset += slice->size * level_depth;
-
+                uint32_t slice_total_size = slice->size * level_depth;
 
                 /* The HW aligns level 1's base to a page if any of level 1 or
                  * below could be UIF XOR.  The lower levels then inherit the
@@ -499,8 +495,12 @@ vc5_setup_slices(struct vc5_resource *rsc)
                 if (i == 1 &&
                     level_width > 4 * uif_block_w &&
                     level_height > PAGE_CACHE_MINUS_1_5_UB_ROWS * uif_block_h) {
-                        offset = align(offset, VC5_UIFCFG_PAGE_SIZE);
+                        slice_total_size = align(slice_total_size,
+                                                 VC5_UIFCFG_PAGE_SIZE);
                 }
+
+                offset += slice_total_size;
+
         }
         rsc->size = offset;
 

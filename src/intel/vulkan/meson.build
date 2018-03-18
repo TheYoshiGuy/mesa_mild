@@ -131,6 +131,7 @@ libanv_files = files(
   'anv_image.c',
   'anv_intel.c',
   'anv_nir.h',
+  'anv_nir_add_base_work_group_id.c',
   'anv_nir_apply_pipeline_layout.c',
   'anv_nir_lower_input_attachments.c',
   'anv_nir_lower_multiview.c',
@@ -192,8 +193,8 @@ libvulkan_intel = shared_library(
   ],
   link_whole : [libanv_common, libanv_gen_libs],
   link_with : [
-    libintel_compiler, libintel_common, libisl, libblorp, libvulkan_util,
-    libvulkan_wsi, libmesa_util,
+    libintel_compiler, libintel_common, libintel_dev, libisl, libblorp,
+    libvulkan_util, libvulkan_wsi, libmesa_util,
   ],
   dependencies : [
     dep_thread, dep_dl, dep_m, anv_deps, idep_nir,
@@ -213,8 +214,8 @@ if with_tests
     ],
     link_whole : libanv_common,
     link_with : [
-      libanv_gen_libs, libintel_compiler, libintel_common, libisl, libblorp,
-      libvulkan_util, libvulkan_wsi, libmesa_util,
+      libanv_gen_libs, libintel_compiler, libintel_common, libintel_dev,
+      libisl, libblorp, libvulkan_util, libvulkan_wsi, libmesa_util,
     ],
     dependencies : [
       dep_thread, dep_dl, dep_m, anv_deps, idep_nir,

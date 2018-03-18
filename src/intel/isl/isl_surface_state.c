@@ -27,7 +27,9 @@
 #define __gen_user_data void
 
 static uint64_t
-__gen_combine_address(void *data, void *loc, uint64_t addr, uint32_t delta)
+__gen_combine_address(__attribute__((unused)) void *data,
+                      __attribute__((unused)) void *loc, uint64_t addr,
+                      uint32_t delta)
 {
    return addr + delta;
 }
@@ -268,7 +270,7 @@ isl_genX(surf_fill_state_s)(const struct isl_device *dev, void *state,
       assert(surf_fmtl->bh == view_fmtl->bh);
    }
 
-   s.SurfaceFormat = (enum GENX(SURFACE_FORMAT)) info->view->format;
+   s.SurfaceFormat = info->view->format;
 
 #if GEN_GEN <= 5
    s.ColorBufferComponentWriteDisables = info->write_disables;
@@ -673,7 +675,27 @@ void
 isl_genX(buffer_fill_state_s)(void *state,
                               const struct isl_buffer_fill_state_info *restrict info)
 {
-   uint32_t num_elements = info->size / info->stride;
+   uint64_t buffer_size = info->size;
+
+   /* Uniform and Storage buffers need to have surface size not less that the
+    * aligned 32-bit size of the buffer. To calculate the array lenght on
+    * unsized arrays in StorageBuffer the last 2 bits store the padding size
+    * added to the surface, so we can calculate latter the original buffer
+    * size to know the number of elements.
+    *
+    *  surface_size = isl_align(buffer_size, 4) +
+    *                 (isl_align(buffer_size) - buffer_size)
+    *
+    *  buffer_size = (surface_size & ~3) - (surface_size & 3)
+    */
+   if (info->format == ISL_FORMAT_RAW  ||
+       info->stride < isl_format_get_layout(info->format)->bpb / 8) {
+      assert(info->stride == 1);
+      uint64_t aligned_size = isl_align(buffer_size, 4);
+      buffer_size = aligned_size + (aligned_size - buffer_size);
+   }
+
+   uint32_t num_elements = buffer_size / info->stride;
 
    if (GEN_GEN >= 7) {
       /* From the IVB PRM, SURFACE_STATE::Height,
@@ -696,7 +718,7 @@ isl_genX(buffer_fill_state_s)(void *state,
    struct GENX(RENDER_SURFACE_STATE) s = { 0, };
 
    s.SurfaceType = SURFTYPE_BUFFER;
-   s.SurfaceFormat = (enum GENX(SURFACE_FORMAT)) info->format;
+   s.SurfaceFormat = info->format;
 
 #if GEN_GEN >= 6
    s.SurfaceVerticalAlignment = isl_to_gen_valign[4];
@@ -754,7 +776,7 @@ isl_genX(null_fill_state)(void *state, struct isl_extent3d size)
 {
    struct GENX(RENDER_SURFACE_STATE) s = {
       .SurfaceType = SURFTYPE_NULL,
-      .SurfaceFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_B8G8R8A8_UNORM,
+      .SurfaceFormat = ISL_FORMAT_B8G8R8A8_UNORM,
 #if GEN_GEN >= 7
       .SurfaceArray = size.depth > 0,
 #endif

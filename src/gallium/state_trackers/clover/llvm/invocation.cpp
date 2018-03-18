@@ -94,7 +94,7 @@ namespace {
    }
 
    std::unique_ptr<clang::CompilerInstance>
-   create_compiler_instance(const target &target,
+   create_compiler_instance(const device &dev,
                             const std::vector<std::string> &opts,
                             std::string &r_log) {
       std::unique_ptr<clang::CompilerInstance> c { new clang::CompilerInstance };
@@ -107,6 +107,8 @@ namespace {
       // class to recognize it as an OpenCL source file.
       const std::vector<const char *> copts =
          map(std::mem_fn(&std::string::c_str), opts);
+
+      const target &target = dev.ir_target();
 
       if (!clang::CompilerInvocation::CreateFromArgs(
              c->getInvocation(), copts.data(), copts.data() + copts.size(), diag))
@@ -143,7 +145,7 @@ namespace {
    std::unique_ptr<Module>
    compile(LLVMContext &ctx, clang::CompilerInstance &c,
            const std::string &name, const std::string &source,
-           const header_map &headers, const std::string &target,
+           const header_map &headers, const device &dev,
            const std::string &opts, std::string &r_log) {
       c.getFrontendOpts().ProgramAction = clang::frontend::EmitLLVMOnly;
       c.getHeaderSearchOpts().UseBuiltinIncludes = true;
@@ -187,7 +189,7 @@ namespace {
       // barrier() (e.g. Moving barrier() inside a conditional that is
       // no executed by all threads) during its optimizaton passes.
       compat::add_link_bitcode_file(c.getCodeGenOpts(),
-                                    LIBCLC_LIBEXECDIR + target + ".bc");
+                                    LIBCLC_LIBEXECDIR + dev.ir_target() + ".bc");
 
       // Compile the code
       clang::EmitLLVMOnlyAction act(&ctx);
@@ -201,17 +203,15 @@ namespace {
 module
 clover::llvm::compile_program(const std::string &source,
                               const header_map &headers,
-                              const std::string &target,
+                              const device &dev,
                               const std::string &opts,
                               std::string &r_log) {
    if (has_flag(debug::clc))
       debug::log(".cl", "// Options: " + opts + '\n' + source);
 
    auto ctx = create_context(r_log);
-   auto c = create_compiler_instance(target, tokenize(opts + " input.cl"),
-                                     r_log);
-   auto mod = compile(*ctx, *c, "input.cl", source, headers, target, opts,
-                      r_log);
+   auto c = create_compiler_instance(dev, tokenize(opts + " input.cl"), r_log);
+   auto mod = compile(*ctx, *c, "input.cl", source, headers, dev, opts, r_log);
 
    if (has_flag(debug::llvm))
       debug::log(".ll", print_module_bitcode(*mod));
@@ -269,14 +269,14 @@ namespace {
 
 module
 clover::llvm::link_program(const std::vector<module> &modules,
-                           enum pipe_shader_ir ir, const std::string &target,
+                           const device &dev,
                            const std::string &opts, std::string &r_log) {
    std::vector<std::string> options = tokenize(opts + " input.cl");
    const bool create_library = count("-create-library", options);
    erase_if(equals("-create-library"), options);
 
    auto ctx = create_context(r_log);
-   auto c = create_compiler_instance(target, options, r_log);
+   auto c = create_compiler_instance(dev, options, r_log);
    auto mod = link(*ctx, *c, modules, r_log);
 
    optimize(*mod, c->getCodeGenOpts().OptimizationLevel, !create_library);
@@ -291,11 +291,11 @@ clover::llvm::link_program(const std::vector<module> &modules,
    if (create_library) {
       return build_module_library(*mod, module::section::text_library);
 
-   } else if (ir == PIPE_SHADER_IR_NATIVE) {
+   } else if (dev.ir_format() == PIPE_SHADER_IR_NATIVE) {
       if (has_flag(debug::native))
-         debug::log(id +  ".asm", print_module_native(*mod, target));
+         debug::log(id +  ".asm", print_module_native(*mod, dev.ir_target()));
 
-      return build_module_native(*mod, target, *c, r_log);
+      return build_module_native(*mod, dev.ir_target(), *c, r_log);
 
    } else {
       unreachable("Unsupported IR.");

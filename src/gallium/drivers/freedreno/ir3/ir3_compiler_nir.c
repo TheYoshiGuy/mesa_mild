@@ -472,6 +472,14 @@ get_src(struct ir3_context *ctx, nir_src *src)
 static void
 put_dst(struct ir3_context *ctx, nir_dest *dst)
 {
+	unsigned bit_size = nir_dest_bit_size(*dst);
+
+	if (bit_size < 32) {
+		for (unsigned i = 0; i < ctx->last_dst_n; i++) {
+			ctx->last_dst[i]->regs[0]->flags |= IR3_REG_HALF;
+		}
+	}
+
 	if (!dst->is_ssa) {
 		nir_register *reg = dst->reg.reg;
 		struct ir3_array *arr = get_array(ctx, reg);
@@ -1475,7 +1483,7 @@ emit_intrinsic_load_shared(struct ir3_context *ctx, nir_intrinsic_instr *intr,
 	unsigned base;
 
 	offset = get_src(ctx, &intr->src[0])[0];
-	base   = intr->const_index[0];
+	base   = nir_intrinsic_base(intr);
 
 	ldl = ir3_LDL(b, offset, 0, create_immed(b, intr->num_components), 0);
 	ldl->cat6.src_offset = base;
@@ -1500,8 +1508,8 @@ emit_intrinsic_store_shared(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 	value  = get_src(ctx, &intr->src[0]);
 	offset = get_src(ctx, &intr->src[1])[0];
 
-	base   = intr->const_index[0];
-	wrmask = intr->const_index[1];
+	base   = nir_intrinsic_base(intr);
+	wrmask = nir_intrinsic_write_mask(intr);
 
 	/* Combine groups of consecutive enabled channels in one write
 	 * message. We use ffs to find the first enabled channel and then ffs on
@@ -2599,6 +2607,7 @@ emit_jump(struct ir3_context *ctx, nir_jump_instr *jump)
 	switch (jump->type) {
 	case nir_jump_break:
 	case nir_jump_continue:
+	case nir_jump_return:
 		/* I *think* we can simply just ignore this, and use the
 		 * successor block link to figure out where we need to
 		 * jump to for break/continue
@@ -3417,7 +3426,7 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 			so->varying_in++;
 			so->inputs[i].compmask = (1 << maxcomp) - 1;
 			inloc += maxcomp;
-		} else {
+		} else if (!so->inputs[i].sysval){
 			so->inputs[i].compmask = compmask;
 		}
 		so->inputs[i].regid = regid;

@@ -25,7 +25,7 @@
 #define BLORP_GENX_EXEC_H
 
 #include "blorp_priv.h"
-#include "common/gen_device_info.h"
+#include "dev/gen_device_info.h"
 #include "common/gen_sample_positions.h"
 #include "genxml/gen_macros.h"
 
@@ -78,7 +78,7 @@ static void
 blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
                     struct blorp_address address, uint32_t delta);
 
-#if GEN_GEN >= 7
+#if GEN_GEN >= 7 && GEN_GEN <= 10
 static struct blorp_address
 blorp_get_surface_base_address(struct blorp_batch *batch);
 #endif
@@ -263,60 +263,65 @@ blorp_emit_input_varying_data(struct blorp_batch *batch,
 }
 
 static void
+blorp_fill_vertex_buffer_state(struct blorp_batch *batch,
+                               struct GENX(VERTEX_BUFFER_STATE) *vb,
+                               unsigned idx,
+                               struct blorp_address addr, uint32_t size,
+                               uint32_t stride)
+{
+   vb[idx].VertexBufferIndex = idx;
+   vb[idx].BufferStartingAddress = addr;
+   vb[idx].BufferPitch = stride;
+
+#if GEN_GEN >= 6
+   vb[idx].VertexBufferMOCS = addr.mocs;
+#endif
+
+#if GEN_GEN >= 7
+   vb[idx].AddressModifyEnable = true;
+#endif
+
+#if GEN_GEN >= 8
+   vb[idx].BufferSize = size;
+#elif GEN_GEN >= 5
+   vb[idx].BufferAccessType = stride > 0 ? VERTEXDATA : INSTANCEDATA;
+   vb[idx].EndAddress = vb[idx].BufferStartingAddress;
+   vb[idx].EndAddress.offset += size - 1;
+#elif GEN_GEN == 4
+   vb[idx].BufferAccessType = stride > 0 ? VERTEXDATA : INSTANCEDATA;
+   vb[idx].MaxIndex = stride > 0 ? size / stride : 0;
+#endif
+}
+
+static void
 blorp_emit_vertex_buffers(struct blorp_batch *batch,
                           const struct blorp_params *params)
 {
-   struct GENX(VERTEX_BUFFER_STATE) vb[2];
+   struct GENX(VERTEX_BUFFER_STATE) vb[3];
    memset(vb, 0, sizeof(vb));
 
+   struct blorp_address addr;
    uint32_t size;
-   blorp_emit_vertex_data(batch, params, &vb[0].BufferStartingAddress, &size);
-   vb[0].VertexBufferIndex = 0;
-   vb[0].BufferPitch = 3 * sizeof(float);
-#if GEN_GEN >= 6
-   vb[0].VertexBufferMOCS = vb[0].BufferStartingAddress.mocs;
-#endif
-#if GEN_GEN >= 7
-   vb[0].AddressModifyEnable = true;
-#endif
-#if GEN_GEN >= 8
-   vb[0].BufferSize = size;
-#elif GEN_GEN >= 5
-   vb[0].BufferAccessType = VERTEXDATA;
-   vb[0].EndAddress = vb[0].BufferStartingAddress;
-   vb[0].EndAddress.offset += size - 1;
-#elif GEN_GEN == 4
-   vb[0].BufferAccessType = VERTEXDATA;
-   vb[0].MaxIndex = 2;
-#endif
+   blorp_emit_vertex_data(batch, params, &addr, &size);
+   blorp_fill_vertex_buffer_state(batch, vb, 0, addr, size, 3 * sizeof(float));
 
-   blorp_emit_input_varying_data(batch, params,
-                                 &vb[1].BufferStartingAddress, &size);
-   vb[1].VertexBufferIndex = 1;
-   vb[1].BufferPitch = 0;
-#if GEN_GEN >= 6
-   vb[1].VertexBufferMOCS = vb[1].BufferStartingAddress.mocs;
-#endif
-#if GEN_GEN >= 7
-   vb[1].AddressModifyEnable = true;
-#endif
-#if GEN_GEN >= 8
-   vb[1].BufferSize = size;
-#elif GEN_GEN >= 5
-   vb[1].BufferAccessType = INSTANCEDATA;
-   vb[1].EndAddress = vb[1].BufferStartingAddress;
-   vb[1].EndAddress.offset += size - 1;
-#elif GEN_GEN == 4
-   vb[1].BufferAccessType = INSTANCEDATA;
-   vb[1].MaxIndex = 0;
-#endif
+   blorp_emit_input_varying_data(batch, params, &addr, &size);
+   blorp_fill_vertex_buffer_state(batch, vb, 1, addr, size, 0);
 
-   const unsigned num_dwords = 1 + GENX(VERTEX_BUFFER_STATE_length) * 2;
+   uint32_t num_vbs = 2;
+   if (params->dst_clear_color_as_input) {
+      blorp_fill_vertex_buffer_state(batch, vb, num_vbs++,
+                                     params->dst.clear_color_addr,
+                                     batch->blorp->isl_dev->ss.clear_value_size,
+                                     0);
+   }
+
+   const unsigned num_dwords = 1 + num_vbs * GENX(VERTEX_BUFFER_STATE_length);
    uint32_t *dw = blorp_emitn(batch, GENX(3DSTATE_VERTEX_BUFFERS), num_dwords);
    if (!dw)
       return;
 
-   for (unsigned i = 0; i < 2; i++) {
+   for (unsigned i = 0; i < num_vbs; i++) {
       GENX(VERTEX_BUFFER_STATE_pack)(batch, dw, &vb[i]);
       dw += GENX(VERTEX_BUFFER_STATE_length);
    }
@@ -385,7 +390,7 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
    ve[slot] = (struct GENX(VERTEX_ELEMENT_STATE)) {
       .VertexBufferIndex = 1,
       .Valid = true,
-      .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32B32A32_FLOAT,
+      .SourceElementFormat = ISL_FORMAT_R32G32B32A32_FLOAT,
       .SourceElementOffset = 0,
       .Component0Control = VFCOMP_STORE_SRC,
 
@@ -417,7 +422,7 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
    ve[slot] = (struct GENX(VERTEX_ELEMENT_STATE)) {
       .VertexBufferIndex = 0,
       .Valid = true,
-      .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32B32_FLOAT,
+      .SourceElementFormat = ISL_FORMAT_R32G32B32_FLOAT,
       .SourceElementOffset = 0,
       .Component0Control = VFCOMP_STORE_SRC,
       .Component1Control = VFCOMP_STORE_SRC,
@@ -431,7 +436,7 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
    ve[slot] = (struct GENX(VERTEX_ELEMENT_STATE)) {
       .VertexBufferIndex = 0,
       .Valid = true,
-      .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32B32_FLOAT,
+      .SourceElementFormat = ISL_FORMAT_R32G32B32_FLOAT,
       .SourceElementOffset = 0,
       .Component0Control = VFCOMP_STORE_SRC,
       .Component1Control = VFCOMP_STORE_SRC,
@@ -443,21 +448,49 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
    };
    slot++;
 
-   for (unsigned i = 0; i < num_varyings; ++i) {
+   if (params->dst_clear_color_as_input) {
+      /* If the caller wants the destination indirect clear color, redirect
+       * to vertex buffer 2 where we stored it earlier.  The only users of
+       * an indirect clear color source have that as their only vertex
+       * attribute.
+       */
+      assert(num_varyings == 1);
       ve[slot] = (struct GENX(VERTEX_ELEMENT_STATE)) {
-         .VertexBufferIndex = 1,
+         .VertexBufferIndex = 2,
          .Valid = true,
-         .SourceElementFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R32G32B32A32_FLOAT,
-         .SourceElementOffset = 16 + i * 4 * sizeof(float),
+         .SourceElementOffset = 0,
          .Component0Control = VFCOMP_STORE_SRC,
+#if GEN_GEN >= 9
+         .SourceElementFormat = ISL_FORMAT_R32G32B32A32_FLOAT,
          .Component1Control = VFCOMP_STORE_SRC,
          .Component2Control = VFCOMP_STORE_SRC,
          .Component3Control = VFCOMP_STORE_SRC,
-#if GEN_GEN <= 5
-         .DestinationElementOffset = slot * 4,
+#else
+         /* Clear colors on gen7-8 are for bits out of one dword */
+         .SourceElementFormat = ISL_FORMAT_R32_FLOAT,
+         .Component1Control = VFCOMP_STORE_0,
+         .Component2Control = VFCOMP_STORE_0,
+         .Component3Control = VFCOMP_STORE_0,
 #endif
       };
       slot++;
+   } else {
+      for (unsigned i = 0; i < num_varyings; ++i) {
+         ve[slot] = (struct GENX(VERTEX_ELEMENT_STATE)) {
+            .VertexBufferIndex = 1,
+            .Valid = true,
+            .SourceElementFormat = ISL_FORMAT_R32G32B32A32_FLOAT,
+            .SourceElementOffset = 16 + i * 4 * sizeof(float),
+            .Component0Control = VFCOMP_STORE_SRC,
+            .Component1Control = VFCOMP_STORE_SRC,
+            .Component2Control = VFCOMP_STORE_SRC,
+            .Component3Control = VFCOMP_STORE_SRC,
+#if GEN_GEN <= 5
+            .DestinationElementOffset = slot * 4,
+#endif
+         };
+         slot++;
+      }
    }
 
    const unsigned num_dwords =
@@ -496,8 +529,7 @@ blorp_emit_vertex_elements(struct blorp_batch *batch,
 
 /* 3DSTATE_VIEWPORT_STATE_POINTERS */
 static uint32_t
-blorp_emit_cc_viewport(struct blorp_batch *batch,
-                       const struct blorp_params *params)
+blorp_emit_cc_viewport(struct blorp_batch *batch)
 {
    uint32_t cc_vp_offset;
    blorp_emit_dynamic(batch, GENX(CC_VIEWPORT), vp, 32, &cc_vp_offset) {
@@ -520,8 +552,7 @@ blorp_emit_cc_viewport(struct blorp_batch *batch,
 }
 
 static uint32_t
-blorp_emit_sampler_state(struct blorp_batch *batch,
-                         const struct blorp_params *params)
+blorp_emit_sampler_state(struct blorp_batch *batch)
 {
    uint32_t offset;
    blorp_emit_dynamic(batch, GENX(SAMPLER_STATE), sampler, 32, &offset) {
@@ -980,7 +1011,7 @@ blorp_emit_blend_state(struct blorp_batch *batch,
 
 static uint32_t
 blorp_emit_color_calc_state(struct blorp_batch *batch,
-                            const struct blorp_params *params)
+                            MAYBE_UNUSED const struct blorp_params *params)
 {
    uint32_t offset;
    blorp_emit_dynamic(batch, GENX(COLOR_CALC_STATE), cc, 64, &offset) {
@@ -1171,7 +1202,7 @@ blorp_emit_pipeline(struct blorp_batch *batch,
    blorp_emit(batch, GENX(3DSTATE_CONSTANT_PS), ps);
 
    if (params->src.enabled)
-      blorp_emit_sampler_state(batch, params);
+      blorp_emit_sampler_state(batch);
 
    blorp_emit_3dstate_multisample(batch, params);
 
@@ -1205,7 +1236,7 @@ blorp_emit_pipeline(struct blorp_batch *batch,
    blorp_emit_sf_config(batch, params);
    blorp_emit_ps_config(batch, params);
 
-   blorp_emit_cc_viewport(batch, params);
+   blorp_emit_cc_viewport(batch);
 }
 
 /******** This is the end of the pipeline setup code ********/
@@ -1325,7 +1356,7 @@ blorp_emit_null_surface_state(struct blorp_batch *batch,
 {
    struct GENX(RENDER_SURFACE_STATE) ss = {
       .SurfaceType = SURFTYPE_NULL,
-      .SurfaceFormat = (enum GENX(SURFACE_FORMAT)) ISL_FORMAT_R8G8B8A8_UNORM,
+      .SurfaceFormat = ISL_FORMAT_R8G8B8A8_UNORM,
       .Width = surface->surf.logical_level0_px.width - 1,
       .Height = surface->surf.logical_level0_px.height - 1,
       .MIPCountLOD = surface->view.base_level,
@@ -1357,7 +1388,7 @@ blorp_emit_surface_states(struct blorp_batch *batch,
                           const struct blorp_params *params)
 {
    const struct isl_device *isl_dev = batch->blorp->isl_dev;
-   uint32_t bind_offset, surface_offsets[2];
+   uint32_t bind_offset = 0, surface_offsets[2];
    void *surface_maps[2];
 
    MAYBE_UNUSED bool has_indirect_clear_color = false;

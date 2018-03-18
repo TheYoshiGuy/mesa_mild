@@ -590,6 +590,14 @@ brw_imm_df(double df)
 }
 
 static inline struct brw_reg
+brw_imm_u64(uint64_t u64)
+{
+   struct brw_reg imm = brw_imm_reg(BRW_REGISTER_TYPE_UQ);
+   imm.u64 = u64;
+   return imm;
+}
+
+static inline struct brw_reg
 brw_imm_f(float f)
 {
    struct brw_reg imm = brw_imm_reg(BRW_REGISTER_TYPE_F);
@@ -840,6 +848,13 @@ brw_flag_reg(int reg, int subreg)
 {
    return brw_uw1_reg(BRW_ARCHITECTURE_REGISTER_FILE,
                       BRW_ARF_FLAG + reg, subreg);
+}
+
+static inline struct brw_reg
+brw_flag_subreg(unsigned subreg)
+{
+   return brw_uw1_reg(BRW_ARCHITECTURE_REGISTER_FILE,
+                      BRW_ARF_FLAG + subreg / 2, subreg % 2);
 }
 
 /**

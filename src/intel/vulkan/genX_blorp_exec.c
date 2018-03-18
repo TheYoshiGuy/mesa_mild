@@ -64,6 +64,7 @@ blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
       anv_batch_set_error(&cmd_buffer->batch, result);
 }
 
+#if GEN_GEN >= 7 && GEN_GEN <= 10
 static struct blorp_address
 blorp_get_surface_base_address(struct blorp_batch *batch)
 {
@@ -73,6 +74,7 @@ blorp_get_surface_base_address(struct blorp_batch *batch)
       .offset = 0,
    };
 }
+#endif
 
 static void *
 blorp_alloc_dynamic_state(struct blorp_batch *batch,
@@ -205,8 +207,8 @@ genX(blorp_exec)(struct blorp_batch *batch,
     * indirect fast-clear colors can cause GPU hangs if we don't stall first.
     * See genX(cmd_buffer_mi_memcpy) for more details.
     */
-   assert(params->src.clear_color_addr.buffer == NULL);
-   if (params->dst.clear_color_addr.buffer)
+   if (params->src.clear_color_addr.buffer ||
+       params->dst.clear_color_addr.buffer)
       cmd_buffer->state.pending_pipe_bits |= ANV_PIPE_CS_STALL_BIT;
 #endif
 

@@ -21,8 +21,8 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "si_shader.h"
 #include "si_shader_internal.h"
+#include "si_pipe.h"
 
 #include "ac_nir_to_llvm.h"
 
@@ -670,8 +670,11 @@ si_lower_nir(struct si_shader_selector* sel)
 		.lower_to_scalar = true,
 		.lower_subgroup_masks = true,
 		.lower_vote_trivial = false,
+		.lower_vote_eq_to_ballot = true,
 	};
 	NIR_PASS_V(sel->nir, nir_lower_subgroups, &subgroups_options);
+
+	ac_lower_indirect_derefs(sel->nir, sel->screen->info.chip_class);
 
 	bool progress;
 	do {
@@ -727,26 +730,6 @@ static void declare_nir_input_fs(struct si_shader_context *ctx,
 	}
 
 	si_llvm_load_input_fs(ctx, input_index, out);
-}
-
-LLVMValueRef si_nir_load_input_gs(struct ac_shader_abi *abi,
-				  unsigned location,
-				  unsigned driver_location,
-				  unsigned component,
-				  unsigned num_components,
-				  unsigned vertex_index,
-				  unsigned const_index,
-				  LLVMTypeRef type)
-{
-	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
-
-	LLVMValueRef value[4];
-	for (unsigned i = component; i < num_components + component; i++) {
-		value[i] = si_llvm_load_input_gs(&ctx->abi, driver_location  / 4,
-						 vertex_index, type, i);
-	}
-
-	return ac_build_varying_gather_values(&ctx->ac, value, num_components, component);
 }
 
 LLVMValueRef

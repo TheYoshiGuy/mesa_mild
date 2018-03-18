@@ -36,6 +36,7 @@ struct spirv_supported_capabilities {
    bool float64;
    bool image_ms_array;
    bool tessellation;
+   bool device_group;
    bool draw_parameters;
    bool image_read_without_format;
    bool image_write_without_format;
@@ -43,6 +44,14 @@ struct spirv_supported_capabilities {
    bool multiview;
    bool variable_pointers;
    bool storage_16bit;
+   bool shader_viewport_index_layer;
+   bool subgroup_arithmetic;
+   bool subgroup_ballot;
+   bool subgroup_basic;
+   bool subgroup_quad;
+   bool subgroup_shuffle;
+   bool subgroup_vote;
+   bool gcn_shader;
 };
 
 typedef struct shader_info {

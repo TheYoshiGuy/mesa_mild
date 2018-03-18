@@ -48,6 +48,7 @@
 #include <sys/stat.h>
 
 #ifdef HAVE_WAYLAND_PLATFORM
+#include <wayland-client.h>
 #include "wayland-drm.h"
 #include "wayland-drm-client-protocol.h"
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
@@ -880,6 +881,15 @@ dri2_setup_extensions(_EGLDisplay *disp)
 
    if (!dri2_bind_extensions(dri2_dpy, mandatory_core_extensions, extensions, false))
       return EGL_FALSE;
+
+#ifdef HAVE_DRI3
+   dri2_dpy->multibuffers_available =
+      (dri2_dpy->dri3_major_version > 1 || (dri2_dpy->dri3_major_version == 1 &&
+                                            dri2_dpy->dri3_minor_version >= 2)) &&
+      (dri2_dpy->present_major_version > 1 || (dri2_dpy->present_major_version == 1 &&
+                                               dri2_dpy->present_minor_version >= 2)) &&
+      (dri2_dpy->image && dri2_dpy->image->base.version >= 15);
+#endif
 
    dri2_bind_extensions(dri2_dpy, optional_core_extensions, extensions, true);
    return EGL_TRUE;

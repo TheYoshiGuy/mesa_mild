@@ -53,6 +53,7 @@ static const struct nir_shader_compiler_options nir_options = {
 	.lower_scmp = true,
 	.lower_flrp32 = true,
 	.lower_flrp64 = true,
+	.lower_device_index_to_zero = true,
 	.lower_fsat = true,
 	.lower_fdiv = true,
 	.lower_sub = true,
@@ -115,45 +116,6 @@ void radv_DestroyShaderModule(
 	vk_free2(&device->alloc, pAllocator, module);
 }
 
-bool
-radv_lower_indirect_derefs(struct nir_shader *nir,
-                           struct radv_physical_device *device)
-{
-	/* While it would be nice not to have this flag, we are constrained
-	 * by the reality that LLVM 5.0 doesn't have working VGPR indexing
-	 * on GFX9.
-	 */
-	bool llvm_has_working_vgpr_indexing =
-		device->rad_info.chip_class <= VI;
-
-	/* TODO: Indirect indexing of GS inputs is unimplemented.
-	 *
-	 * TCS and TES load inputs directly from LDS or offchip memory, so
-	 * indirect indexing is trivial.
-	 */
-	nir_variable_mode indirect_mask = 0;
-	if (nir->info.stage == MESA_SHADER_GEOMETRY ||
-	    (nir->info.stage != MESA_SHADER_TESS_CTRL &&
-	     nir->info.stage != MESA_SHADER_TESS_EVAL &&
-	     !llvm_has_working_vgpr_indexing)) {
-		indirect_mask |= nir_var_shader_in;
-	}
-	if (!llvm_has_working_vgpr_indexing &&
-	    nir->info.stage != MESA_SHADER_TESS_CTRL)
-		indirect_mask |= nir_var_shader_out;
-
-	/* TODO: We shouldn't need to do this, however LLVM isn't currently
-	 * smart enough to handle indirects without causing excess spilling
-	 * causing the gpu to hang.
-	 *
-	 * See the following thread for more details of the problem:
-	 * https://lists.freedesktop.org/archives/mesa-dev/2017-July/162106.html
-	 */
-	indirect_mask |= nir_var_local;
-
-	return nir_lower_indirect_derefs(nir, indirect_mask);
-}
-
 void
 radv_optimize_nir(struct nir_shader *shader)
 {
@@ -190,6 +152,7 @@ radv_optimize_nir(struct nir_shader *shader)
         } while (progress);
 
         NIR_PASS(progress, shader, nir_opt_shrink_load);
+        NIR_PASS(progress, shader, nir_opt_move_load_ubo);
 }
 
 nir_shader *
@@ -242,6 +205,7 @@ radv_shader_compile_to_nir(struct radv_device *device,
 		}
 		const struct spirv_to_nir_options spirv_options = {
 			.caps = {
+				.device_group = true,
 				.draw_parameters = true,
 				.float64 = true,
 				.image_read_without_format = true,
@@ -249,7 +213,9 @@ radv_shader_compile_to_nir(struct radv_device *device,
 				.tessellation = true,
 				.int64 = true,
 				.multiview = true,
+				.subgroup_basic = true,
 				.variable_pointers = true,
+				.gcn_shader = true,
 			},
 		};
 		entry_point = spirv_to_nir(spirv, module->size / 4,
@@ -304,7 +270,16 @@ radv_shader_compile_to_nir(struct radv_device *device,
 	nir_lower_var_copies(nir);
 	nir_lower_global_vars_to_local(nir);
 	nir_remove_dead_variables(nir, nir_var_local);
-	radv_lower_indirect_derefs(nir, device->physical_device);
+	ac_lower_indirect_derefs(nir, device->physical_device->rad_info.chip_class);
+	nir_lower_subgroups(nir, &(struct nir_lower_subgroups_options) {
+			.subgroup_size = 64,
+			.ballot_bit_size = 64,
+			.lower_to_scalar = 1,
+			.lower_subgroup_masks = 1,
+			.lower_shuffle = 1,
+			.lower_quad =  1,
+		});
+
 	radv_optimize_nir(nir);
 
 	return nir;
@@ -407,7 +382,7 @@ radv_fill_shader_variant(struct radv_device *device,
 	case MESA_SHADER_FRAGMENT:
 		break;
 	case MESA_SHADER_COMPUTE: {
-		struct ac_shader_info *info = &variant->info.info;
+		struct radv_shader_info *info = &variant->info.info;
 		variant->rsrc2 |=
 			S_00B84C_TGID_X_EN(info->cs.uses_block_id[0]) |
 			S_00B84C_TGID_Y_EN(info->cs.uses_block_id[1]) |
@@ -425,7 +400,7 @@ radv_fill_shader_variant(struct radv_device *device,
 
 	if (device->physical_device->rad_info.chip_class >= GFX9 &&
 	    stage == MESA_SHADER_GEOMETRY) {
-		struct ac_shader_info *info = &variant->info.info;
+		struct radv_shader_info *info = &variant->info.info;
 		unsigned es_type = variant->info.gs.es_type;
 		unsigned gs_vgpr_comp_cnt, es_vgpr_comp_cnt;
 
@@ -468,13 +443,12 @@ shader_variant_create(struct radv_device *device,
 		      struct nir_shader * const *shaders,
 		      int shader_count,
 		      gl_shader_stage stage,
-		      struct ac_nir_compiler_options *options,
+		      struct radv_nir_compiler_options *options,
 		      bool gs_copy_shader,
 		      void **code_out,
 		      unsigned *code_size_out)
 {
 	enum radeon_family chip_family = device->physical_device->rad_info.family;
-	bool dump_shaders = radv_can_dump_shader(device, module);
 	enum ac_target_machine_options tm_options = 0;
 	struct radv_shader_variant *variant;
 	struct ac_shader_binary binary;
@@ -486,8 +460,11 @@ shader_variant_create(struct radv_device *device,
 
 	options->family = chip_family;
 	options->chip_class = device->physical_device->rad_info.chip_class;
-	options->dump_preoptir = radv_can_dump_shader(device, module) &&
+	options->dump_shader = radv_can_dump_shader(device, module);
+	options->dump_preoptir = options->dump_shader &&
 				 device->instance->debug_flags & RADV_DEBUG_PREOPTIR;
+	options->record_llvm_ir = device->keep_shader_info;
+	options->tess_offchip_block_dw_size = device->tess_offchip_block_dw_size;
 
 	if (options->supports_spill)
 		tm_options |= AC_TM_SUPPORTS_SPILL;
@@ -497,12 +474,13 @@ shader_variant_create(struct radv_device *device,
 
 	if (gs_copy_shader) {
 		assert(shader_count == 1);
-		ac_create_gs_copy_shader(tm, *shaders, &binary, &variant->config,
-					 &variant->info, options, dump_shaders);
+		radv_compile_gs_copy_shader(tm, *shaders, &binary,
+					    &variant->config, &variant->info,
+					    options);
 	} else {
-		ac_compile_nir_shader(tm, &binary, &variant->config,
-				      &variant->info, shaders, shader_count, options,
-				      dump_shaders);
+		radv_compile_nir_shader(tm, &binary, &variant->config,
+					&variant->info, shaders, shader_count,
+					options);
 	}
 
 	LLVMDisposeTargetMachine(tm);
@@ -522,6 +500,7 @@ shader_variant_create(struct radv_device *device,
 
 	if (device->keep_shader_info) {
 		variant->disasm_string = binary.disasm_string;
+		variant->llvm_ir_string = binary.llvm_ir_string;
 		if (!gs_copy_shader && !module->nir) {
 			variant->nir = *shaders;
 			variant->spirv = (uint32_t *)module->data;
@@ -540,11 +519,11 @@ radv_shader_variant_create(struct radv_device *device,
 			   struct nir_shader *const *shaders,
 			   int shader_count,
 			   struct radv_pipeline_layout *layout,
-			   const struct ac_shader_variant_key *key,
+			   const struct radv_shader_variant_key *key,
 			   void **code_out,
 			   unsigned *code_size_out)
 {
-	struct ac_nir_compiler_options options = {0};
+	struct radv_nir_compiler_options options = {0};
 
 	options.layout = layout;
 	if (key)
@@ -564,7 +543,7 @@ radv_create_gs_copy_shader(struct radv_device *device,
 			   unsigned *code_size_out,
 			   bool multiview)
 {
-	struct ac_nir_compiler_options options = {0};
+	struct radv_nir_compiler_options options = {0};
 
 	options.key.has_multiview_view_index = multiview;
 
@@ -585,6 +564,7 @@ radv_shader_variant_destroy(struct radv_device *device,
 
 	ralloc_free(variant->nir);
 	free(variant->disasm_string);
+	free(variant->llvm_ir_string);
 	free(variant);
 }
 
@@ -666,13 +646,15 @@ generate_shader_stats(struct radv_device *device,
 				   "VGPRS: %d\n"
 				   "Spilled SGPRs: %d\n"
 				   "Spilled VGPRs: %d\n"
+				   "PrivMem VGPRS: %d\n"
 				   "Code Size: %d bytes\n"
 				   "LDS: %d blocks\n"
 				   "Scratch: %d bytes per wave\n"
 				   "Max Waves: %d\n"
 				   "********************\n\n\n",
 				   conf->num_sgprs, conf->num_vgprs,
-				   conf->spilled_sgprs, conf->spilled_vgprs, variant->code_size,
+				   conf->spilled_sgprs, conf->spilled_vgprs,
+				   variant->info.private_mem_vgprs, variant->code_size,
 				   conf->lds_size, conf->scratch_bytes_per_wave,
 				   max_simd_waves);
 }

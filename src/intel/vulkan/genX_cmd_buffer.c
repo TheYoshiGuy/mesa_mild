@@ -235,14 +235,9 @@ color_attachment_compute_aux_usage(struct anv_device * device,
     */
    assert(att_state->aux_usage != ISL_AUX_USAGE_NONE);
 
-   if (att_state->aux_usage == ISL_AUX_USAGE_MCS) {
-      att_state->input_aux_usage = ISL_AUX_USAGE_MCS;
-      att_state->fast_clear = false;
-      return;
-   }
-
-   if (att_state->aux_usage == ISL_AUX_USAGE_CCS_E) {
-      att_state->input_aux_usage = ISL_AUX_USAGE_CCS_E;
+   if (att_state->aux_usage == ISL_AUX_USAGE_CCS_E ||
+       att_state->aux_usage == ISL_AUX_USAGE_MCS) {
+      att_state->input_aux_usage = att_state->aux_usage;
    } else {
       /* From the Sky Lake PRM, RENDER_SURFACE_STATE::AuxiliarySurfaceMode:
        *
@@ -274,7 +269,8 @@ color_attachment_compute_aux_usage(struct anv_device * device,
       }
    }
 
-   assert(iview->image->planes[0].aux_surface.isl.usage & ISL_SURF_USAGE_CCS_BIT);
+   assert(iview->image->planes[0].aux_surface.isl.usage &
+          (ISL_SURF_USAGE_CCS_BIT | ISL_SURF_USAGE_MCS_BIT));
 
    const struct isl_format_layout *view_fmtl =
       isl_format_get_layout(iview->planes[0].isl.format);
@@ -538,19 +534,21 @@ mi_alu(uint32_t opcode, uint32_t operand1, uint32_t operand2)
 
 #define CS_GPR(n) (0x2600 + (n) * 8)
 
+/* This is only really practical on haswell and above because it requires
+ * MI math in order to get it correct.
+ */
+#if GEN_GEN >= 8 || GEN_IS_HASWELL
 static void
-anv_cmd_predicated_ccs_resolve(struct anv_cmd_buffer *cmd_buffer,
-                               const struct anv_image *image,
-                               VkImageAspectFlagBits aspect,
-                               uint32_t level, uint32_t array_layer,
-                               enum isl_aux_op resolve_op,
-                               enum anv_fast_clear_type fast_clear_supported)
+anv_cmd_compute_resolve_predicate(struct anv_cmd_buffer *cmd_buffer,
+                                  const struct anv_image *image,
+                                  VkImageAspectFlagBits aspect,
+                                  uint32_t level, uint32_t array_layer,
+                                  enum isl_aux_op resolve_op,
+                                  enum anv_fast_clear_type fast_clear_supported)
 {
-   const uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
    struct anv_address fast_clear_type_addr =
       anv_image_get_fast_clear_type_addr(cmd_buffer->device, image, aspect);
 
-#if GEN_GEN >= 9
    /* Name some registers */
    const int image_fc_reg = MI_ALU_REG0;
    const int fc_imm_reg = MI_ALU_REG1;
@@ -657,7 +655,38 @@ anv_cmd_predicated_ccs_resolve(struct anv_cmd_buffer *cmd_buffer,
       return;
    }
 
-#else /* GEN_GEN <= 8 */
+   /* We use the first half of src0 for the actual predicate.  Set the second
+    * half of src0 and all of src1 to 0 as the predicate operation will be
+    * doing an implicit src0 != src1.
+    */
+   emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC0 + 4, 0);
+   emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC1    , 0);
+   emit_lri(&cmd_buffer->batch, MI_PREDICATE_SRC1 + 4, 0);
+
+   anv_batch_emit(&cmd_buffer->batch, GENX(MI_PREDICATE), mip) {
+      mip.LoadOperation    = LOAD_LOADINV;
+      mip.CombineOperation = COMBINE_SET;
+      mip.CompareOperation = COMPARE_SRCS_EQUAL;
+   }
+}
+#endif /* GEN_GEN >= 8 || GEN_IS_HASWELL */
+
+#if GEN_GEN <= 8
+static void
+anv_cmd_simple_resolve_predicate(struct anv_cmd_buffer *cmd_buffer,
+                                 const struct anv_image *image,
+                                 VkImageAspectFlagBits aspect,
+                                 uint32_t level, uint32_t array_layer,
+                                 enum isl_aux_op resolve_op,
+                                 enum anv_fast_clear_type fast_clear_supported)
+{
+   struct anv_address fast_clear_type_addr =
+      anv_image_get_fast_clear_type_addr(cmd_buffer->device, image, aspect);
+
+   /* This only works for partial resolves and only when the clear color is
+    * all or nothing.  On the upside, this emits less command streamer code
+    * and works on Ivybridge and Bay Trail.
+    */
    assert(resolve_op == ISL_AUX_OP_PARTIAL_RESOLVE);
    assert(fast_clear_supported != ANV_FAST_CLEAR_ANY);
 
@@ -677,7 +706,6 @@ anv_cmd_predicated_ccs_resolve(struct anv_cmd_buffer *cmd_buffer,
       sdi.Address          = fast_clear_type_addr;
       sdi.ImmediateData    = 0;
    }
-#endif
 
    /* We use the first half of src0 for the actual predicate.  Set the second
     * half of src0 and all of src1 to 0 as the predicate operation will be
@@ -692,6 +720,28 @@ anv_cmd_predicated_ccs_resolve(struct anv_cmd_buffer *cmd_buffer,
       mip.CombineOperation = COMBINE_SET;
       mip.CompareOperation = COMPARE_SRCS_EQUAL;
    }
+}
+#endif /* GEN_GEN <= 8 */
+
+static void
+anv_cmd_predicated_ccs_resolve(struct anv_cmd_buffer *cmd_buffer,
+                               const struct anv_image *image,
+                               VkImageAspectFlagBits aspect,
+                               uint32_t level, uint32_t array_layer,
+                               enum isl_aux_op resolve_op,
+                               enum anv_fast_clear_type fast_clear_supported)
+{
+   const uint32_t plane = anv_image_aspect_to_plane(image->aspects, aspect);
+
+#if GEN_GEN >= 9
+   anv_cmd_compute_resolve_predicate(cmd_buffer, image,
+                                     aspect, level, array_layer,
+                                     resolve_op, fast_clear_supported);
+#else /* GEN_GEN <= 8 */
+   anv_cmd_simple_resolve_predicate(cmd_buffer, image,
+                                    aspect, level, array_layer,
+                                    resolve_op, fast_clear_supported);
+#endif
 
    /* CCS_D only supports full resolves and BLORP will assert on us if we try
     * to do a partial resolve on a CCS_D surface.
@@ -702,6 +752,29 @@ anv_cmd_predicated_ccs_resolve(struct anv_cmd_buffer *cmd_buffer,
 
    anv_image_ccs_op(cmd_buffer, image, aspect, level,
                     array_layer, 1, resolve_op, true);
+}
+
+static void
+anv_cmd_predicated_mcs_resolve(struct anv_cmd_buffer *cmd_buffer,
+                               const struct anv_image *image,
+                               VkImageAspectFlagBits aspect,
+                               uint32_t array_layer,
+                               enum isl_aux_op resolve_op,
+                               enum anv_fast_clear_type fast_clear_supported)
+{
+   assert(aspect == VK_IMAGE_ASPECT_COLOR_BIT);
+   assert(resolve_op == ISL_AUX_OP_PARTIAL_RESOLVE);
+
+#if GEN_GEN >= 8 || GEN_IS_HASWELL
+   anv_cmd_compute_resolve_predicate(cmd_buffer, image,
+                                     aspect, 0, array_layer,
+                                     resolve_op, fast_clear_supported);
+
+   anv_image_mcs_op(cmd_buffer, image, aspect,
+                    array_layer, 1, resolve_op, true);
+#else
+   unreachable("MCS resolves are unsupported on Ivybridge and Bay Trail");
+#endif
 }
 
 void
@@ -1046,9 +1119,15 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
 
       for (uint32_t a = 0; a < level_layer_count; a++) {
          uint32_t array_layer = base_layer + a;
-         anv_cmd_predicated_ccs_resolve(cmd_buffer, image, aspect,
-                                        level, array_layer, resolve_op,
-                                        final_fast_clear);
+         if (image->samples == 1) {
+            anv_cmd_predicated_ccs_resolve(cmd_buffer, image, aspect,
+                                           level, array_layer, resolve_op,
+                                           final_fast_clear);
+         } else {
+            anv_cmd_predicated_mcs_resolve(cmd_buffer, image, aspect,
+                                           array_layer, resolve_op,
+                                           final_fast_clear);
+         }
       }
    }
 
@@ -2953,15 +3032,60 @@ verify_cmd_parser(const struct anv_device *device,
 
 #endif
 
+static void
+anv_cmd_buffer_push_base_group_id(struct anv_cmd_buffer *cmd_buffer,
+                                  uint32_t baseGroupX,
+                                  uint32_t baseGroupY,
+                                  uint32_t baseGroupZ)
+{
+   if (anv_batch_has_error(&cmd_buffer->batch))
+      return;
+
+   VkResult result =
+      anv_cmd_buffer_ensure_push_constant_field(cmd_buffer, MESA_SHADER_COMPUTE,
+                                                base_work_group_id);
+   if (result != VK_SUCCESS) {
+      cmd_buffer->batch.status = result;
+      return;
+   }
+
+   struct anv_push_constants *push =
+      cmd_buffer->state.push_constants[MESA_SHADER_COMPUTE];
+   if (push->base_work_group_id[0] != baseGroupX ||
+       push->base_work_group_id[1] != baseGroupY ||
+       push->base_work_group_id[2] != baseGroupZ) {
+      push->base_work_group_id[0] = baseGroupX;
+      push->base_work_group_id[1] = baseGroupY;
+      push->base_work_group_id[2] = baseGroupZ;
+
+      cmd_buffer->state.push_constants_dirty |= VK_SHADER_STAGE_COMPUTE_BIT;
+   }
+}
+
 void genX(CmdDispatch)(
     VkCommandBuffer                             commandBuffer,
     uint32_t                                    x,
     uint32_t                                    y,
     uint32_t                                    z)
 {
+   genX(CmdDispatchBase)(commandBuffer, 0, 0, 0, x, y, z);
+}
+
+void genX(CmdDispatchBase)(
+    VkCommandBuffer                             commandBuffer,
+    uint32_t                                    baseGroupX,
+    uint32_t                                    baseGroupY,
+    uint32_t                                    baseGroupZ,
+    uint32_t                                    groupCountX,
+    uint32_t                                    groupCountY,
+    uint32_t                                    groupCountZ)
+{
    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
    struct anv_pipeline *pipeline = cmd_buffer->state.compute.base.pipeline;
    const struct brw_cs_prog_data *prog_data = get_cs_prog_data(pipeline);
+
+   anv_cmd_buffer_push_base_group_id(cmd_buffer, baseGroupX,
+                                     baseGroupY, baseGroupZ);
 
    if (anv_batch_has_error(&cmd_buffer->batch))
       return;
@@ -2970,9 +3094,9 @@ void genX(CmdDispatch)(
       struct anv_state state =
          anv_cmd_buffer_alloc_dynamic_state(cmd_buffer, 12, 4);
       uint32_t *sizes = state.map;
-      sizes[0] = x;
-      sizes[1] = y;
-      sizes[2] = z;
+      sizes[0] = groupCountX;
+      sizes[1] = groupCountY;
+      sizes[2] = groupCountZ;
       anv_state_flush(cmd_buffer->device, state);
       cmd_buffer->state.compute.num_workgroups = (struct anv_address) {
          .bo = &cmd_buffer->device->dynamic_state_pool.block_pool.bo,
@@ -2987,9 +3111,9 @@ void genX(CmdDispatch)(
       ggw.ThreadDepthCounterMaximum    = 0;
       ggw.ThreadHeightCounterMaximum   = 0;
       ggw.ThreadWidthCounterMaximum    = prog_data->threads - 1;
-      ggw.ThreadGroupIDXDimension      = x;
-      ggw.ThreadGroupIDYDimension      = y;
-      ggw.ThreadGroupIDZDimension      = z;
+      ggw.ThreadGroupIDXDimension      = groupCountX;
+      ggw.ThreadGroupIDYDimension      = groupCountY;
+      ggw.ThreadGroupIDZDimension      = groupCountZ;
       ggw.RightExecutionMask           = pipeline->cs_right_mask;
       ggw.BottomExecutionMask          = 0xffffffff;
    }
@@ -3013,6 +3137,8 @@ void genX(CmdDispatchIndirect)(
    struct anv_bo *bo = buffer->bo;
    uint32_t bo_offset = buffer->offset + offset;
    struct anv_batch *batch = &cmd_buffer->batch;
+
+   anv_cmd_buffer_push_base_group_id(cmd_buffer, 0, 0, 0);
 
 #if GEN_GEN == 7
    /* Linux 4.4 added command parser version 5 which allows the GPGPU
@@ -3398,8 +3524,13 @@ cmd_buffer_begin_subpass(struct anv_cmd_buffer *cmd_buffer,
             assert(iview->planes[0].isl.base_level == 0);
             assert(iview->planes[0].isl.base_array_layer == 0);
 
-            anv_image_ccs_op(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
-                             0, 0, 1, ISL_AUX_OP_FAST_CLEAR, false);
+            if (iview->image->samples == 1) {
+               anv_image_ccs_op(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                0, 0, 1, ISL_AUX_OP_FAST_CLEAR, false);
+            } else {
+               anv_image_mcs_op(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                                0, 1, ISL_AUX_OP_FAST_CLEAR, false);
+            }
             base_clear_layer++;
             clear_layer_count--;
 

@@ -94,7 +94,7 @@ blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
 #endif
 }
 
-#if GEN_GEN >= 7
+#if GEN_GEN >= 7 && GEN_GEN <= 10
 static struct blorp_address
 blorp_get_surface_base_address(struct blorp_batch *batch)
 {
@@ -166,6 +166,15 @@ blorp_alloc_vertex_buffer(struct blorp_batch *batch, uint32_t size,
       .buffer = brw->batch.state.bo,
       .offset = offset,
 
+      /* The VF cache designers apparently cut corners, and made the cache
+       * only consider the bottom 32 bits of memory addresses.  If you happen
+       * to have two vertex buffers which get placed exactly 4 GiB apart and
+       * use them in back-to-back draw calls, you can get collisions.  To work
+       * around this problem, we restrict vertex buffers to the low 32 bits of
+       * the address space.
+       */
+      .reloc_flags = RELOC_32BIT,
+
 #if GEN_GEN == 10
       .mocs = CNL_MOCS_WB,
 #elif GEN_GEN == 9
@@ -194,7 +203,8 @@ blorp_get_workaround_page(struct blorp_batch *batch)
 #endif
 
 static void
-blorp_flush_range(struct blorp_batch *batch, void *start, size_t size)
+blorp_flush_range(UNUSED struct blorp_batch *batch, UNUSED void *start,
+                  UNUSED size_t size)
 {
    /* All allocated states come from the batch which we will flush before we
     * submit it.  There's nothing for us to do here.
@@ -203,7 +213,8 @@ blorp_flush_range(struct blorp_batch *batch, void *start, size_t size)
 
 static void
 blorp_emit_urb_config(struct blorp_batch *batch,
-                      unsigned vs_entry_size, unsigned sf_entry_size)
+                      unsigned vs_entry_size,
+                      MAYBE_UNUSED unsigned sf_entry_size)
 {
    assert(batch->blorp->driver_ctx == batch->driver_batch);
    struct brw_context *brw = batch->driver_batch;

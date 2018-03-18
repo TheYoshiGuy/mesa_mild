@@ -13,8 +13,7 @@ COMMON_FILES = \
 	common/gen_debug.h \
 	common/gen_decoder.c \
 	common/gen_decoder.h \
-	common/gen_device_info.c \
-	common/gen_device_info.h \
+	common/gen_defines.h \
 	common/gen_l3_config.c \
 	common/gen_l3_config.h \
 	common/gen_urb_config.c \
@@ -123,6 +122,10 @@ COMPILER_FILES = \
 COMPILER_GENERATED_FILES = \
 	compiler/brw_nir_trig_workarounds.c
 
+DEV_FILES = \
+	dev/gen_device_info.c \
+	dev/gen_device_info.h
+
 GENXML_XML_FILES = \
 	genxml/gen4.xml \
 	genxml/gen45.xml \
@@ -223,6 +226,7 @@ VULKAN_FILES := \
 	vulkan/anv_image.c \
 	vulkan/anv_intel.c \
 	vulkan/anv_nir.h \
+	vulkan/anv_nir_add_base_work_group_id.c \
 	vulkan/anv_nir_apply_pipeline_layout.c \
 	vulkan/anv_nir_lower_input_attachments.c \
 	vulkan/anv_nir_lower_multiview.c \

@@ -367,7 +367,6 @@ struct r600_shader_ctx {
 	unsigned                                tess_input_info; /* temp with tess input offsets */
 	unsigned                                tess_output_info; /* temp with tess input offsets */
 	unsigned                                thread_id_gpr; /* temp with thread id calculated for images */
-	bool thread_id_gpr_loaded;
 };
 
 struct r600_shader_tgsi_instruction {
@@ -378,7 +377,7 @@ struct r600_shader_tgsi_instruction {
 static int emit_gs_ring_writes(struct r600_shader_ctx *ctx, const struct pipe_stream_output_info *so, int stream, bool ind);
 static const struct r600_shader_tgsi_instruction r600_shader_tgsi_instruction[], eg_shader_tgsi_instruction[], cm_shader_tgsi_instruction[];
 static int tgsi_helper_tempx_replicate(struct r600_shader_ctx *ctx);
-static inline void callstack_push(struct r600_shader_ctx *ctx, unsigned reason);
+static inline int callstack_push(struct r600_shader_ctx *ctx, unsigned reason);
 static void fc_pushlevel(struct r600_shader_ctx *ctx, int type);
 static int tgsi_else(struct r600_shader_ctx *ctx);
 static int tgsi_endif(struct r600_shader_ctx *ctx);
@@ -393,6 +392,15 @@ static void r600_bytecode_src(struct r600_bytecode_alu_src *bc_src,
 			unsigned chan);
 static int do_lds_fetch_values(struct r600_shader_ctx *ctx, unsigned temp_reg,
 			       unsigned dst_reg, unsigned mask);
+
+static bool ctx_needs_stack_workaround_8xx(struct r600_shader_ctx *ctx)
+{
+	if (ctx->bc->family == CHIP_HEMLOCK ||
+	    ctx->bc->family == CHIP_CYPRESS ||
+	    ctx->bc->family == CHIP_JUNIPER)
+		return false;
+	return true;
+}
 
 static int tgsi_last_instruction(unsigned writemask)
 {
@@ -3279,9 +3287,6 @@ static int load_thread_id_gpr(struct r600_shader_ctx *ctx)
 	struct r600_bytecode_alu alu;
 	int r;
 
-	if (ctx->thread_id_gpr_loaded)
-		return 0;
-
 	memset(&alu, 0, sizeof(struct r600_bytecode_alu));
 	alu.op = ALU_OP1_MBCNT_32LO_ACCUM_PREV_INT;
 	alu.dst.sel = ctx->temp_reg;
@@ -3326,7 +3331,6 @@ static int load_thread_id_gpr(struct r600_shader_ctx *ctx)
 			   ctx->temp_reg, 0);
 	if (r)
 		return r;
-	ctx->thread_id_gpr_loaded = true;
 	return 0;
 }
 
@@ -3434,12 +3438,12 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 	ctx.gs_next_vertex = 0;
 	ctx.gs_stream_output_info = &so;
 
+	ctx.thread_id_gpr = -1;
 	ctx.face_gpr = -1;
 	ctx.fixed_pt_position_gpr = -1;
 	ctx.fragcoord_input = -1;
 	ctx.colors_used = 0;
 	ctx.clip_vertex_write = 0;
-	ctx.thread_id_gpr_loaded = false;
 
 	ctx.helper_invoc_reg = -1;
 	ctx.cs_block_size_reg = -1;
@@ -3573,7 +3577,6 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 
 	if (shader->uses_images) {
 		ctx.thread_id_gpr = ++regno;
-		ctx.thread_id_gpr_loaded = false;
 	}
 	ctx.temp_reg = ++regno;
 
@@ -3615,6 +3618,12 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 
 	if (shader->vs_as_gs_a)
 		vs_add_primid_output(&ctx, key.vs.prim_id_out);
+
+	if (ctx.thread_id_gpr != -1) {
+		r = load_thread_id_gpr(&ctx);
+		if (r)
+			return r;
+	}
 
 	if (ctx.type == PIPE_SHADER_TESS_EVAL)
 		r600_fetch_tess_io_info(&ctx);
@@ -3768,7 +3777,7 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 				alu.dst.sel = shader->input[ctx.fragcoord_input].gpr;
 				alu.dst.chan = j;
 				alu.dst.write = (j == 3);
-				alu.last = 1;
+				alu.last = (j == 3);
 				if ((r = r600_bytecode_add_alu(ctx.bc, &alu)))
 					return r;
 			}
@@ -7067,33 +7076,42 @@ static int tgsi_helper_copy(struct r600_shader_ctx *ctx, struct tgsi_full_instru
 }
 
 static int tgsi_make_src_for_op3(struct r600_shader_ctx *ctx,
-                                 unsigned temp, int chan,
+                                 unsigned writemask,
                                  struct r600_bytecode_alu_src *bc_src,
                                  const struct r600_shader_src *shader_src)
 {
 	struct r600_bytecode_alu alu;
-	int r;
+	int i, r;
+	int lasti = tgsi_last_instruction(writemask);
+	int temp_reg = 0;
 
-	r600_bytecode_src(bc_src, shader_src, chan);
+	r600_bytecode_src(&bc_src[0], shader_src, 0);
+	r600_bytecode_src(&bc_src[1], shader_src, 1);
+	r600_bytecode_src(&bc_src[2], shader_src, 2);
+	r600_bytecode_src(&bc_src[3], shader_src, 3);
 
-	/* op3 operands don't support abs modifier */
 	if (bc_src->abs) {
-		assert(temp!=0);      /* we actually need the extra register, make sure it is allocated. */
-		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
-		alu.op = ALU_OP1_MOV;
-		alu.dst.sel = temp;
-		alu.dst.chan = chan;
-		alu.dst.write = 1;
+		temp_reg = r600_get_temp(ctx);
 
-		alu.src[0] = *bc_src;
-		alu.last = true; // sufficient?
-		r = r600_bytecode_add_alu(ctx->bc, &alu);
-		if (r)
-			return r;
-
-		memset(bc_src, 0, sizeof(*bc_src));
-		bc_src->sel = temp;
-		bc_src->chan = chan;
+		for (i = 0; i < lasti + 1; i++) {
+			if (!(writemask & (1 << i)))
+				continue;
+			memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+			alu.op = ALU_OP1_MOV;
+			alu.dst.sel = temp_reg;
+			alu.dst.chan = i;
+			alu.dst.write = 1;
+			alu.src[0] = bc_src[i];
+			if (i == lasti) {
+				alu.last = 1;
+			}
+			r = r600_bytecode_add_alu(ctx->bc, &alu);
+			if (r)
+				return r;
+			memset(&bc_src[i], 0, sizeof(*bc_src));
+			bc_src[i].sel = temp_reg;
+			bc_src[i].chan = i;
+		}
 	}
 	return 0;
 }
@@ -7102,9 +7120,9 @@ static int tgsi_op3_dst(struct r600_shader_ctx *ctx, int dst)
 {
 	struct tgsi_full_instruction *inst = &ctx->parse.FullToken.FullInstruction;
 	struct r600_bytecode_alu alu;
+	struct r600_bytecode_alu_src srcs[4][4];
 	int i, j, r;
 	int lasti = tgsi_last_instruction(inst->Dst[0].Register.WriteMask);
-	int temp_regs[4];
 	unsigned op = ctx->inst_info->op;
 
 	if (op == ALU_OP3_MULADD_IEEE &&
@@ -7112,10 +7130,12 @@ static int tgsi_op3_dst(struct r600_shader_ctx *ctx, int dst)
 		op = ALU_OP3_MULADD;
 
 	for (j = 0; j < inst->Instruction.NumSrcRegs; j++) {
-		temp_regs[j] = 0;
-		if (ctx->src[j].abs)
-			temp_regs[j] = r600_get_temp(ctx);
+		r = tgsi_make_src_for_op3(ctx, inst->Dst[0].Register.WriteMask,
+					  srcs[j], &ctx->src[j]);
+		if (r)
+			return r;
 	}
+
 	for (i = 0; i < lasti + 1; i++) {
 		if (!(inst->Dst[0].Register.WriteMask & (1 << i)))
 			continue;
@@ -7123,9 +7143,7 @@ static int tgsi_op3_dst(struct r600_shader_ctx *ctx, int dst)
 		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
 		alu.op = op;
 		for (j = 0; j < inst->Instruction.NumSrcRegs; j++) {
-			r = tgsi_make_src_for_op3(ctx, temp_regs[j], i, &alu.src[j], &ctx->src[j]);
-			if (r)
-				return r;
+			alu.src[j] = srcs[j][i];
 		}
 
 		if (dst == -1) {
@@ -8650,10 +8668,6 @@ static int tgsi_load_rat(struct r600_shader_ctx *ctx)
 	unsigned rat_index_mode;
 	unsigned immed_base;
 
-	r = load_thread_id_gpr(ctx);
-	if (r)
-		return r;
-
 	rat_index_mode = inst->Src[0].Indirect.Index == 2 ? 2 : 0; // CF_INDEX_1 : CF_INDEX_NONE
 
 	immed_base = R600_IMAGE_IMMED_RESOURCE_OFFSET;
@@ -8980,10 +8994,6 @@ static int tgsi_atomic_op_rat(struct r600_shader_ctx *ctx)
 
 	immed_base = R600_IMAGE_IMMED_RESOURCE_OFFSET;
 	rat_base = ctx->shader->rat_base;
-
-	r = load_thread_id_gpr(ctx);
-	if (r)
-		return r;
 
         if (inst->Src[0].Register.File == TGSI_FILE_BUFFER) {
 		immed_base += ctx->info.file_count[TGSI_FILE_IMAGE];
@@ -9385,7 +9395,8 @@ static int tgsi_lrp(struct r600_shader_ctx *ctx)
 	struct tgsi_full_instruction *inst = &ctx->parse.FullToken.FullInstruction;
 	struct r600_bytecode_alu alu;
 	unsigned lasti = tgsi_last_instruction(inst->Dst[0].Register.WriteMask);
-	unsigned i, temp_regs[2];
+	struct r600_bytecode_alu_src srcs[2][4];
+	unsigned i;
 	int r;
 
 	/* optimize if it's just an equal balance */
@@ -9455,14 +9466,13 @@ static int tgsi_lrp(struct r600_shader_ctx *ctx)
 	}
 
 	/* src0 * src1 + (1 - src0) * src2 */
-        if (ctx->src[0].abs)
-		temp_regs[0] = r600_get_temp(ctx);
-	else
-		temp_regs[0] = 0;
-	if (ctx->src[1].abs)
-		temp_regs[1] = r600_get_temp(ctx);
-	else
-		temp_regs[1] = 0;
+
+	for (i = 0; i < 2; i++) {
+		r = tgsi_make_src_for_op3(ctx, inst->Dst[0].Register.WriteMask,
+					  srcs[i], &ctx->src[i]);
+		if (r)
+			return r;
+	}
 
 	for (i = 0; i < lasti + 1; i++) {
 		if (!(inst->Dst[0].Register.WriteMask & (1 << i)))
@@ -9471,12 +9481,8 @@ static int tgsi_lrp(struct r600_shader_ctx *ctx)
 		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
 		alu.op = ALU_OP3_MULADD;
 		alu.is_op3 = 1;
-		r = tgsi_make_src_for_op3(ctx, temp_regs[0], i, &alu.src[0], &ctx->src[0]);
-		if (r)
-			return r;
-		r = tgsi_make_src_for_op3(ctx, temp_regs[1], i, &alu.src[1], &ctx->src[1]);
-		if (r)
-			return r;
+		alu.src[0] = srcs[0][i];
+		alu.src[1] = srcs[1][i];
 		alu.src[2].sel = ctx->temp_reg;
 		alu.src[2].chan = i;
 
@@ -9498,7 +9504,8 @@ static int tgsi_cmp(struct r600_shader_ctx *ctx)
 	struct r600_bytecode_alu alu;
 	int i, r, j;
 	int lasti = tgsi_last_instruction(inst->Dst[0].Register.WriteMask);
-	int temp_regs[3];
+	struct r600_bytecode_alu_src srcs[3][4];
+
 	unsigned op;
 
 	if (ctx->src[0].abs && ctx->src[0].neg) {
@@ -9510,9 +9517,10 @@ static int tgsi_cmp(struct r600_shader_ctx *ctx)
 	}
 
 	for (j = 0; j < inst->Instruction.NumSrcRegs; j++) {
-		temp_regs[j] = 0;
-		if (ctx->src[j].abs)
-			temp_regs[j] = r600_get_temp(ctx);
+		r = tgsi_make_src_for_op3(ctx, inst->Dst[0].Register.WriteMask,
+					  srcs[j], &ctx->src[j]);
+		if (r)
+			return r;
 	}
 
 	for (i = 0; i < lasti + 1; i++) {
@@ -9521,15 +9529,10 @@ static int tgsi_cmp(struct r600_shader_ctx *ctx)
 
 		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
 		alu.op = op;
-		r = tgsi_make_src_for_op3(ctx, temp_regs[0], i, &alu.src[0], &ctx->src[0]);
-		if (r)
-			return r;
-		r = tgsi_make_src_for_op3(ctx, temp_regs[2], i, &alu.src[1], &ctx->src[2]);
-		if (r)
-			return r;
-		r = tgsi_make_src_for_op3(ctx, temp_regs[1], i, &alu.src[2], &ctx->src[1]);
-		if (r)
-			return r;
+		alu.src[0] = srcs[0][i];
+		alu.src[1] = srcs[2][i];
+		alu.src[2] = srcs[1][i];
+
 		tgsi_dst(ctx, &inst->Dst[0], i, &alu.dst);
 		alu.dst.chan = i;
 		alu.dst.write = 1;
@@ -10176,7 +10179,7 @@ static int pops(struct r600_shader_ctx *ctx, int pops)
 	return 0;
 }
 
-static inline void callstack_update_max_depth(struct r600_shader_ctx *ctx,
+static inline int callstack_update_max_depth(struct r600_shader_ctx *ctx,
                                               unsigned reason)
 {
 	struct r600_stack_info *stack = &ctx->bc->stack;
@@ -10194,7 +10197,7 @@ static inline void callstack_update_max_depth(struct r600_shader_ctx *ctx,
 		/* pre-r8xx: if any non-WQM PUSH instruction is invoked, 2 elements on
 		 * the stack must be reserved to hold the current active/continue
 		 * masks */
-		if (reason == FC_PUSH_VPM) {
+		if (reason == FC_PUSH_VPM || stack->push > 0) {
 			elements += 2;
 		}
 		break;
@@ -10220,7 +10223,7 @@ static inline void callstack_update_max_depth(struct r600_shader_ctx *ctx,
 		 *    NOTE: it seems we also need to reserve additional element in some
 		 *    other cases, e.g. when we have 4 levels of PUSH_VPM in the shader,
 		 *    then STACK_SIZE should be 2 instead of 1 */
-		if (reason == FC_PUSH_VPM) {
+		if (reason == FC_PUSH_VPM || stack->push > 0) {
 			elements += 1;
 		}
 		break;
@@ -10239,6 +10242,7 @@ static inline void callstack_update_max_depth(struct r600_shader_ctx *ctx,
 
 	if (entries > stack->max_entries)
 		stack->max_entries = entries;
+	return elements;
 }
 
 static inline void callstack_pop(struct r600_shader_ctx *ctx, unsigned reason)
@@ -10262,7 +10266,7 @@ static inline void callstack_pop(struct r600_shader_ctx *ctx, unsigned reason)
 	}
 }
 
-static inline void callstack_push(struct r600_shader_ctx *ctx, unsigned reason)
+static inline int callstack_push(struct r600_shader_ctx *ctx, unsigned reason)
 {
 	switch (reason) {
 	case FC_PUSH_VPM:
@@ -10270,6 +10274,7 @@ static inline void callstack_push(struct r600_shader_ctx *ctx, unsigned reason)
 		break;
 	case FC_PUSH_WQM:
 		++ctx->bc->stack.push_wqm;
+		break;
 	case FC_LOOP:
 		++ctx->bc->stack.loop;
 		break;
@@ -10277,7 +10282,7 @@ static inline void callstack_push(struct r600_shader_ctx *ctx, unsigned reason)
 		assert(0);
 	}
 
-	callstack_update_max_depth(ctx, reason);
+	return callstack_update_max_depth(ctx, reason);
 }
 
 static void fc_set_mid(struct r600_shader_ctx *ctx, int fc_sp)
@@ -10361,12 +10366,25 @@ static int emit_if(struct r600_shader_ctx *ctx, int opcode,
 		   struct r600_bytecode_alu_src *src)
 {
 	int alu_type = CF_OP_ALU_PUSH_BEFORE;
+	bool needs_workaround = false;
+	int elems = callstack_push(ctx, FC_PUSH_VPM);
+
+	if (ctx->bc->chip_class == CAYMAN && ctx->bc->stack.loop > 1)
+		needs_workaround = true;
+
+	if (ctx->bc->chip_class == EVERGREEN && ctx_needs_stack_workaround_8xx(ctx)) {
+		unsigned dmod1 = (elems - 1) % ctx->bc->stack.entry_size;
+		unsigned dmod2 = (elems) % ctx->bc->stack.entry_size;
+
+		if (elems && (!dmod1 || !dmod2))
+			needs_workaround = true;
+	}
 
 	/* There is a hardware bug on Cayman where a BREAK/CONTINUE followed by
 	 * LOOP_STARTxxx for nested loops may put the branch stack into a state
 	 * such that ALU_PUSH_BEFORE doesn't work as expected. Workaround this
 	 * by replacing the ALU_PUSH_BEFORE with a PUSH + ALU */
-	if (ctx->bc->chip_class == CAYMAN && ctx->bc->stack.loop > 1) {
+	if (needs_workaround) {
 		r600_bytecode_add_cfinst(ctx->bc, CF_OP_PUSH);
 		ctx->bc->cf_last->cf_addr = ctx->bc->cf_last->id + 2;
 		alu_type = CF_OP_ALU;
@@ -10378,7 +10396,6 @@ static int emit_if(struct r600_shader_ctx *ctx, int opcode,
 
 	fc_pushlevel(ctx, FC_IF);
 
-	callstack_push(ctx, FC_PUSH_VPM);
 	return 0;
 }
 
@@ -10409,17 +10426,22 @@ static int tgsi_else(struct r600_shader_ctx *ctx)
 
 static int tgsi_endif(struct r600_shader_ctx *ctx)
 {
+	int offset = 2;
 	pops(ctx, 1);
 	if (ctx->bc->fc_stack[ctx->bc->fc_sp - 1].type != FC_IF) {
 		R600_ERR("if/endif unbalanced in shader\n");
 		return -1;
 	}
 
+	/* ALU_EXTENDED needs 4 DWords instead of two, adjust jump target offset accordingly */
+	if (ctx->bc->cf_last->eg_alu_extended)
+			offset += 2;
+
 	if (ctx->bc->fc_stack[ctx->bc->fc_sp - 1].mid == NULL) {
-		ctx->bc->fc_stack[ctx->bc->fc_sp - 1].start->cf_addr = ctx->bc->cf_last->id + 2;
+		ctx->bc->fc_stack[ctx->bc->fc_sp - 1].start->cf_addr = ctx->bc->cf_last->id + offset;
 		ctx->bc->fc_stack[ctx->bc->fc_sp - 1].start->pop_count = 1;
 	} else {
-		ctx->bc->fc_stack[ctx->bc->fc_sp - 1].mid[0]->cf_addr = ctx->bc->cf_last->id + 2;
+		ctx->bc->fc_stack[ctx->bc->fc_sp - 1].mid[0]->cf_addr = ctx->bc->cf_last->id + offset;
 	}
 	fc_poplevel(ctx);
 
@@ -10737,6 +10759,7 @@ static int tgsi_clock(struct r600_shader_ctx *ctx)
 	alu.op = ALU_OP1_MOV;
 	tgsi_dst(ctx, &inst->Dst[0], 1, &alu.dst);
 	alu.src[0].sel = EG_V_SQ_ALU_SRC_TIME_HI;
+	alu.last = 1;
 	r = r600_bytecode_add_alu(ctx->bc, &alu);
 	if (r)
 		return r;

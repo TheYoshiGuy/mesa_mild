@@ -217,11 +217,17 @@ bool si_alloc_resource(struct si_screen *sscreen,
 	 * the others are using it. */
 	old_buf = res->buf;
 	res->buf = new_buf; /* should be atomic */
+	res->gpu_address = sscreen->ws->buffer_get_virtual_address(res->buf);
 
-	if (sscreen->info.has_virtual_memory)
-		res->gpu_address = sscreen->ws->buffer_get_virtual_address(res->buf);
-	else
-		res->gpu_address = 0;
+	if (res->flags & RADEON_FLAG_32BIT) {
+		uint64_t start = res->gpu_address;
+		uint64_t last = start + res->bo_size - 1;
+		(void)start;
+		(void)last;
+
+		assert((start >> 32) == sscreen->info.address32_hi);
+		assert((last >> 32) == sscreen->info.address32_hi);
+	}
 
 	pb_reference(&old_buf, NULL);
 
@@ -674,12 +680,7 @@ si_buffer_from_user_memory(struct pipe_screen *screen,
 		return NULL;
 	}
 
-	if (sscreen->info.has_virtual_memory)
-		rbuffer->gpu_address =
-			ws->buffer_get_virtual_address(rbuffer->buf);
-	else
-		rbuffer->gpu_address = 0;
-
+	rbuffer->gpu_address = ws->buffer_get_virtual_address(rbuffer->buf);
 	rbuffer->vram_usage = 0;
 	rbuffer->gart_usage = templ->width0;
 

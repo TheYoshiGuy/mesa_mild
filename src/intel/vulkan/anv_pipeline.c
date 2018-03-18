@@ -138,11 +138,18 @@ anv_shader_compile_to_nir(struct anv_pipeline *pipeline,
          .float64 = device->instance->physicalDevice.info.gen >= 8,
          .int64 = device->instance->physicalDevice.info.gen >= 8,
          .tessellation = true,
+         .device_group = true,
          .draw_parameters = true,
          .image_write_without_format = true,
          .multiview = true,
          .variable_pointers = true,
          .storage_16bit = device->instance->physicalDevice.info.gen >= 8,
+         .subgroup_arithmetic = true,
+         .subgroup_basic = true,
+         .subgroup_ballot = true,
+         .subgroup_quad = true,
+         .subgroup_shuffle = true,
+         .subgroup_vote = true,
       },
    };
 
@@ -1041,6 +1048,8 @@ anv_pipeline_compile_cs(struct anv_pipeline *pipeline,
          ralloc_free(mem_ctx);
          return vk_error(VK_ERROR_OUT_OF_HOST_MEMORY);
       }
+
+      NIR_PASS_V(nir, anv_nir_add_base_work_group_id, &prog_data);
 
       anv_fill_binding_table(&prog_data.base, 1);
 

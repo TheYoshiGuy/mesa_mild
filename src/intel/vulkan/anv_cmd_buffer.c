@@ -688,6 +688,12 @@ anv_push_constant_value(struct anv_push_constants *data, uint32_t param)
       switch (param) {
       case BRW_PARAM_BUILTIN_ZERO:
          return 0;
+      case BRW_PARAM_BUILTIN_BASE_WORK_GROUP_ID_X:
+         return data->base_work_group_id[0];
+      case BRW_PARAM_BUILTIN_BASE_WORK_GROUP_ID_Y:
+         return data->base_work_group_id[1];
+      case BRW_PARAM_BUILTIN_BASE_WORK_GROUP_ID_Z:
+         return data->base_work_group_id[2];
       default:
          unreachable("Invalid param builtin");
       }
@@ -875,10 +881,10 @@ VkResult anv_ResetCommandPool(
    return VK_SUCCESS;
 }
 
-void anv_TrimCommandPoolKHR(
+void anv_TrimCommandPool(
     VkDevice                                    device,
     VkCommandPool                               commandPool,
-    VkCommandPoolTrimFlagsKHR                   flags)
+    VkCommandPoolTrimFlags                      flags)
 {
    /* Nothing for us to do here.  Our pools stay pretty tidy. */
 }
@@ -1026,7 +1032,7 @@ void anv_CmdPushDescriptorSetKHR(
 
 void anv_CmdPushDescriptorSetWithTemplateKHR(
     VkCommandBuffer                             commandBuffer,
-    VkDescriptorUpdateTemplateKHR               descriptorUpdateTemplate,
+    VkDescriptorUpdateTemplate                  descriptorUpdateTemplate,
     VkPipelineLayout                            _layout,
     uint32_t                                    _set,
     const void*                                 pData)
@@ -1061,4 +1067,11 @@ void anv_CmdPushDescriptorSetWithTemplateKHR(
 
    anv_cmd_buffer_bind_descriptor_set(cmd_buffer, template->bind_point,
                                       layout, _set, set, NULL, NULL);
+}
+
+void anv_CmdSetDeviceMask(
+    VkCommandBuffer                             commandBuffer,
+    uint32_t                                    deviceMask)
+{
+   /* No-op */
 }

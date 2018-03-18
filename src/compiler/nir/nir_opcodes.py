@@ -352,6 +352,34 @@ for i in xrange(1, 5):
    for j in xrange(1, 5):
       unop_horiz("fnoise{0}_{1}".format(i, j), i, tfloat, j, tfloat, "0.0f")
 
+
+# AMD_gcn_shader extended instructions
+unop_horiz("cube_face_coord", 2, tfloat32, 3, tfloat32, """
+dst.x = dst.y = 0.0;
+float absX = fabs(src0.x);
+float absY = fabs(src0.y);
+float absZ = fabs(src0.z);
+if (src0.x >= 0 && absX >= absY && absX >= absZ) { dst.x = -src0.y; dst.y = -src0.z; }
+if (src0.x < 0 && absX >= absY && absX >= absZ) { dst.x = -src0.y; dst.y = src0.z; }
+if (src0.y >= 0 && absY >= absX && absY >= absZ) { dst.x = src0.z; dst.y = src0.x; }
+if (src0.y < 0 && absY >= absX && absY >= absZ) { dst.x = -src0.z; dst.y = src0.x; }
+if (src0.z >= 0 && absZ >= absX && absZ >= absY) { dst.x = -src0.y; dst.y = src0.x; }
+if (src0.z < 0 && absZ >= absX && absZ >= absY) { dst.x = -src0.y; dst.y = -src0.x; }
+""")
+
+unop_horiz("cube_face_index", 1, tfloat32, 3, tfloat32, """
+float absX = fabs(src0.x);
+float absY = fabs(src0.y);
+float absZ = fabs(src0.z);
+if (src0.x >= 0 && absX >= absY && absX >= absZ) dst.x = 0;
+if (src0.x < 0 && absX >= absY && absX >= absZ) dst.x = 1;
+if (src0.y >= 0 && absY >= absX && absY >= absZ) dst.x = 2;
+if (src0.y < 0 && absY >= absX && absY >= absZ) dst.x = 3;
+if (src0.z >= 0 && absZ >= absX && absZ >= absY) dst.x = 4;
+if (src0.z < 0 && absZ >= absX && absZ >= absY) dst.x = 5;
+""")
+
+
 def binop_convert(name, out_type, in_type, alg_props, const_expr):
    opcode(name, 0, out_type, [0, 0], [in_type, in_type], alg_props, const_expr)
 
@@ -404,8 +432,8 @@ binop("umul_high", tuint32, commutative,
       "(uint32_t)(((uint64_t) src0 * (uint64_t) src1) >> 32)")
 
 binop("fdiv", tfloat, "", "src0 / src1")
-binop("idiv", tint, "", "src0 / src1")
-binop("udiv", tuint, "", "src0 / src1")
+binop("idiv", tint, "", "src1 == 0 ? 0 : (src0 / src1)")
+binop("udiv", tuint, "", "src1 == 0 ? 0 : (src0 / src1)")
 
 # returns a boolean representing the carry resulting from the addition of
 # the two unsigned arguments.

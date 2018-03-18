@@ -95,6 +95,12 @@ event TessPrimCount
     uint64_t primCount;
 };
 
+event RasterTileCount
+{
+    uint32_t drawId;
+    uint64_t rasterTiles;
+};
+
 event GSPrimInfo
 {
     uint64_t inputPrimCount;
@@ -117,36 +123,30 @@ event ClipInfoEvent
 event DrawInstancedEvent
 {
     uint32_t drawId;
-    AR_DRAW_TYPE type;
     uint32_t topology;
     uint32_t numVertices;
     int32_t  startVertex;
     uint32_t numInstances;
     uint32_t startInstance;
+    uint32_t tsEnable;
+    uint32_t gsEnable;
+    uint32_t soEnable;
+    uint32_t soTopology;
+    uint32_t splitId; // Split draw count or id.
 };
 
 event DrawIndexedInstancedEvent
 {
     uint32_t drawId;
-    AR_DRAW_TYPE type;
     uint32_t topology;
     uint32_t numIndices;
     int32_t  indexOffset;
     int32_t  baseVertex;
     uint32_t numInstances;
     uint32_t startInstance;
-};
-
-///@brief API Stat: Split draw event for DrawInstanced. In certain cases, Rasty can split draws up into smaller draws.
-event DrawInstancedSplitEvent
-{
-    uint32_t drawId;
-    AR_DRAW_TYPE type;
-};
-
-///@brief API Stat: Split draw event for DrawIndexedInstanced.
-event DrawIndexedInstancedSplitEvent
-{
-    uint32_t drawId;
-    AR_DRAW_TYPE type;
+    uint32_t tsEnable;
+    uint32_t gsEnable;
+    uint32_t soEnable;
+    uint32_t soTopology;
+    uint32_t splitId; // Split draw count or id.
 };

@@ -43,12 +43,8 @@ struct ac_shader_binary;
 #define RADEON_LLVM_MAX_INPUTS 32 * 4
 #define RADEON_LLVM_MAX_OUTPUTS 32 * 4
 
-#define RADEON_LLVM_INITIAL_CF_DEPTH 4
-
 #define RADEON_LLVM_MAX_SYSTEM_VALUES 11
 #define RADEON_LLVM_MAX_ADDRS 16
-
-struct si_llvm_flow;
 
 struct si_shader_context {
 	struct lp_build_tgsi_context bld_base;
@@ -97,10 +93,6 @@ struct si_shader_context {
 
 	LLVMValueRef *imms;
 	unsigned imms_num;
-
-	struct si_llvm_flow *flow;
-	unsigned flow_depth;
-	unsigned flow_depth_max;
 
 	struct lp_build_if_state merged_wrap_if_state;
 
@@ -227,8 +219,6 @@ si_shader_context_from_abi(struct ac_shader_abi *abi)
 	return container_of(abi, ctx, abi);
 }
 
-void si_llvm_add_attribute(LLVMValueRef F, const char *name, int value);
-
 unsigned si_llvm_compile(LLVMModuleRef M, struct ac_shader_binary *binary,
 			 LLVMTargetMachineRef tm,
 			 struct pipe_debug_callback *debug);
@@ -267,6 +257,8 @@ LLVMValueRef si_llvm_emit_fetch(struct lp_build_tgsi_context *bld_base,
 				const struct tgsi_full_src_register *reg,
 				enum tgsi_opcode_type type,
 				unsigned swizzle);
+
+void si_llvm_emit_kill(struct ac_shader_abi *abi, LLVMValueRef visible);
 
 LLVMValueRef si_nir_load_input_tes(struct ac_shader_abi *abi,
 				   LLVMTypeRef type,
@@ -336,14 +328,5 @@ void si_llvm_load_input_fs(
 	LLVMValueRef out[4]);
 
 bool si_nir_build_llvm(struct si_shader_context *ctx, struct nir_shader *nir);
-
-LLVMValueRef si_nir_load_input_gs(struct ac_shader_abi *abi,
-				  unsigned location,
-				  unsigned driver_location,
-				  unsigned component,
-				  unsigned num_components,
-				  unsigned vertex_index,
-				  unsigned const_index,
-				  LLVMTypeRef type);
 
 #endif

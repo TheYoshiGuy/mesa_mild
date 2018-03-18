@@ -1333,7 +1333,7 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                                 // But, we know that elements must be aligned for FETCH. :)
                                 // Right shift the offset by a bit and then scale by 2 to remove the sign extension.
                                 Value *shiftedOffsets16 = LSHR(vOffsets16, 1);
-                                pVtxSrc2[currentVertexElement++] = GATHERPS_16(gatherSrc16, pStreamBase, shiftedOffsets16, vGatherMask16, 2);
+                                pVtxSrc2[currentVertexElement++] = GATHERPS_16(gatherSrc16, pStreamBaseGFX, shiftedOffsets16, vGatherMask16, 2);
                             }
                             else
                             {
@@ -1350,9 +1350,6 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                                 currentVertexElement = 0;
                             }
                         }
-
-                        // offset base to the next component in the vertex to gather
-                        pStreamBase = GEP(pStreamBase, C((char)4));
 #else
                         if (isComponentEnabled(compMask, i))
                         {
@@ -1383,11 +1380,11 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
                                 currentVertexElement = 0;
                             }
                         }
+#endif
 
                         // offset base to the next component in the vertex to gather
                         pStreamBase = GEP(pStreamBase, C((char)4));
                         pStreamBaseGFX = ADD(pStreamBaseGFX, C((int64_t)4));
-#endif
                     }
                 }
                     break;
@@ -1830,15 +1827,11 @@ Value* FetchJit::GetSimdValid16bitIndices(Value* pIndices, Value* pLastIndex)
     Value* pZeroIndex = ALLOCA(mInt16Ty);
     STORE(C((uint16_t)0), pZeroIndex);
 
-    pLastIndex = TRANSLATE_ADDRESS(pLastIndex);
-
     // Load a SIMD of index pointers
     for(int64_t lane = 0; lane < mVWidth; lane++)
     {
         // Calculate the address of the requested index
         Value *pIndex = GEP(pIndices, C(lane));
-
-        pIndex = TRANSLATE_ADDRESS(pIndex);
 
         // check if the address is less than the max index, 
         Value* mask = ICMP_ULT(pIndex, pLastIndex);
@@ -1881,7 +1874,7 @@ Value* FetchJit::GetSimdValid32bitIndices(Value* pIndices, Value* pLastIndex)
     //     vIndexMask    -1-1-1-1 0 0 0 0 : offsets < max pass
     //     vLoadedIndices 0 1 2 3 0 0 0 0 : offsets >= max masked to 0
     Value* vMaxIndex = VBROADCAST(numIndicesLeft);
-    Value* vIndexMask = VPCMPGTD(vMaxIndex,vIndexOffsets);
+    Value* vIndexMask = VPCMPGTD(vMaxIndex, vIndexOffsets);
 
     // VMASKLOAD takes an *i8 src pointer
     pIndices = BITCAST(pIndices,PointerType::get(mInt8Ty,0));

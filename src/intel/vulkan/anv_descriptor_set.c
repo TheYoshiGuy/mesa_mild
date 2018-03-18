@@ -35,6 +35,51 @@
  * Descriptor set layouts.
  */
 
+void anv_GetDescriptorSetLayoutSupport(
+    VkDevice                                    device,
+    const VkDescriptorSetLayoutCreateInfo*      pCreateInfo,
+    VkDescriptorSetLayoutSupport*               pSupport)
+{
+   uint32_t surface_count[MESA_SHADER_STAGES] = { 0, };
+
+   for (uint32_t b = 0; b <= pCreateInfo->bindingCount; b++) {
+      const VkDescriptorSetLayoutBinding *binding = &pCreateInfo->pBindings[b];
+
+      switch (binding->descriptorType) {
+      case VK_DESCRIPTOR_TYPE_SAMPLER:
+         /* There is no real limit on samplers */
+         break;
+
+      case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+         if (binding->pImmutableSamplers) {
+            for (uint32_t i = 0; i < binding->descriptorCount; i++) {
+               ANV_FROM_HANDLE(anv_sampler, sampler,
+                               binding->pImmutableSamplers[i]);
+               anv_foreach_stage(s, binding->stageFlags)
+                  surface_count[s] += sampler->n_planes;
+            }
+         }
+         break;
+
+      default:
+         anv_foreach_stage(s, binding->stageFlags)
+            surface_count[s] += binding->descriptorCount;
+         break;
+      }
+   }
+
+   bool supported = true;
+   for (unsigned s = 0; s < MESA_SHADER_STAGES; s++) {
+      /* Our maximum binding table size is 250 and we need to reserve 8 for
+       * render targets.  240 is a nice round number.
+       */
+      if (surface_count[s] >= 240)
+         supported = false;
+   }
+
+   pSupport->supported = supported;
+}
+
 VkResult anv_CreateDescriptorSetLayout(
     VkDevice                                    _device,
     const VkDescriptorSetLayoutCreateInfo*      pCreateInfo,
@@ -460,7 +505,7 @@ anv_descriptor_set_create(struct anv_device *device,
       if (pool->free_list != EMPTY) {
          return vk_error(VK_ERROR_FRAGMENTED_POOL);
       } else {
-         return vk_error(VK_ERROR_OUT_OF_POOL_MEMORY_KHR);
+         return vk_error(VK_ERROR_OUT_OF_POOL_MEMORY);
       }
    }
 
@@ -890,11 +935,11 @@ anv_descriptor_set_write_template(struct anv_descriptor_set *set,
    }
 }
 
-VkResult anv_CreateDescriptorUpdateTemplateKHR(
+VkResult anv_CreateDescriptorUpdateTemplate(
     VkDevice                                    _device,
-    const VkDescriptorUpdateTemplateCreateInfoKHR* pCreateInfo,
+    const VkDescriptorUpdateTemplateCreateInfo* pCreateInfo,
     const VkAllocationCallbacks*                pAllocator,
-    VkDescriptorUpdateTemplateKHR*              pDescriptorUpdateTemplate)
+    VkDescriptorUpdateTemplate*                 pDescriptorUpdateTemplate)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
    struct anv_descriptor_update_template *template;
@@ -908,7 +953,7 @@ VkResult anv_CreateDescriptorUpdateTemplateKHR(
 
    template->bind_point = pCreateInfo->pipelineBindPoint;
 
-   if (pCreateInfo->templateType == VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET_KHR)
+   if (pCreateInfo->templateType == VK_DESCRIPTOR_UPDATE_TEMPLATE_TYPE_DESCRIPTOR_SET)
       template->set = pCreateInfo->set;
 
    template->entry_count = pCreateInfo->descriptorUpdateEntryCount;
@@ -932,9 +977,9 @@ VkResult anv_CreateDescriptorUpdateTemplateKHR(
    return VK_SUCCESS;
 }
 
-void anv_DestroyDescriptorUpdateTemplateKHR(
+void anv_DestroyDescriptorUpdateTemplate(
     VkDevice                                    _device,
-    VkDescriptorUpdateTemplateKHR               descriptorUpdateTemplate,
+    VkDescriptorUpdateTemplate                  descriptorUpdateTemplate,
     const VkAllocationCallbacks*                pAllocator)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);
@@ -944,10 +989,10 @@ void anv_DestroyDescriptorUpdateTemplateKHR(
    vk_free2(&device->alloc, pAllocator, template);
 }
 
-void anv_UpdateDescriptorSetWithTemplateKHR(
+void anv_UpdateDescriptorSetWithTemplate(
     VkDevice                                    _device,
     VkDescriptorSet                             descriptorSet,
-    VkDescriptorUpdateTemplateKHR               descriptorUpdateTemplate,
+    VkDescriptorUpdateTemplate                  descriptorUpdateTemplate,
     const void*                                 pData)
 {
    ANV_FROM_HANDLE(anv_device, device, _device);

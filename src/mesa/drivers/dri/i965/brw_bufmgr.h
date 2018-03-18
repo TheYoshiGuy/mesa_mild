@@ -252,7 +252,7 @@ MUST_CHECK void *brw_bo_map(struct brw_context *brw, struct brw_bo *bo, unsigned
  * Reduces the refcount on the userspace mapping of the buffer
  * object.
  */
-static inline int brw_bo_unmap(struct brw_bo *bo) { return 0; }
+static inline int brw_bo_unmap(UNUSED struct brw_bo *bo) { return 0; }
 
 /** Write data into an object. */
 int brw_bo_subdata(struct brw_bo *bo, uint64_t offset,
@@ -319,10 +319,6 @@ void brw_bufmgr_enable_reuse(struct brw_bufmgr *bufmgr);
 int brw_bo_wait(struct brw_bo *bo, int64_t timeout_ns);
 
 uint32_t brw_create_hw_context(struct brw_bufmgr *bufmgr);
-
-#define BRW_CONTEXT_LOW_PRIORITY ((I915_CONTEXT_MIN_USER_PRIORITY-1)/2)
-#define BRW_CONTEXT_MEDIUM_PRIORITY (I915_CONTEXT_DEFAULT_PRIORITY)
-#define BRW_CONTEXT_HIGH_PRIORITY ((I915_CONTEXT_MAX_USER_PRIORITY+1)/2)
 
 int brw_hw_context_set_priority(struct brw_bufmgr *bufmgr,
                                 uint32_t ctx_id,
