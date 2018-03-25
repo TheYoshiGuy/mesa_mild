@@ -309,15 +309,18 @@ intermediates := $(call local-generated-sources-dir)
 LOCAL_GENERATED_SOURCES += $(addprefix $(intermediates)/, \
 	$(i965_oa_GENERATED_FILES))
 
-$(intermediates)/brw_oa_%.h: $(LOCAL_PATH)/brw_oa_%.xml $(LOCAL_PATH)/brw_oa.py
-	@echo "target Generated: $(PRIVATE_MODULE) <= $(notdir $(@))"
-	@mkdir -p $(dir $@)
-	$(hide) $(MESA_PYTHON2) $(word 2, $^) --header=$@ --chipset=$(basename $*) $<
+i965_oa_xml_FILES := $(addprefix $(MESA_TOP)/src/mesa/drivers/dri/i965/, \
+	$(i965_oa_xml_FILES))
 
-$(intermediates)/brw_oa_%.c: $(LOCAL_PATH)/brw_oa_%.xml $(LOCAL_PATH)/brw_oa.py
+$(intermediates)/brw_oa_metrics.c: $(LOCAL_PATH)/brw_oa.py $(i965_oa_xml_FILES)
 	@echo "target Generated: $(PRIVATE_MODULE) <= $(notdir $(@))"
 	@mkdir -p $(dir $@)
-	$(hide) $(MESA_PYTHON2) $(word 2, $^) --code=$@ --chipset=$(basename $*) $<
+	$(hide) $(MESA_PYTHON2) $< \
+	--code=$@ \
+	--header=$(call generated-sources-dir-for,SHARED_LIBRARIES,i965_dri,,)/brw_oa_metrics.h \
+	$(i965_oa_xml_FILES)
+
+$(intermediates)/brw_oa_metrics.h: $(intermediates)/brw_oa_metrics.c
 
 include $(MESA_COMMON_MK)
 include $(BUILD_SHARED_LIBRARY)

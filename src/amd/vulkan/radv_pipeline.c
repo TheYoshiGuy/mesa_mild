@@ -1718,8 +1718,12 @@ void radv_create_shaders(struct radv_pipeline *pipeline,
 		/* TODO: These are no longer used as keys we should refactor this */
 		keys[MESA_SHADER_VERTEX].vs.export_prim_id =
 		        pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.prim_id_input;
+		keys[MESA_SHADER_VERTEX].vs.export_layer_id =
+		        pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.layer_input;
 		keys[MESA_SHADER_TESS_EVAL].tes.export_prim_id =
 		        pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.prim_id_input;
+		keys[MESA_SHADER_TESS_EVAL].tes.export_layer_id =
+		        pipeline->shaders[MESA_SHADER_FRAGMENT]->info.info.ps.layer_input;
 	}
 
 	if (device->physical_device->rad_info.chip_class >= GFX9 && modules[MESA_SHADER_TESS_CTRL]) {
@@ -2194,9 +2198,11 @@ radv_pipeline_generate_depth_stencil_state(struct radeon_winsys_cs *cs,
 	const VkPipelineDepthStencilStateCreateInfo *vkds = pCreateInfo->pDepthStencilState;
 	RADV_FROM_HANDLE(radv_render_pass, pass, pCreateInfo->renderPass);
 	struct radv_subpass *subpass = pass->subpasses + pCreateInfo->subpass;
+	struct radv_shader_variant *ps = pipeline->shaders[MESA_SHADER_FRAGMENT];
 	struct radv_render_pass_attachment *attachment = NULL;
 	uint32_t db_depth_control = 0, db_stencil_control = 0;
 	uint32_t db_render_control = 0, db_render_override2 = 0;
+	uint32_t db_render_override = 0;
 
 	if (subpass->depth_stencil_attachment.attachment != VK_ATTACHMENT_UNUSED)
 		attachment = pass->attachments + subpass->depth_stencil_attachment.attachment;
@@ -2238,10 +2244,30 @@ radv_pipeline_generate_depth_stencil_state(struct radeon_winsys_cs *cs,
 		db_render_override2 |= S_028010_DISABLE_SMEM_EXPCLEAR_OPTIMIZATION(extra->db_stencil_disable_expclear);
 	}
 
+	db_render_override |= S_02800C_FORCE_HIS_ENABLE0(V_02800C_FORCE_DISABLE) |
+			      S_02800C_FORCE_HIS_ENABLE1(V_02800C_FORCE_DISABLE);
+
+	if (pipeline->device->enabled_extensions.EXT_depth_range_unrestricted &&
+	    !pCreateInfo->pRasterizationState->depthClampEnable &&
+	    ps->info.info.ps.writes_z) {
+		/* From VK_EXT_depth_range_unrestricted spec:
+		 *
+		 * "The behavior described in Primitive Clipping still applies.
+		 *  If depth clamping is disabled the depth values are still
+		 *  clipped to 0 ≤ zc ≤ wc before the viewport transform. If
+		 *  depth clamping is enabled the above equation is ignored and
+		 *  the depth values are instead clamped to the VkViewport
+		 *  minDepth and maxDepth values, which in the case of this
+		 *  extension can be outside of the 0.0 to 1.0 range."
+		 */
+		db_render_override |= S_02800C_DISABLE_VIEWPORT_CLAMP(1);
+	}
+
 	radeon_set_context_reg(cs, R_028800_DB_DEPTH_CONTROL, db_depth_control);
 	radeon_set_context_reg(cs, R_02842C_DB_STENCIL_CONTROL, db_stencil_control);
 
 	radeon_set_context_reg(cs, R_028000_DB_RENDER_CONTROL, db_render_control);
+	radeon_set_context_reg(cs, R_02800C_DB_RENDER_OVERRIDE, db_render_override);
 	radeon_set_context_reg(cs, R_028010_DB_RENDER_OVERRIDE2, db_render_override2);
 }
 

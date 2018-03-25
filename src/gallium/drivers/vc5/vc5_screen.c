@@ -143,6 +143,7 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
                         return 0;
 
         case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
+        case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
         case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
                 return 1;
 
@@ -167,7 +168,6 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
         case PIPE_CAP_CUBE_MAP_ARRAY:
         case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
-        case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
         case PIPE_CAP_SEAMLESS_CUBE_MAP:
         case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
         case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
@@ -260,6 +260,7 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
         case PIPE_CAP_CONTEXT_PRIORITY_MASK:
 	case PIPE_CAP_CONSTBUF0_FLAGS:
+        case PIPE_CAP_PACKED_UNIFORMS:
                 return 0;
 
                 /* Geometry shader output, unsupported. */
@@ -270,9 +271,8 @@ vc5_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
                 /* Texturing. */
         case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
         case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
-                return VC5_MAX_MIP_LEVELS;
         case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
-                return 256;
+                return VC5_MAX_MIP_LEVELS;
         case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
                 return 2048;
 
@@ -481,6 +481,14 @@ vc5_screen_is_format_supported(struct pipe_screen *pscreen,
                 case PIPE_FORMAT_R8G8B8_SSCALED:
                 case PIPE_FORMAT_R8G8_SSCALED:
                 case PIPE_FORMAT_R8_SSCALED:
+                case PIPE_FORMAT_R10G10B10A2_UNORM:
+                case PIPE_FORMAT_B10G10R10A2_UNORM:
+                case PIPE_FORMAT_R10G10B10A2_SNORM:
+                case PIPE_FORMAT_B10G10R10A2_SNORM:
+                case PIPE_FORMAT_R10G10B10A2_USCALED:
+                case PIPE_FORMAT_B10G10R10A2_USCALED:
+                case PIPE_FORMAT_R10G10B10A2_SSCALED:
+                case PIPE_FORMAT_B10G10R10A2_SSCALED:
                         break;
                 default:
                         return FALSE;

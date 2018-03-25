@@ -251,6 +251,11 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 			return RADEON_SPARSE_PAGE_SIZE;
 		return 0;
 
+	case PIPE_CAP_PACKED_UNIFORMS:
+		if (sscreen->debug_flags & DBG(NIR))
+			return 1;
+		return 0;
+
 	/* Unsupported features. */
 	case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:

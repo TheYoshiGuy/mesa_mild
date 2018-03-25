@@ -132,6 +132,13 @@ struct vc5_uncompiled_shader {
         struct v3d_varying_slot *tf_outputs;
         uint16_t tf_specs[PIPE_MAX_SO_BUFFERS];
         uint32_t num_tf_specs;
+
+        /**
+         * Flag for if the NIR in this shader originally came from TGSI.  If
+         * so, we need to do some fixups at compile time, due to missing
+         * information in TGSI that exists in NIR.
+         */
+        bool was_tgsi;
 };
 
 struct vc5_compiled_shader {
@@ -154,6 +161,9 @@ struct vc5_compiled_shader {
 struct vc5_program_stateobj {
         struct vc5_uncompiled_shader *bind_vs, *bind_fs;
         struct vc5_compiled_shader *cs, *vs, *fs;
+
+        struct vc5_bo *spill_bo;
+        int spill_size_per_thread;
 };
 
 struct vc5_constbuf_stateobj {

@@ -170,6 +170,8 @@ vc5_shader_state_create(struct pipe_context *pctx,
                         fprintf(stderr, "\n");
                 }
                 s = tgsi_to_nir(cso->tokens, &v3d_nir_options);
+
+                so->was_tgsi = true;
         }
 
         NIR_PASS_V(s, nir_opt_global_to_local);
@@ -266,6 +268,21 @@ vc5_get_compiled_shader(struct vc5_context *vc5, struct v3d_key *key)
         dup_key = ralloc_size(shader, key_size);
         memcpy(dup_key, key, key_size);
         _mesa_hash_table_insert(ht, dup_key, shader);
+
+        if (shader->prog_data.base->spill_size >
+            vc5->prog.spill_size_per_thread) {
+                /* Max 4 QPUs per slice, 3 slices per core. We only do single
+                 * core so far.  This overallocates memory on smaller cores.
+                 */
+                int total_spill_size =
+                        4 * 3 * shader->prog_data.base->spill_size;
+
+                vc5_bo_unreference(&vc5->prog.spill_bo);
+                vc5->prog.spill_bo = vc5_bo_alloc(vc5->screen,
+                                                  total_spill_size, "spill");
+                vc5->prog.spill_size_per_thread =
+                        shader->prog_data.base->spill_size;
+        }
 
         return shader;
 }
@@ -398,6 +415,13 @@ vc5_update_compiled_fs(struct vc5_context *vc5, uint8_t prim_mode)
                 if (desc->channel[0].type == UTIL_FORMAT_TYPE_FLOAT &&
                     desc->channel[0].size == 32) {
                         key->f32_color_rb |= 1 << i;
+                }
+
+                if (vc5->prog.bind_fs->was_tgsi) {
+                        if (util_format_is_pure_uint(cbuf->format))
+                                key->uint_color_rb |= 1 << i;
+                        else if (util_format_is_pure_sint(cbuf->format))
+                                key->int_color_rb |= 1 << i;
                 }
         }
 

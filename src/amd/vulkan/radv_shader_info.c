@@ -90,6 +90,8 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr,
 		break;
 	case nir_intrinsic_load_view_index:
 		info->needs_multiview_view_index = true;
+		if (nir->info.stage == MESA_SHADER_FRAGMENT)
+			info->ps.layer_input = true;
 		break;
 	case nir_intrinsic_load_invocation_id:
 		info->uses_invocation_id = true;
@@ -103,36 +105,38 @@ gather_intrinsic_info(const nir_shader *nir, const nir_intrinsic_instr *instr,
 	case nir_intrinsic_vulkan_resource_index:
 		info->desc_set_used_mask |= (1 << nir_intrinsic_desc_set(instr));
 		break;
-	case nir_intrinsic_image_load:
-	case nir_intrinsic_image_store:
-	case nir_intrinsic_image_atomic_add:
-	case nir_intrinsic_image_atomic_min:
-	case nir_intrinsic_image_atomic_max:
-	case nir_intrinsic_image_atomic_and:
-	case nir_intrinsic_image_atomic_or:
-	case nir_intrinsic_image_atomic_xor:
-	case nir_intrinsic_image_atomic_exchange:
-	case nir_intrinsic_image_atomic_comp_swap:
-	case nir_intrinsic_image_size: {
+	case nir_intrinsic_image_var_load:
+	case nir_intrinsic_image_var_store:
+	case nir_intrinsic_image_var_atomic_add:
+	case nir_intrinsic_image_var_atomic_min:
+	case nir_intrinsic_image_var_atomic_max:
+	case nir_intrinsic_image_var_atomic_and:
+	case nir_intrinsic_image_var_atomic_or:
+	case nir_intrinsic_image_var_atomic_xor:
+	case nir_intrinsic_image_var_atomic_exchange:
+	case nir_intrinsic_image_var_atomic_comp_swap:
+	case nir_intrinsic_image_var_size: {
 		const struct glsl_type *type = instr->variables[0]->var->type;
 		if(instr->variables[0]->deref.child)
 			type = instr->variables[0]->deref.child->type;
 
 		enum glsl_sampler_dim dim = glsl_get_sampler_dim(type);
 		if (dim == GLSL_SAMPLER_DIM_SUBPASS ||
-		    dim == GLSL_SAMPLER_DIM_SUBPASS_MS)
+		    dim == GLSL_SAMPLER_DIM_SUBPASS_MS) {
+			info->ps.layer_input = true;
 			info->ps.uses_input_attachments = true;
+		}
 		mark_sampler_desc(instr->variables[0]->var, info);
 
-		if (nir_intrinsic_image_store ||
-		    nir_intrinsic_image_atomic_add ||
-		    nir_intrinsic_image_atomic_min ||
-		    nir_intrinsic_image_atomic_max ||
-		    nir_intrinsic_image_atomic_and ||
-		    nir_intrinsic_image_atomic_or ||
-		    nir_intrinsic_image_atomic_xor ||
-		    nir_intrinsic_image_atomic_exchange ||
-		    nir_intrinsic_image_atomic_comp_swap) {
+		if (nir_intrinsic_image_var_store ||
+		    nir_intrinsic_image_var_atomic_add ||
+		    nir_intrinsic_image_var_atomic_min ||
+		    nir_intrinsic_image_var_atomic_max ||
+		    nir_intrinsic_image_var_atomic_and ||
+		    nir_intrinsic_image_var_atomic_or ||
+		    nir_intrinsic_image_var_atomic_xor ||
+		    nir_intrinsic_image_var_atomic_exchange ||
+		    nir_intrinsic_image_var_atomic_comp_swap) {
 			if (nir->info.stage == MESA_SHADER_FRAGMENT)
 				info->ps.writes_memory = true;
 		}

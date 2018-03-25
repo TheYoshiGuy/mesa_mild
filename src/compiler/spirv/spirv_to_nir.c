@@ -934,7 +934,6 @@ vtn_type_layout_std430(struct vtn_builder *b, struct vtn_type *type,
 
    case vtn_base_type_vector: {
       uint32_t comp_size = glsl_get_bit_size(type->type) / 8;
-      assert(type->length > 0 && type->length <= 4);
       unsigned align_comps = type->length == 3 ? 4 : type->length;
       *size_out = comp_size * type->length,
       *align_out = comp_size * align_comps;
@@ -1047,7 +1046,7 @@ vtn_handle_type(struct vtn_builder *b, SpvOp opcode,
 
       vtn_fail_if(base->base_type != vtn_base_type_scalar,
                   "Base type for OpTypeVector must be a scalar");
-      vtn_fail_if(elems < 2 || elems > 4,
+      vtn_fail_if((elems < 2 || elems > 4) && (elems != 8) && (elems != 16),
                   "Invalid component count for OpTypeVector");
 
       val->type->base_type = vtn_base_type_vector;
@@ -2353,7 +2352,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
 
    nir_intrinsic_op op;
    switch (opcode) {
-#define OP(S, N) case SpvOp##S: op = nir_intrinsic_image_##N; break;
+#define OP(S, N) case SpvOp##S: op = nir_intrinsic_image_var_##N; break;
    OP(ImageQuerySize,         size)
    OP(ImageRead,              load)
    OP(ImageWrite,             store)
@@ -2433,7 +2432,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
 
       unsigned dest_components =
          nir_intrinsic_infos[intrin->intrinsic].dest_components;
-      if (intrin->intrinsic == nir_intrinsic_image_size) {
+      if (intrin->intrinsic == nir_intrinsic_image_var_size) {
          dest_components = intrin->num_components =
             glsl_get_vector_elements(type->type);
       }
