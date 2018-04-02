@@ -170,7 +170,6 @@ add_exec_bo(struct intel_batchbuffer *batch, struct brw_bo *bo)
    batch->validation_list[batch->exec_count] =
       (struct drm_i915_gem_exec_object2) {
          .handle = bo->gem_handle,
-         .alignment = bo->align,
          .offset = bo->gtt_offset,
          .flags = bo->kflags,
       };
@@ -191,7 +190,7 @@ recreate_growing_buffer(struct brw_context *brw,
    struct intel_batchbuffer *batch = &brw->batch;
    struct brw_bufmgr *bufmgr = screen->bufmgr;
 
-   grow->bo = brw_bo_alloc(bufmgr, name, size, 4096);
+   grow->bo = brw_bo_alloc(bufmgr, name, size);
    grow->bo->kflags = can_do_exec_capture(screen) ? EXEC_OBJECT_CAPTURE : 0;
    grow->partial_bo = NULL;
    grow->partial_bo_map = NULL;
@@ -352,7 +351,7 @@ grow_buffer(struct brw_context *brw,
       finish_growing_bos(grow);
    }
 
-   struct brw_bo *new_bo = brw_bo_alloc(bufmgr, bo->name, new_size, bo->align);
+   struct brw_bo *new_bo = brw_bo_alloc(bufmgr, bo->name, new_size);
 
    /* Copy existing data to the new larger buffer */
    grow->partial_bo_map = grow->map;

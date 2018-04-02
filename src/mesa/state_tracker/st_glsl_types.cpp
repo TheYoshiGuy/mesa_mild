@@ -124,6 +124,9 @@ st_glsl_type_dword_size(const struct glsl_type *type)
    case GLSL_TYPE_INT16:
    case GLSL_TYPE_FLOAT16:
       return DIV_ROUND_UP(type->components(), 2);
+   case GLSL_TYPE_UINT8:
+   case GLSL_TYPE_INT8:
+      return DIV_ROUND_UP(type->components(), 4);
    case GLSL_TYPE_DOUBLE:
    case GLSL_TYPE_UINT64:
    case GLSL_TYPE_INT64:
@@ -146,7 +149,8 @@ st_glsl_type_dword_size(const struct glsl_type *type)
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
    case GLSL_TYPE_FUNCTION:
-      unreachable("not reached");
+   default:
+      unreachable("invalid type in st_glsl_type_dword_size()");
    }
 
    return 0;

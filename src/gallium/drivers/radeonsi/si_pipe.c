@@ -755,7 +755,14 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 	/* This must be one less than the maximum number due to a hw limitation.
 	 * Various hardware bugs in SI, CIK, and GFX9 need this.
 	 */
-	unsigned max_offchip_buffers_per_se = double_offchip_buffers ? 127 : 63;
+	unsigned max_offchip_buffers_per_se;
+
+	/* Only certain chips can use the maximum value. */
+	if (sscreen->info.family == CHIP_VEGA12)
+		max_offchip_buffers_per_se = double_offchip_buffers ? 128 : 64;
+	else
+		max_offchip_buffers_per_se = double_offchip_buffers ? 127 : 63;
+
 	unsigned max_offchip_buffers = max_offchip_buffers_per_se *
 				       sscreen->info.max_se;
 	unsigned offchip_granularity;
@@ -828,6 +835,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 		sscreen->dpbb_allowed = true;
 	} else {
 		/* Only enable primitive binning on Raven by default. */
+		/* TODO: Investigate if binning is profitable on Vega12. */
 		sscreen->dpbb_allowed = sscreen->info.family == CHIP_RAVEN &&
 					!(sscreen->debug_flags & DBG(NO_DPBB));
 	}
@@ -855,6 +863,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 		sscreen->rbplus_allowed =
 			!(sscreen->debug_flags & DBG(NO_RB_PLUS)) &&
 			(sscreen->info.family == CHIP_STONEY ||
+			 sscreen->info.family == CHIP_VEGA12 ||
 			 sscreen->info.family == CHIP_RAVEN);
 	}
 

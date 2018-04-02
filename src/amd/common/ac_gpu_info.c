@@ -313,6 +313,8 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 	info->has_syncobj_wait_for_submit = info->has_syncobj && info->drm_minor >= 20;
 	info->has_fence_to_handle = info->has_syncobj && info->drm_minor >= 21;
 	info->has_ctx_priority = info->drm_minor >= 22;
+	/* TODO: Enable this once the kernel handles it efficiently. */
+	/*info->has_local_buffers = ws->info.drm_minor >= 20;*/
 	info->num_render_backends = amdinfo->rb_pipes;
 	info->clock_crystal_freq = amdinfo->gpu_counter_freq;
 	if (!info->clock_crystal_freq) {
@@ -331,8 +333,8 @@ bool ac_query_gpu_info(int fd, amdgpu_device_handle dev,
 	}
 	info->has_virtual_memory = true;
 
-	assert(util_is_power_of_two(dma.available_rings + 1));
-	assert(util_is_power_of_two(compute.available_rings + 1));
+	assert(util_is_power_of_two_or_zero(dma.available_rings + 1));
+	assert(util_is_power_of_two_or_zero(compute.available_rings + 1));
 
 	info->num_sdma_rings = util_bitcount(dma.available_rings);
 	info->num_compute_rings = util_bitcount(compute.available_rings);

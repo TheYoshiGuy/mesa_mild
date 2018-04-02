@@ -31,6 +31,7 @@
 
 #include <pthread.h>
 #include "main/imports.h"
+#include "main/glspirv.h"
 #include "program/prog_parameter.h"
 #include "program/prog_print.h"
 #include "program/prog_to_nir.h"
@@ -74,9 +75,14 @@ brw_create_nir(struct brw_context *brw,
       ctx->Const.ShaderCompilerOptions[stage].NirOptions;
    nir_shader *nir;
 
-   /* First, lower the GLSL IR or Mesa IR to NIR */
+   /* First, lower the GLSL/Mesa IR or SPIR-V to NIR */
    if (shader_prog) {
-      nir = glsl_to_nir(shader_prog, stage, options);
+      if (shader_prog->_LinkedShaders[stage]->spirv_data)
+         nir = _mesa_spirv_to_nir(ctx, shader_prog, stage, options);
+      else
+         nir = glsl_to_nir(shader_prog, stage, options);
+      assert (nir);
+
       nir_remove_dead_variables(nir, nir_var_shader_in | nir_var_shader_out);
       nir_lower_returns(nir);
       nir_validate_shader(nir);
@@ -277,9 +283,7 @@ brw_memory_barrier(struct gl_context *ctx, GLbitfield barriers)
 {
    struct brw_context *brw = brw_context(ctx);
    const struct gen_device_info *devinfo = &brw->screen->devinfo;
-   unsigned bits = (PIPE_CONTROL_DATA_CACHE_FLUSH |
-                    PIPE_CONTROL_NO_WRITE |
-                    PIPE_CONTROL_CS_STALL);
+   unsigned bits = PIPE_CONTROL_DATA_CACHE_FLUSH | PIPE_CONTROL_CS_STALL;
    assert(devinfo->gen >= 7 && devinfo->gen <= 11);
 
    if (barriers & (GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT |
@@ -344,7 +348,7 @@ brw_get_scratch_bo(struct brw_context *brw,
    }
 
    if (!old_bo) {
-      *scratch_bo = brw_bo_alloc(brw->bufmgr, "scratch bo", size, 4096);
+      *scratch_bo = brw_bo_alloc(brw->bufmgr, "scratch bo", size);
    }
 }
 
@@ -439,7 +443,7 @@ brw_alloc_stage_scratch(struct brw_context *brw,
 
    stage_state->scratch_bo =
       brw_bo_alloc(brw->bufmgr, "shader scratch space",
-                   per_thread_size * thread_count, 4096);
+                   per_thread_size * thread_count);
 }
 
 void brwInitFragProgFuncs( struct dd_function_table *functions )
@@ -468,7 +472,7 @@ brw_init_shader_time(struct brw_context *brw)
    const int max_entries = 2048;
    brw->shader_time.bo =
       brw_bo_alloc(brw->bufmgr, "shader time",
-                   max_entries * BRW_SHADER_TIME_STRIDE * 3, 4096);
+                   max_entries * BRW_SHADER_TIME_STRIDE * 3);
    brw->shader_time.names = rzalloc_array(brw, const char *, max_entries);
    brw->shader_time.ids = rzalloc_array(brw, int, max_entries);
    brw->shader_time.types = rzalloc_array(brw, enum shader_time_shader_type,

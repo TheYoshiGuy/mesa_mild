@@ -52,6 +52,7 @@ struct spirv_supported_capabilities {
    bool subgroup_shuffle;
    bool subgroup_vote;
    bool gcn_shader;
+   bool trinary_minmax;
 };
 
 typedef struct shader_info {
@@ -62,6 +63,11 @@ typedef struct shader_info {
 
    /** The shader stage, such as MESA_SHADER_VERTEX. */
    gl_shader_stage stage;
+
+   /** The shader stage in a non SSO linked program that follows this stage,
+     * such as MESA_SHADER_FRAGMENT.
+     */
+   gl_shader_stage next_stage;
 
    /* Number of textures used by this shader */
    unsigned num_textures;

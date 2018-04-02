@@ -44,6 +44,7 @@
 #include "vk_format.h"
 #include "sid.h"
 #include "gfx9d.h"
+#include "addrlib/gfx9/chip/gfx9_enum.h"
 #include "util/debug.h"
 
 static int
@@ -100,7 +101,8 @@ radv_get_device_name(enum radeon_family family, char *name, size_t name_len)
 	case CHIP_POLARIS11: chip_string = "AMD RADV POLARIS11"; break;
 	case CHIP_POLARIS12: chip_string = "AMD RADV POLARIS12"; break;
 	case CHIP_STONEY: chip_string = "AMD RADV STONEY"; break;
-	case CHIP_VEGA10: chip_string = "AMD RADV VEGA"; break;
+	case CHIP_VEGA10: chip_string = "AMD RADV VEGA10"; break;
+	case CHIP_VEGA12: chip_string = "AMD RADV VEGA12"; break;
 	case CHIP_RAVEN: chip_string = "AMD RADV RAVEN"; break;
 	default: chip_string = "AMD RADV unknown"; break;
 	}
@@ -290,7 +292,8 @@ radv_physical_device_init(struct radv_physical_device *device,
 	if (device->rad_info.family == CHIP_STONEY ||
 	    device->rad_info.chip_class >= GFX9) {
 		device->has_rbplus = true;
-		device->rbplus_allowed = device->rad_info.family == CHIP_STONEY;
+		device->rbplus_allowed = device->rad_info.family == CHIP_STONEY ||
+					 device->rad_info.family == CHIP_VEGA12;
 	}
 
 	/* The mere presense of CLEAR_STATE in the IB causes random GPU hangs
@@ -943,6 +946,14 @@ void radv_GetPhysicalDeviceProperties2(
 			properties->maxMemoryAllocationSize = 0xFFFFFFFFull;
 			break;
 		}
+		case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_FILTER_MINMAX_PROPERTIES_EXT: {
+			VkPhysicalDeviceSamplerFilterMinmaxPropertiesEXT *properties =
+				(VkPhysicalDeviceSamplerFilterMinmaxPropertiesEXT *)ext;
+			/* GFX6-8 only support single channel min/max filter. */
+			properties->filterMinmaxImageComponentMapping = pdevice->rad_info.chip_class >= GFX9;
+			properties->filterMinmaxSingleComponentFormats = true;
+			break;
+		}
 		default:
 			break;
 		}
@@ -1174,6 +1185,7 @@ radv_device_init_gs_info(struct radv_device *device)
 	case CHIP_POLARIS11:
 	case CHIP_POLARIS12:
 	case CHIP_VEGA10:
+	case CHIP_VEGA12:
 	case CHIP_RAVEN:
 		device->gs_table_depth = 32;
 		return;
@@ -3962,6 +3974,22 @@ radv_tex_aniso_filter(unsigned filter)
 	return 4;
 }
 
+static unsigned
+radv_tex_filter_mode(VkSamplerReductionModeEXT mode)
+{
+	switch (mode) {
+	case VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE_EXT:
+		return SQ_IMG_FILTER_MODE_BLEND;
+	case VK_SAMPLER_REDUCTION_MODE_MIN_EXT:
+		return SQ_IMG_FILTER_MODE_MIN;
+	case VK_SAMPLER_REDUCTION_MODE_MAX_EXT:
+		return SQ_IMG_FILTER_MODE_MAX;
+	default:
+		break;
+	}
+	return 0;
+}
+
 static void
 radv_init_sampler(struct radv_device *device,
 		  struct radv_sampler *sampler,
@@ -3971,6 +3999,13 @@ radv_init_sampler(struct radv_device *device,
 					(uint32_t) pCreateInfo->maxAnisotropy : 0;
 	uint32_t max_aniso_ratio = radv_tex_aniso_filter(max_aniso);
 	bool is_vi = (device->physical_device->rad_info.chip_class >= VI);
+	unsigned filter_mode = SQ_IMG_FILTER_MODE_BLEND;
+
+	const struct VkSamplerReductionModeCreateInfoEXT *sampler_reduction =
+		vk_find_struct_const(pCreateInfo->pNext,
+				     SAMPLER_REDUCTION_MODE_CREATE_INFO_EXT);
+	if (sampler_reduction)
+		filter_mode = radv_tex_filter_mode(sampler_reduction->reductionMode);
 
 	sampler->state[0] = (S_008F30_CLAMP_X(radv_tex_wrap(pCreateInfo->addressModeU)) |
 			     S_008F30_CLAMP_Y(radv_tex_wrap(pCreateInfo->addressModeV)) |
@@ -3981,7 +4016,8 @@ radv_init_sampler(struct radv_device *device,
 			     S_008F30_ANISO_THRESHOLD(max_aniso_ratio >> 1) |
 			     S_008F30_ANISO_BIAS(max_aniso_ratio) |
 			     S_008F30_DISABLE_CUBE_WRAP(0) |
-			     S_008F30_COMPAT_MODE(is_vi));
+			     S_008F30_COMPAT_MODE(is_vi) |
+			     S_008F30_FILTER_MODE(filter_mode));
 	sampler->state[1] = (S_008F34_MIN_LOD(S_FIXED(CLAMP(pCreateInfo->minLod, 0, 15), 8)) |
 			     S_008F34_MAX_LOD(S_FIXED(CLAMP(pCreateInfo->maxLod, 0, 15), 8)) |
 			     S_008F34_PERF_MIP(max_aniso_ratio ? max_aniso_ratio + 6 : 0));

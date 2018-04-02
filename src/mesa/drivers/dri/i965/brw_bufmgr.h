@@ -56,13 +56,6 @@ struct brw_bo {
     */
    uint64_t size;
 
-   /**
-    * Alignment requirement for object
-    *
-    * Used for GTT mapping & pinning the object.
-    */
-   uint64_t align;
-
    /** Buffer manager context associated with this buffer object */
    struct brw_bufmgr *bufmgr;
 
@@ -175,7 +168,7 @@ struct brw_bo {
  * using brw_bo_map() to be used by the CPU.
  */
 struct brw_bo *brw_bo_alloc(struct brw_bufmgr *bufmgr, const char *name,
-                            uint64_t size, uint64_t alignment);
+                            uint64_t size);
 
 /**
  * Allocate a tiled buffer object.

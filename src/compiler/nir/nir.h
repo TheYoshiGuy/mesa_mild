@@ -250,6 +250,12 @@ typedef struct nir_variable {
       unsigned fb_fetch_output:1;
 
       /**
+       * Non-zero if this variable is considered bindless as defined by
+       * ARB_bindless_texture.
+       */
+      unsigned bindless:1;
+
+      /**
        * \brief Layout qualifier for gl_FragDepth.
        *
        * This is not equal to \c ir_depth_layout_none if and only if this
@@ -626,9 +632,21 @@ nir_src_bit_size(nir_src src)
 }
 
 static inline unsigned
+nir_src_num_components(nir_src src)
+{
+   return src.is_ssa ? src.ssa->num_components : src.reg.reg->num_components;
+}
+
+static inline unsigned
 nir_dest_bit_size(nir_dest dest)
 {
    return dest.is_ssa ? dest.ssa.bit_size : dest.reg.reg->bit_size;
+}
+
+static inline unsigned
+nir_dest_num_components(nir_dest dest)
+{
+   return dest.is_ssa ? dest.ssa.num_components : dest.reg.reg->num_components;
 }
 
 void nir_src_copy(nir_src *dest, const nir_src *src, void *instr_or_if);
@@ -945,16 +963,7 @@ typedef struct {
    struct nir_function *callee;
 } nir_call_instr;
 
-#define INTRINSIC(name, num_srcs, src_components, has_dest, dest_components, \
-                  num_variables, num_indices, idx0, idx1, idx2, flags) \
-   nir_intrinsic_##name,
-
-#define LAST_INTRINSIC(name) nir_last_intrinsic = nir_intrinsic_##name,
-
-typedef enum {
 #include "nir_intrinsics.h"
-   nir_num_intrinsics = nir_last_intrinsic + 1
-} nir_intrinsic_op;
 
 #define NIR_INTRINSIC_MAX_CONST_INDEX 3
 
@@ -2265,7 +2274,21 @@ nir_instr_insert_after_cf_list(struct exec_list *list, nir_instr *after)
    nir_instr_insert(nir_after_cf_list(list), after);
 }
 
-void nir_instr_remove(nir_instr *instr);
+void nir_instr_remove_v(nir_instr *instr);
+
+static inline nir_cursor
+nir_instr_remove(nir_instr *instr)
+{
+   nir_cursor cursor;
+   nir_instr *prev = nir_instr_prev(instr);
+   if (prev) {
+      cursor = nir_after_instr(prev);
+   } else {
+      cursor = nir_before_block(instr->block);
+   }
+   nir_instr_remove_v(instr);
+   return cursor;
+}
 
 /** @} */
 

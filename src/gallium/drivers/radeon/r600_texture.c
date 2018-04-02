@@ -240,7 +240,7 @@ static int r600_init_surface(struct si_screen *sscreen,
 		bpe = 4; /* stencil is allocated separately on evergreen */
 	} else {
 		bpe = util_format_get_blocksize(ptex->format);
-		assert(util_is_power_of_two(bpe));
+		assert(util_is_power_of_two_or_zero(bpe));
 	}
 
 	if (!is_flushed_depth && is_depth) {
@@ -701,6 +701,7 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 		if (sscreen->ws->buffer_is_suballocated(res->buf) ||
 		    rtex->surface.tile_swizzle ||
 		    (rtex->resource.flags & RADEON_FLAG_NO_INTERPROCESS_SHARING &&
+		     sscreen->info.has_local_buffers &&
 		     whandle->type != DRM_API_HANDLE_TYPE_KMS)) {
 			assert(!res->b.is_shared);
 			r600_reallocate_texture_inplace(rctx, rtex,
@@ -762,7 +763,8 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 		/* Move a suballocated buffer into a non-suballocated allocation. */
 		if (sscreen->ws->buffer_is_suballocated(res->buf) ||
 		    /* A DMABUF export always fails if the BO is local. */
-		    rtex->resource.flags & RADEON_FLAG_NO_INTERPROCESS_SHARING) {
+		    (rtex->resource.flags & RADEON_FLAG_NO_INTERPROCESS_SHARING &&
+		     sscreen->info.has_local_buffers)) {
 			assert(!res->b.is_shared);
 
 			/* Allocate a new buffer with PIPE_BIND_SHARED. */
@@ -1880,15 +1882,12 @@ static const struct u_resource_vtbl r600_texture_vtbl =
 /* DCC channel type categories within which formats can be reinterpreted
  * while keeping the same DCC encoding. The swizzle must also match. */
 enum dcc_channel_type {
-	dcc_channel_float32,
-	dcc_channel_uint32,
-	dcc_channel_sint32,
-	dcc_channel_float16,
-	dcc_channel_uint16,
-	dcc_channel_sint16,
+	dcc_channel_float,
+	/* uint and sint can be merged if we never use TC-compatible DCC clear
+	 * encoding with the clear value of 1. */
+	dcc_channel_uint,
+	dcc_channel_sint,
 	dcc_channel_uint_10_10_10_2,
-	dcc_channel_uint8,
-	dcc_channel_sint8,
 	dcc_channel_incompatible,
 };
 
@@ -1907,23 +1906,15 @@ vi_get_dcc_channel_type(const struct util_format_description *desc)
 
 	switch (desc->channel[i].size) {
 	case 32:
-		if (desc->channel[i].type == UTIL_FORMAT_TYPE_FLOAT)
-			return dcc_channel_float32;
-		if (desc->channel[i].type == UTIL_FORMAT_TYPE_UNSIGNED)
-			return dcc_channel_uint32;
-		return dcc_channel_sint32;
 	case 16:
+	case 8:
 		if (desc->channel[i].type == UTIL_FORMAT_TYPE_FLOAT)
-			return dcc_channel_float16;
+			return dcc_channel_float;
 		if (desc->channel[i].type == UTIL_FORMAT_TYPE_UNSIGNED)
-			return dcc_channel_uint16;
-		return dcc_channel_sint16;
+			return dcc_channel_uint;
+		return dcc_channel_sint;
 	case 10:
 		return dcc_channel_uint_10_10_10_2;
-	case 8:
-		if (desc->channel[i].type == UTIL_FORMAT_TYPE_UNSIGNED)
-			return dcc_channel_uint8;
-		return dcc_channel_sint8;
 	default:
 		return dcc_channel_incompatible;
 	}

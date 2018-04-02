@@ -59,6 +59,9 @@ static bool is_eligible_mov(struct ir3_instruction *instr, bool allow_flags)
 		if (src->flags & IR3_REG_RELATIV)
 			return false;
 
+		if (src->flags & IR3_REG_ARRAY)
+			return false;
+
 		if (!allow_flags)
 			if (src->flags & (IR3_REG_FABS | IR3_REG_FNEG |
 					IR3_REG_SABS | IR3_REG_SNEG | IR3_REG_BNOT))
@@ -607,7 +610,7 @@ ir3_cp(struct ir3 *ir, struct ir3_shader_variant *so)
 		list_for_each_entry (struct ir3_instruction, instr, &block->instr_list, node) {
 			struct ir3_instruction *src;
 
-			/* by the way, we don't acount for false-dep's, so the CP
+			/* by the way, we don't account for false-dep's, so the CP
 			 * pass should always happen before false-dep's are inserted
 			 */
 			debug_assert(instr->deps_count == 0);

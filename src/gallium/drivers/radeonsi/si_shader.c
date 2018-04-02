@@ -1290,12 +1290,13 @@ static LLVMValueRef si_nir_load_tcs_varyings(struct ac_shader_abi *abi,
 						      is_patch);
 
 	LLVMValueRef value[4];
-	for (unsigned i = 0; i < num_components + component; i++) {
+	for (unsigned i = 0; i < num_components; i++) {
 		unsigned offset = i;
 		if (llvm_type_is_64bit(ctx, type))
 			offset *= 2;
 
-		value[i] = lds_load(bld_base, type, offset, dw_addr);
+		offset += component;
+		value[i + component] = lds_load(bld_base, type, offset, dw_addr);
 	}
 
 	return ac_build_varying_gather_values(&ctx->ac, value, num_components, component);
@@ -1377,13 +1378,14 @@ LLVMValueRef si_nir_load_input_tes(struct ac_shader_abi *abi,
 	 * between the NIR and TGSI backends.
 	 */
 	LLVMValueRef value[4];
-	for (unsigned i = component; i < num_components + component; i++) {
+	for (unsigned i = 0; i < num_components; i++) {
 		unsigned offset = i;
 		if (llvm_type_is_64bit(ctx, type))
 			offset *= 2;
 
-		value[i] = buffer_load(&ctx->bld_base, type, offset,
-				       ctx->tess_offchip_ring, base, addr, true);
+		offset += component;
+		value[i + component] = buffer_load(&ctx->bld_base, type, offset,
+						   ctx->tess_offchip_ring, base, addr, true);
 	}
 
 	return ac_build_varying_gather_values(&ctx->ac, value, num_components, component);
@@ -1693,13 +1695,14 @@ static LLVMValueRef si_nir_load_input_gs(struct ac_shader_abi *abi,
 	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
 
 	LLVMValueRef value[4];
-	for (unsigned i = component; i < num_components + component; i++) {
+	for (unsigned i = 0; i < num_components; i++) {
 		unsigned offset = i;
 		if (llvm_type_is_64bit(ctx, type))
 			offset *= 2;
 
-		value[i] = si_llvm_load_input_gs(&ctx->abi, driver_location  / 4,
-						 vertex_index, type, offset);
+		offset += component;
+		value[i + component] = si_llvm_load_input_gs(&ctx->abi, driver_location  / 4,
+							     vertex_index, type, offset);
 	}
 
 	return ac_build_varying_gather_values(&ctx->ac, value, num_components, component);
@@ -2319,6 +2322,49 @@ void si_tgsi_declare_compute_memory(struct si_shader_context *ctx,
 	si_declare_compute_memory(ctx);
 }
 
+static LLVMValueRef load_const_buffer_desc_fast_path(struct si_shader_context *ctx)
+{
+	LLVMValueRef ptr =
+		LLVMGetParam(ctx->main_fn, ctx->param_const_and_shader_buffers);
+	struct si_shader_selector *sel = ctx->shader->selector;
+
+	/* Do the bounds checking with a descriptor, because
+	 * doing computation and manual bounds checking of 64-bit
+	 * addresses generates horrible VALU code with very high
+	 * VGPR usage and very low SIMD occupancy.
+	 */
+	ptr = LLVMBuildPtrToInt(ctx->ac.builder, ptr, ctx->ac.intptr, "");
+
+	LLVMValueRef desc0, desc1;
+	if (HAVE_32BIT_POINTERS) {
+		desc0 = ptr;
+		desc1 = LLVMConstInt(ctx->i32,
+				     S_008F04_BASE_ADDRESS_HI(ctx->screen->info.address32_hi), 0);
+	} else {
+		ptr = LLVMBuildBitCast(ctx->ac.builder, ptr, ctx->v2i32, "");
+		desc0 = LLVMBuildExtractElement(ctx->ac.builder, ptr, ctx->i32_0, "");
+		desc1 = LLVMBuildExtractElement(ctx->ac.builder, ptr, ctx->i32_1, "");
+		/* Mask out all bits except BASE_ADDRESS_HI. */
+		desc1 = LLVMBuildAnd(ctx->ac.builder, desc1,
+				     LLVMConstInt(ctx->i32, ~C_008F04_BASE_ADDRESS_HI, 0), "");
+	}
+
+	LLVMValueRef desc_elems[] = {
+		desc0,
+		desc1,
+		LLVMConstInt(ctx->i32, (sel->info.const_file_max[0] + 1) * 16, 0),
+		LLVMConstInt(ctx->i32,
+			S_008F0C_DST_SEL_X(V_008F0C_SQ_SEL_X) |
+			S_008F0C_DST_SEL_Y(V_008F0C_SQ_SEL_Y) |
+			S_008F0C_DST_SEL_Z(V_008F0C_SQ_SEL_Z) |
+			S_008F0C_DST_SEL_W(V_008F0C_SQ_SEL_W) |
+			S_008F0C_NUM_FORMAT(V_008F0C_BUF_NUM_FORMAT_FLOAT) |
+			S_008F0C_DATA_FORMAT(V_008F0C_BUF_DATA_FORMAT_32), 0)
+	};
+
+	return ac_build_gather_values(&ctx->ac, desc_elems, 4);
+}
+
 static LLVMValueRef load_const_buffer_desc(struct si_shader_context *ctx, int i)
 {
 	LLVMValueRef list_ptr = LLVMGetParam(ctx->main_fn,
@@ -2331,7 +2377,14 @@ static LLVMValueRef load_const_buffer_desc(struct si_shader_context *ctx, int i)
 static LLVMValueRef load_ubo(struct ac_shader_abi *abi, LLVMValueRef index)
 {
 	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
+	struct si_shader_selector *sel = ctx->shader->selector;
+
 	LLVMValueRef ptr = LLVMGetParam(ctx->main_fn, ctx->param_const_and_shader_buffers);
+
+	if (sel->info.const_buffers_declared == 1 &&
+	    sel->info.shader_buffers_declared == 0) {
+		return load_const_buffer_desc_fast_path(ctx);
+	}
 
 	index = si_llvm_bound_index(ctx, index, ctx->num_const_buffers);
 	index = LLVMBuildAdd(ctx->ac.builder, index,
@@ -2397,8 +2450,6 @@ static LLVMValueRef fetch_constant(
 	/* Fast path when user data SGPRs point to constant buffer 0 directly. */
 	if (sel->info.const_buffers_declared == 1 &&
 	    sel->info.shader_buffers_declared == 0) {
-		LLVMValueRef ptr =
-			LLVMGetParam(ctx->main_fn, ctx->param_const_and_shader_buffers);
 
 		/* This enables use of s_load_dword and flat_load_dword for const buffer 0
 		 * loads, and up to x4 load opcode merging. However, it leads to horrible
@@ -2413,48 +2464,17 @@ static LLVMValueRef fetch_constant(
 		 * s_buffer_load_dword (that we have to prevent) is when we use use
 		 * a literal offset where we don't need bounds checking.
 		 */
-		if (ctx->screen->info.chip_class == SI &&
-                    HAVE_LLVM < 0x0600 &&
-                    !reg->Register.Indirect) {
+		if (ctx->screen->info.chip_class == SI && HAVE_LLVM < 0x0600 &&
+		    !reg->Register.Indirect) {
+			LLVMValueRef ptr =
+				LLVMGetParam(ctx->main_fn, ctx->param_const_and_shader_buffers);
+
 			addr = LLVMBuildLShr(ctx->ac.builder, addr, LLVMConstInt(ctx->i32, 2, 0), "");
 			LLVMValueRef result = ac_build_load_invariant(&ctx->ac, ptr, addr);
 			return bitcast(bld_base, type, result);
 		}
 
-		/* Do the bounds checking with a descriptor, because
-		 * doing computation and manual bounds checking of 64-bit
-		 * addresses generates horrible VALU code with very high
-		 * VGPR usage and very low SIMD occupancy.
-		 */
-		ptr = LLVMBuildPtrToInt(ctx->ac.builder, ptr, ctx->ac.intptr, "");
-
-		LLVMValueRef desc0, desc1;
-		if (HAVE_32BIT_POINTERS) {
-			desc0 = ptr;
-			desc1 = LLVMConstInt(ctx->i32,
-					     S_008F04_BASE_ADDRESS_HI(ctx->screen->info.address32_hi), 0);
-		} else {
-			ptr = LLVMBuildBitCast(ctx->ac.builder, ptr, ctx->v2i32, "");
-			desc0 = LLVMBuildExtractElement(ctx->ac.builder, ptr, ctx->i32_0, "");
-			desc1 = LLVMBuildExtractElement(ctx->ac.builder, ptr, ctx->i32_1, "");
-			/* Mask out all bits except BASE_ADDRESS_HI. */
-			desc1 = LLVMBuildAnd(ctx->ac.builder, desc1,
-					     LLVMConstInt(ctx->i32, ~C_008F04_BASE_ADDRESS_HI, 0), "");
-		}
-
-		LLVMValueRef desc_elems[] = {
-			desc0,
-			desc1,
-			LLVMConstInt(ctx->i32, (sel->info.const_file_max[0] + 1) * 16, 0),
-			LLVMConstInt(ctx->i32,
-				S_008F0C_DST_SEL_X(V_008F0C_SQ_SEL_X) |
-				S_008F0C_DST_SEL_Y(V_008F0C_SQ_SEL_Y) |
-				S_008F0C_DST_SEL_Z(V_008F0C_SQ_SEL_Z) |
-				S_008F0C_DST_SEL_W(V_008F0C_SQ_SEL_W) |
-				S_008F0C_NUM_FORMAT(V_008F0C_BUF_NUM_FORMAT_FLOAT) |
-				S_008F0C_DATA_FORMAT(V_008F0C_BUF_DATA_FORMAT_32), 0)
-		};
-		LLVMValueRef desc = ac_build_gather_values(&ctx->ac, desc_elems, 4);
+		LLVMValueRef desc = load_const_buffer_desc_fast_path(ctx);
 		LLVMValueRef result = buffer_load_const(ctx, desc, addr);
 		return bitcast(bld_base, type, result);
 	}
@@ -7971,6 +7991,11 @@ static bool si_shader_select_ps_parts(struct si_screen *sscreen,
 void si_multiwave_lds_size_workaround(struct si_screen *sscreen,
 				      unsigned *lds_size)
 {
+	/* If tessellation is all offchip and on-chip GS isn't used, this
+	 * workaround is not needed.
+	 */
+	return;
+
 	/* SPI barrier management bug:
 	 *   Make sure we have at least 4k of LDS in use to avoid the bug.
 	 *   It applies to workgroup sizes of more than one wavefront.

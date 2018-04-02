@@ -454,6 +454,13 @@ fs_reg::equals(const fs_reg &r) const
 }
 
 bool
+fs_reg::negative_equals(const fs_reg &r) const
+{
+   return (this->backend_reg::negative_equals(r) &&
+           stride == r.stride);
+}
+
+bool
 fs_reg::is_contiguous() const
 {
    return stride == 1;
@@ -1969,7 +1976,7 @@ struct cplx_align {
 static void
 cplx_align_assert_sane(struct cplx_align a)
 {
-   assert(a.mul > 0 && util_is_power_of_two(a.mul));
+   assert(a.mul > 0 && util_is_power_of_two_nonzero(a.mul));
    assert(a.offset < a.mul);
 }
 
@@ -2021,7 +2028,7 @@ static void
 mark_uniform_slots_read(struct uniform_slot_info *slots,
                         unsigned num_slots, unsigned alignment)
 {
-   assert(alignment > 0 && util_is_power_of_two(alignment));
+   assert(alignment > 0 && util_is_power_of_two_nonzero(alignment));
    assert(alignment <= CPLX_ALIGN_MAX_MUL);
 
    /* We can't align a slot to anything less than the slot size */

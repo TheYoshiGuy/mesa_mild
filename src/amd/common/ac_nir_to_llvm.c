@@ -28,6 +28,7 @@
 #include "sid.h"
 #include "nir/nir.h"
 #include "util/bitscan.h"
+#include "util/u_math.h"
 #include "ac_shader_abi.h"
 #include "ac_shader_util.h"
 
@@ -963,6 +964,60 @@ static void visit_alu(struct ac_nir_context *ctx, const nir_alu_instr *instr)
 		break;
 	}
 
+	case nir_op_fmin3:
+		result = emit_intrin_2f_param(&ctx->ac, "llvm.minnum",
+						ac_to_float_type(&ctx->ac, def_type), src[0], src[1]);
+		result = emit_intrin_2f_param(&ctx->ac, "llvm.minnum",
+						ac_to_float_type(&ctx->ac, def_type), result, src[2]);
+		break;
+	case nir_op_umin3:
+		result = emit_minmax_int(&ctx->ac, LLVMIntULT, src[0], src[1]);
+		result = emit_minmax_int(&ctx->ac, LLVMIntULT, result, src[2]);
+		break;
+	case nir_op_imin3:
+		result = emit_minmax_int(&ctx->ac, LLVMIntSLT, src[0], src[1]);
+		result = emit_minmax_int(&ctx->ac, LLVMIntSLT, result, src[2]);
+		break;
+	case nir_op_fmax3:
+		result = emit_intrin_2f_param(&ctx->ac, "llvm.maxnum",
+						ac_to_float_type(&ctx->ac, def_type), src[0], src[1]);
+		result = emit_intrin_2f_param(&ctx->ac, "llvm.maxnum",
+						ac_to_float_type(&ctx->ac, def_type), result, src[2]);
+		break;
+	case nir_op_umax3:
+		result = emit_minmax_int(&ctx->ac, LLVMIntUGT, src[0], src[1]);
+		result = emit_minmax_int(&ctx->ac, LLVMIntUGT, result, src[2]);
+		break;
+	case nir_op_imax3:
+		result = emit_minmax_int(&ctx->ac, LLVMIntSGT, src[0], src[1]);
+		result = emit_minmax_int(&ctx->ac, LLVMIntSGT, result, src[2]);
+		break;
+	case nir_op_fmed3: {
+		LLVMValueRef tmp1 = emit_intrin_2f_param(&ctx->ac, "llvm.minnum",
+						ac_to_float_type(&ctx->ac, def_type), src[0], src[1]);
+		LLVMValueRef tmp2 = emit_intrin_2f_param(&ctx->ac, "llvm.maxnum",
+						ac_to_float_type(&ctx->ac, def_type), src[0], src[1]);
+		tmp2 = emit_intrin_2f_param(&ctx->ac, "llvm.minnum",
+						ac_to_float_type(&ctx->ac, def_type), tmp2, src[2]);
+		result = emit_intrin_2f_param(&ctx->ac, "llvm.maxnum",
+						ac_to_float_type(&ctx->ac, def_type), tmp1, tmp2);
+		break;
+	}
+	case nir_op_imed3: {
+		LLVMValueRef tmp1 = emit_minmax_int(&ctx->ac, LLVMIntSLT, src[0], src[1]);
+		LLVMValueRef tmp2 = emit_minmax_int(&ctx->ac, LLVMIntSGT, src[0], src[1]);
+		tmp2 = emit_minmax_int(&ctx->ac, LLVMIntSLT, tmp2, src[2]);
+		result = emit_minmax_int(&ctx->ac, LLVMIntSGT, tmp1, tmp2);
+		break;
+	}
+	case nir_op_umed3: {
+		LLVMValueRef tmp1 = emit_minmax_int(&ctx->ac, LLVMIntULT, src[0], src[1]);
+		LLVMValueRef tmp2 = emit_minmax_int(&ctx->ac, LLVMIntUGT, src[0], src[1]);
+		tmp2 = emit_minmax_int(&ctx->ac, LLVMIntULT, tmp2, src[2]);
+		result = emit_minmax_int(&ctx->ac, LLVMIntUGT, tmp1, tmp2);
+		break;
+	}
+
 	default:
 		fprintf(stderr, "Unknown NIR alu instr: ");
 		nir_print_instr(&instr->instr, stderr);
@@ -1175,12 +1230,21 @@ static LLVMValueRef build_tex_intrinsic(struct ac_nir_context *ctx,
 	if (instr->sampler_dim == GLSL_SAMPLER_DIM_BUF) {
 		unsigned mask = nir_ssa_def_components_read(&instr->dest.ssa);
 
-		return ac_build_buffer_load_format(&ctx->ac,
-						   args->resource,
-						   args->addr,
-						   ctx->ac.i32_0,
-						   util_last_bit(mask),
-						   false, true);
+		if (ctx->abi->gfx9_stride_size_workaround) {
+			return ac_build_buffer_load_format_gfx9_safe(&ctx->ac,
+			                                             args->resource,
+			                                             args->addr,
+			                                             ctx->ac.i32_0,
+			                                             util_last_bit(mask),
+			                                             false, true);
+		} else {
+			return ac_build_buffer_load_format(&ctx->ac,
+			                                   args->resource,
+			                                   args->addr,
+			                                   ctx->ac.i32_0,
+			                                   util_last_bit(mask),
+			                                   false, true);
+		}
 	}
 
 	args->opcode = ac_image_sample;
@@ -1793,7 +1857,7 @@ visit_store_var(struct ac_nir_context *ctx,
 	int idx = instr->variables[0]->var->data.driver_location;
 	unsigned comp = instr->variables[0]->var->data.location_frac;
 	LLVMValueRef src = ac_to_float(&ctx->ac, get_src(ctx, instr->src[0]));
-	int writemask = instr->const_index[0] << comp;
+	int writemask = instr->const_index[0];
 	LLVMValueRef indir_index;
 	unsigned const_index;
 	get_deref_offset(ctx, instr->variables[0], false,
@@ -1807,6 +1871,8 @@ visit_store_var(struct ac_nir_context *ctx,
 
 		writemask = widen_mask(writemask, 2);
 	}
+
+	writemask = writemask << comp;
 
 	switch (instr->variables[0]->var->data.mode) {
 	case nir_var_shader_out:
@@ -2196,8 +2262,23 @@ static void visit_image_store(struct ac_nir_context *ctx,
 		glc = ctx->ac.i1true;
 
 	if (dim == GLSL_SAMPLER_DIM_BUF) {
+		LLVMValueRef rsrc = get_sampler_desc(ctx, instr->variables[0], AC_DESC_BUFFER, NULL, true, true);
+
+		if (ctx->abi->gfx9_stride_size_workaround) {
+			LLVMValueRef elem_count = LLVMBuildExtractElement(ctx->ac.builder, rsrc, LLVMConstInt(ctx->ac.i32, 2, 0), "");
+			LLVMValueRef stride = LLVMBuildExtractElement(ctx->ac.builder, rsrc, LLVMConstInt(ctx->ac.i32, 1, 0), "");
+			stride = LLVMBuildLShr(ctx->ac.builder, stride, LLVMConstInt(ctx->ac.i32, 16, 0), "");
+
+			LLVMValueRef new_elem_count = LLVMBuildSelect(ctx->ac.builder,
+			                                              LLVMBuildICmp(ctx->ac.builder, LLVMIntUGT, elem_count, stride, ""),
+			                                              elem_count, stride, "");
+
+			rsrc = LLVMBuildInsertElement(ctx->ac.builder, rsrc, new_elem_count,
+			                              LLVMConstInt(ctx->ac.i32, 2, 0), "");
+		}
+
 		params[0] = ac_to_float(&ctx->ac, get_src(ctx, instr->src[2])); /* data */
-		params[1] = get_sampler_desc(ctx, instr->variables[0], AC_DESC_BUFFER, NULL, true, true);
+		params[1] = rsrc;
 		params[2] = LLVMBuildExtractElement(ctx->ac.builder, get_src(ctx, instr->src[0]),
 						    ctx->ac.i32_0, ""); /* vindex */
 		params[3] = ctx->ac.i32_0; /* voffset */
@@ -3028,6 +3109,7 @@ static LLVMValueRef get_sampler_desc(struct ac_nir_context *ctx,
 	unsigned constant_index = 0;
 	unsigned descriptor_set;
 	unsigned base_index;
+	bool bindless = false;
 
 	if (!deref) {
 		assert(tex_instr && !image);
@@ -3061,14 +3143,20 @@ static LLVMValueRef get_sampler_desc(struct ac_nir_context *ctx,
 			tail = &child->deref;
 		}
 		descriptor_set = deref->var->data.descriptor_set;
-		base_index = deref->var->data.binding;
+
+		if (deref->var->data.bindless) {
+			bindless = deref->var->data.bindless;
+			base_index = deref->var->data.driver_location;
+		} else {
+			base_index = deref->var->data.binding;
+		}
 	}
 
 	return ctx->abi->load_sampler_desc(ctx->abi,
 					  descriptor_set,
 					  base_index,
 					  constant_index, index,
-					  desc_type, image, write);
+					  desc_type, image, write, bindless);
 }
 
 static void set_tex_fetch_args(struct ac_llvm_context *ctx,
