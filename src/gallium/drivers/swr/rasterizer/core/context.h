@@ -1,5 +1,5 @@
 /****************************************************************************
-* Copyright (C) 2014-2016 Intel Corporation.   All Rights Reserved.
+* Copyright (C) 2014-2018 Intel Corporation.   All Rights Reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -176,7 +176,7 @@ struct DRAW_WORK
     };
     union
     {
-        const int32_t* pIB;        // DrawIndexed: App supplied indices
+        gfxptr_t   xpIB;              // DrawIndexed: App supplied int32 indices 
         uint32_t   startVertex;    // Draw: Starting vertex in VB to render from.
     };
     int32_t    baseVertex;
@@ -483,6 +483,7 @@ struct SWR_CONTEXT
     THREAD_POOL threadPool; // Thread pool associated with this context
     SWR_THREADING_INFO threadInfo;
     SWR_API_THREADING_INFO apiThreadInfo;
+    SWR_WORKER_PRIVATE_STATE workerPrivateState;
 
     uint32_t MAX_DRAWS_IN_FLIGHT;
 

@@ -1,5 +1,6 @@
 /*
  * Copyright 2017 Advanced Micro Devices, Inc.
+ * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -123,6 +124,15 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		case nir_intrinsic_load_tess_level_outer:
 			info->reads_tess_factors = true;
 			break;
+		case nir_intrinsic_image_var_load:
+		case nir_intrinsic_image_var_size:
+		case nir_intrinsic_image_var_samples: {
+			nir_variable *var = intr->variables[0]->var;
+			if (var->data.bindless)
+				info->uses_bindless_images = true;
+
+			break;
+		}
 		case nir_intrinsic_image_var_store:
 		case nir_intrinsic_image_var_atomic_add:
 		case nir_intrinsic_image_var_atomic_min:
@@ -131,7 +141,13 @@ static void scan_instruction(struct tgsi_shader_info *info,
 		case nir_intrinsic_image_var_atomic_or:
 		case nir_intrinsic_image_var_atomic_xor:
 		case nir_intrinsic_image_var_atomic_exchange:
-		case nir_intrinsic_image_var_atomic_comp_swap:
+		case nir_intrinsic_image_var_atomic_comp_swap: {
+			nir_variable *var = intr->variables[0]->var;
+			if (var->data.bindless)
+				info->uses_bindless_images = true;
+
+			/* fall-through */
+		}
 		case nir_intrinsic_store_ssbo:
 		case nir_intrinsic_ssbo_atomic_add:
 		case nir_intrinsic_ssbo_atomic_imin:
@@ -591,7 +607,8 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		}
 
 		unsigned loc = variable->data.location;
-		if (loc == FRAG_RESULT_COLOR &&
+		if (nir->info.stage == MESA_SHADER_FRAGMENT &&
+		    loc == FRAG_RESULT_COLOR &&
 		    nir->info.outputs_written & (1ull << loc)) {
 			assert(attrib_count == 1);
 			info->properties[TGSI_PROPERTY_FS_COLOR0_WRITES_ALL_CBUFS] = true;
@@ -656,22 +673,22 @@ void si_nir_scan_shader(const struct nir_shader *nir,
 		 * eliminated struct dereferences.
 		 */
 		if (base_type == GLSL_TYPE_SAMPLER) {
-			info->samplers_declared |=
-				u_bit_consecutive(variable->data.binding, aoa_size);
-
 			if (variable->data.bindless) {
 				info->const_buffers_declared |= 1;
 				info->const_file_max[0] +=
 					glsl_count_attribute_slots(type, false);
+			} else {
+				info->samplers_declared |=
+					u_bit_consecutive(variable->data.binding, aoa_size);
 			}
 		} else if (base_type == GLSL_TYPE_IMAGE) {
-			info->images_declared |=
-				u_bit_consecutive(variable->data.binding, aoa_size);
-
 			if (variable->data.bindless) {
 				info->const_buffers_declared |= 1;
 				info->const_file_max[0] +=
 					glsl_count_attribute_slots(type, false);
+			} else {
+				info->images_declared |=
+					u_bit_consecutive(variable->data.binding, aoa_size);
 			}
 		} else if (base_type != GLSL_TYPE_ATOMIC_UINT) {
 			if (strncmp(variable->name, "state.", 6) == 0 ||
@@ -869,14 +886,12 @@ si_nir_load_sampler_desc(struct ac_shader_abi *abi,
 	struct si_shader_context *ctx = si_shader_context_from_abi(abi);
 	LLVMBuilderRef builder = ctx->ac.builder;
 	LLVMValueRef list = LLVMGetParam(ctx->main_fn, ctx->param_samplers_and_images);
-	LLVMValueRef index = dynamic_index;
+	LLVMValueRef index;
 
 	assert(!descriptor_set);
 
-	if (!index)
-		index = ctx->ac.i32_0;
-
-	index = LLVMBuildAdd(builder, index,
+	dynamic_index = dynamic_index ? dynamic_index : ctx->ac.i32_0;
+	index = LLVMBuildAdd(builder, dynamic_index,
 			     LLVMConstInt(ctx->ac.i32, base_index + constant_index, false),
 			     "");
 

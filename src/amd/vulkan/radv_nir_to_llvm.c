@@ -32,6 +32,9 @@
 #include <llvm-c/Core.h>
 #include <llvm-c/TargetMachine.h>
 #include <llvm-c/Transforms/Scalar.h>
+#if HAVE_LLVM >= 0x0700
+#include <llvm-c/Transforms/Utils.h>
+#endif
 
 #include "sid.h"
 #include "gfx9d.h"
@@ -1791,14 +1794,26 @@ handle_vs_input_decl(struct radv_shader_context *ctx,
 
 	for (unsigned i = 0; i < attrib_count; ++i, ++idx) {
 		if (ctx->options->key.vs.instance_rate_inputs & (1u << (index + i))) {
-			buffer_index = LLVMBuildAdd(ctx->ac.builder, ctx->abi.instance_id,
-			                            ctx->abi.start_instance, "");
-			if (ctx->options->key.vs.as_ls) {
-				ctx->shader_info->vs.vgpr_comp_cnt =
-					MAX2(2, ctx->shader_info->vs.vgpr_comp_cnt);
+			uint32_t divisor = ctx->options->key.vs.instance_rate_divisors[index + i];
+
+			if (divisor) {
+				buffer_index = LLVMBuildAdd(ctx->ac.builder, ctx->abi.instance_id,
+				                            ctx->abi.start_instance, "");
+
+				if (divisor != 1) {
+					buffer_index = LLVMBuildUDiv(ctx->ac.builder, buffer_index,
+					                             LLVMConstInt(ctx->ac.i32, divisor, 0), "");
+				}
+
+				if (ctx->options->key.vs.as_ls) {
+					ctx->shader_info->vs.vgpr_comp_cnt =
+						MAX2(2, ctx->shader_info->vs.vgpr_comp_cnt);
+				} else {
+					ctx->shader_info->vs.vgpr_comp_cnt =
+						MAX2(1, ctx->shader_info->vs.vgpr_comp_cnt);
+				}
 			} else {
-				ctx->shader_info->vs.vgpr_comp_cnt =
-					MAX2(1, ctx->shader_info->vs.vgpr_comp_cnt);
+				buffer_index = ctx->ac.i32_0;
 			}
 		} else
 			buffer_index = LLVMBuildAdd(ctx->ac.builder, ctx->abi.vertex_id,

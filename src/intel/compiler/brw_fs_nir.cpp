@@ -116,6 +116,7 @@ emit_system_values_block(nir_block *block, fs_visitor *v)
 
       case nir_intrinsic_load_vertex_id_zero_base:
       case nir_intrinsic_load_base_vertex:
+      case nir_intrinsic_load_first_vertex:
       case nir_intrinsic_load_instance_id:
       case nir_intrinsic_load_base_instance:
       case nir_intrinsic_load_draw_id:
@@ -2458,6 +2459,9 @@ fs_visitor::nir_emit_vs_intrinsic(const fs_builder &bld,
       break;
    }
 
+   case nir_intrinsic_load_first_vertex:
+      unreachable("lowered by brw_nir_lower_vs_inputs");
+
    default:
       nir_emit_intrinsic(bld, instr);
       break;
@@ -3821,6 +3825,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
       const unsigned arr_dims = type->sampler_array ? 1 : 0;
       const unsigned surf_dims = type->coordinate_components() - arr_dims;
       const unsigned format = var->data.image.format;
+      const unsigned dest_components = nir_intrinsic_dest_components(instr);
 
       /* Get the arguments of the image intrinsic. */
       const fs_reg image = get_nir_image_deref(instr->variables[0]);
@@ -3844,15 +3849,13 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
 
       else
          tmp = emit_image_atomic(bld, image, addr, src0, src1,
-                                 surf_dims, arr_dims, info->dest_components,
+                                 surf_dims, arr_dims, dest_components,
                                  get_image_atomic_op(instr->intrinsic, type));
 
       /* Assign the result. */
-      if (nir_intrinsic_infos[instr->intrinsic].has_dest) {
-         for (unsigned c = 0; c < info->dest_components; ++c) {
-            bld.MOV(offset(retype(dest, base_type), bld, c),
-                    offset(tmp, bld, c));
-         }
+      for (unsigned c = 0; c < dest_components; ++c) {
+         bld.MOV(offset(retype(dest, base_type), bld, c),
+               offset(tmp, bld, c));
       }
       break;
    }
@@ -4143,7 +4146,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
       if (const_offset) {
          offset_reg = brw_imm_ud(const_offset->u32[0]);
       } else {
-         offset_reg = get_nir_src(instr->src[1]);
+         offset_reg = retype(get_nir_src(instr->src[1]), BRW_REGISTER_TYPE_UD);
       }
 
       /* Read the vector */

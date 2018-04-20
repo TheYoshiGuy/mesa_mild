@@ -1,5 +1,5 @@
 /****************************************************************************
-* Copyright (C) 2014-2015 Intel Corporation.   All Rights Reserved.
+* Copyright (C) 2014-2018 Intel Corporation.   All Rights Reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -43,6 +43,7 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
     RDTSC_BEGIN(BESampleRateBackend, pDC->drawId);
     RDTSC_BEGIN(BESetup, pDC->drawId);
 
+    void* pWorkerData = pDC->pContext->threadPool.pThreadData[workerId].pWorkerPrivateData;
     const API_STATE &state = GetApiState(pDC);
 
     BarycentricCoeffs coeffs;
@@ -163,9 +164,12 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
 
                     // execute pixel shader
                     RDTSC_BEGIN(BEPixelShader, pDC->drawId);
-                    UPDATE_STAT_BE(PsInvocations, _mm_popcnt_u32(_simd_movemask_ps(vCoverageMask)));
-                    state.psState.pfnPixelShader(GetPrivateState(pDC), &psContext);
+                    state.psState.pfnPixelShader(GetPrivateState(pDC), pWorkerData, &psContext);
                     RDTSC_END(BEPixelShader, 0);
+
+                    // update stats
+                    UPDATE_STAT_BE(PsInvocations, _mm_popcnt_u32(_simd_movemask_ps(vCoverageMask)));
+                    AR_EVENT(PSStats(psContext.stats.numInstExecuted));
 
                     vCoverageMask = _simd_castsi_ps(psContext.activeMask);
 
@@ -196,9 +200,9 @@ void BackendSampleRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_
                     // output merger
                     RDTSC_BEGIN(BEOutputMerger, pDC->drawId);
 #if USE_8x2_TILE_BACKEND
-                    OutputMerger8x2(psContext, psContext.pColorBuffer, sample, &state.blendState, state.pfnBlendFunc, vCoverageMask, depthPassMask, state.psState.renderTargetMask, useAlternateOffset);
+                    OutputMerger8x2(pDC, psContext, psContext.pColorBuffer, sample, &state.blendState, state.pfnBlendFunc, vCoverageMask, depthPassMask, state.psState.renderTargetMask, useAlternateOffset, workerId);
 #else
-                    OutputMerger4x2(psContext, psContext.pColorBuffer, sample, &state.blendState, state.pfnBlendFunc, vCoverageMask, depthPassMask, state.psState.renderTargetMask);
+                    OutputMerger4x2(pDC, psContext, psContext.pColorBuffer, sample, &state.blendState, state.pfnBlendFunc, vCoverageMask, depthPassMask, state.psState.renderTargetMask, workerId);
 #endif
 
                     // do final depth write after all pixel kills

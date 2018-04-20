@@ -46,6 +46,8 @@
 // Match MAX_SETS from radv_descriptor_set.h
 #define RADV_UD_MAX_SETS MAX_SETS
 
+#define RADV_NUM_PHYSICAL_VGPRS 256
+
 struct radv_shader_module {
 	struct nir_shader *nir;
 	unsigned char sha1[20];
@@ -55,6 +57,7 @@ struct radv_shader_module {
 
 struct radv_vs_variant_key {
 	uint32_t instance_rate_inputs;
+	uint32_t instance_rate_divisors[MAX_VERTEX_ATTRIBS];
 	uint32_t as_es:1;
 	uint32_t as_ls:1;
 	uint32_t export_prim_id:1;
@@ -360,6 +363,12 @@ static inline unsigned shader_io_get_unique_index(gl_varying_slot slot)
 	if (slot >= VARYING_SLOT_VAR0 && slot <= VARYING_SLOT_VAR31)
 		return 4 + (slot - VARYING_SLOT_VAR0);
 	unreachable("illegal slot in get unique index\n");
+}
+
+static inline uint32_t
+radv_get_num_physical_sgprs(struct radv_physical_device *physical_device)
+{
+	return physical_device->rad_info.chip_class >= VI ? 800 : 512;
 }
 
 #endif

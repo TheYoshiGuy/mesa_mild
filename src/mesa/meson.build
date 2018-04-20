@@ -18,8 +18,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# TODO: main/tests
-
 subdir('program')
 subdir('main')
 
@@ -106,7 +104,6 @@ files_libmesa_common = files(
   'main/convolve.h',
   'main/copyimage.c',
   'main/copyimage.h',
-  'main/core.h',
   'main/cpuinfo.c',
   'main/cpuinfo.h',
   'main/dd.h',
@@ -190,6 +187,7 @@ files_libmesa_common = files(
   'main/mipmap.h',
   'main/mm.c',
   'main/mm.h',
+  'main/menums.h',
   'main/mtypes.h',
   'main/multisample.c',
   'main/multisample.h',

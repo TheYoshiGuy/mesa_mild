@@ -25,7 +25,8 @@
  *    Keith Whitwell <keithw@vmware.com>
  */
 
-#include "main/mtypes.h"
+#include "c99_alloca.h"
+#include "main/errors.h"
 #include "main/bufferobj.h"
 #include "math/m_eval.h"
 #include "main/vtxfmt.h"

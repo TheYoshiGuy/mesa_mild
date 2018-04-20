@@ -262,7 +262,7 @@ brw_regs_negative_equal(const struct brw_reg *a, const struct brw_reg *b)
       if (a->bits != b->bits)
          return false;
 
-      switch (a->type) {
+      switch ((enum brw_reg_type) a->type) {
       case BRW_REGISTER_TYPE_UQ:
       case BRW_REGISTER_TYPE_Q:
          return a->d64 == -b->d64;
@@ -293,6 +293,7 @@ brw_regs_negative_equal(const struct brw_reg *a, const struct brw_reg *b)
       case BRW_REGISTER_TYPE_UB:
       case BRW_REGISTER_TYPE_B:
       case BRW_REGISTER_TYPE_NF:
+      default:
          unreachable("not reached");
       }
    } else {

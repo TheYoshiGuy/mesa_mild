@@ -1,5 +1,5 @@
 /****************************************************************************
-* Copyright (C) 2014-2015 Intel Corporation.   All Rights Reserved.
+* Copyright (C) 2014-2018 Intel Corporation.   All Rights Reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -772,6 +772,8 @@ void SIMDCALL BinTrianglesImpl(
     {
         RDTSC_EVENT(FECullZeroAreaAndBackface, _mm_popcnt_u32(origTriMask ^ triMask), 0);
     }
+
+    AR_EVENT(CullInfoEvent(pDC->drawId, cullZeroAreaMask, cullTris, origTriMask));
 
     /// Note: these variable initializations must stay above any 'goto endBenTriangles'
     // compute per tri backface

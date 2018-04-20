@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include "dev/gen_device_info.h"
 #include "main/macros.h"
+#include "main/mtypes.h"
 #include "util/ralloc.h"
 
 #ifdef __cplusplus
@@ -977,6 +978,7 @@ struct brw_vs_prog_data {
    bool uses_vertexid;
    bool uses_instanceid;
    bool uses_basevertex;
+   bool uses_firstvertex;
    bool uses_baseinstance;
    bool uses_drawid;
 };

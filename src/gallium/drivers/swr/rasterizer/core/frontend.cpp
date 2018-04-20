@@ -1,5 +1,5 @@
 /****************************************************************************
-* Copyright (C) 2014-2015 Intel Corporation.   All Rights Reserved.
+* Copyright (C) 2014-2018 Intel Corporation.   All Rights Reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -799,6 +799,8 @@ static void GeometryShaderStage(
 {
     RDTSC_BEGIN(FEGeometryShader, pDC->drawId);
 
+    void* pWorkerData = pDC->pContext->threadPool.pThreadData[workerId].pWorkerPrivateData;
+
     const API_STATE& state = GetApiState(pDC);
     const SWR_GS_STATE* pState = &state.gsState;
     SWR_GS_CONTEXT gsContext;
@@ -850,7 +852,8 @@ static void GeometryShaderStage(
         gsContext.mask = GenerateMask(numInputPrims);
 
         // execute the geometry shader
-        state.pfnGsFunc(GetPrivateState(pDC), &gsContext);
+        state.pfnGsFunc(GetPrivateState(pDC), pWorkerData, &gsContext);
+        AR_EVENT(GSStats(gsContext.stats.numInstExecuted));
 
         for (uint32_t i = 0; i < KNOB_SIMD_WIDTH; ++i)
         {
@@ -1168,6 +1171,7 @@ static void TessellationStages(
 {
     const API_STATE& state = GetApiState(pDC);
     const SWR_TS_STATE& tsState = state.tsState;
+    void* pWorkerData = pDC->pContext->threadPool.pThreadData[workerId].pWorkerPrivateData;
 
     SWR_ASSERT(gt_pTessellationThreadData);
 
@@ -1249,10 +1253,11 @@ static void TessellationStages(
 
     // Run the HS
     RDTSC_BEGIN(FEHullShader, pDC->drawId);
-    state.pfnHsFunc(GetPrivateState(pDC), &hsContext);
+    state.pfnHsFunc(GetPrivateState(pDC), pWorkerData, &hsContext);
     RDTSC_END(FEHullShader, 0);
 
     UPDATE_STAT_FE(HsInvocations, numPrims);
+    AR_EVENT(HSStats(hsContext.stats.numInstExecuted));
 
     const uint32_t* pPrimId = (const uint32_t*)&primID;
 
@@ -1313,8 +1318,10 @@ static void TessellationStages(
             dsContext.mask = GenerateMask(tsData.NumDomainPoints - dsInvocations);
 
             RDTSC_BEGIN(FEDomainShader, pDC->drawId);
-            state.pfnDsFunc(GetPrivateState(pDC), &dsContext);
+            state.pfnDsFunc(GetPrivateState(pDC), pWorkerData, &dsContext);
             RDTSC_END(FEDomainShader, 0);
+
+            AR_EVENT(DSStats(dsContext.stats.numInstExecuted));
 
             dsInvocations += KNOB_SIMD_WIDTH;
         }
@@ -1517,34 +1524,32 @@ void ProcessDraw(
 
     RDTSC_BEGIN(FEProcessDraw, pDC->drawId);
 
+    void* pWorkerData = pContext->threadPool.pThreadData[workerId].pWorkerPrivateData;
+
     DRAW_WORK&          work = *(DRAW_WORK*)pUserData;
     const API_STATE&    state = GetApiState(pDC);
 
     uint32_t indexSize = 0;
     uint32_t endVertex = work.numVerts;
 
-    const int32_t* pLastRequestedIndex = nullptr;
+    gfxptr_t xpLastRequestedIndex = 0;
     if (IsIndexedT::value)
     {
         switch (work.type)
         {
         case R32_UINT:
             indexSize = sizeof(uint32_t);
-            pLastRequestedIndex = &(work.pIB[endVertex]);
             break;
         case R16_UINT:
             indexSize = sizeof(uint16_t);
-            // nasty address offset to last index
-            pLastRequestedIndex = (int32_t*)(&(((uint16_t*)work.pIB)[endVertex]));
             break;
         case R8_UINT:
             indexSize = sizeof(uint8_t);
-            // nasty address offset to last index
-            pLastRequestedIndex = (int32_t*)(&(((uint8_t*)work.pIB)[endVertex]));
             break;
         default:
             SWR_INVALID("Invalid work.type: %d", work.type);
         }
+        xpLastRequestedIndex = work.xpIB + endVertex * indexSize;
     }
     else
     {
@@ -1656,10 +1661,10 @@ void ProcessDraw(
 
         // if the entire index buffer isn't being consumed, set the last index
         // so that fetches < a SIMD wide will be masked off
-        fetchInfo_lo.pLastIndex = (const int32_t*)(((uint8_t*)state.indexBuffer.pIndices) + state.indexBuffer.size);
-        if (pLastRequestedIndex < fetchInfo_lo.pLastIndex)
+        fetchInfo_lo.xpLastIndex = state.indexBuffer.xpIndices + state.indexBuffer.size;
+        if (xpLastRequestedIndex < fetchInfo_lo.xpLastIndex)
         {
-            fetchInfo_lo.pLastIndex = pLastRequestedIndex;
+            fetchInfo_lo.xpLastIndex = xpLastRequestedIndex;
         }
     }
     else
@@ -1679,15 +1684,15 @@ void ProcessDraw(
 
         if (IsIndexedT::value)
         {
-            fetchInfo_lo.pIndices = work.pIB;
-            fetchInfo_hi.pIndices = (int32_t *)((uint8_t *)fetchInfo_lo.pIndices + KNOB_SIMD_WIDTH * indexSize);    // 1/2 of KNOB_SIMD16_WIDTH
+            fetchInfo_lo.xpIndices = work.xpIB;
+            fetchInfo_hi.xpIndices = fetchInfo_lo.xpIndices + KNOB_SIMD_WIDTH * indexSize;    // 1/2 of KNOB_SIMD16_WIDTH
         }
         else
         {
             vIndex = _simd16_add_epi32(_simd16_set1_epi32(work.startVertexID), vScale);
 
-            fetchInfo_lo.pIndices = (const int32_t *)&vIndex;
-            fetchInfo_hi.pIndices = (const int32_t *)&vIndex + KNOB_SIMD_WIDTH; // 1/2 of KNOB_SIMD16_WIDTH
+            fetchInfo_lo.xpIndices = (gfxptr_t)&vIndex;
+            fetchInfo_hi.xpIndices = (gfxptr_t)&vIndex + KNOB_SIMD_WIDTH * sizeof(int32_t); // 1/2 of KNOB_SIMD16_WIDTH
         }
 
         fetchInfo_lo.CurInstance = instanceNum;
@@ -1721,29 +1726,30 @@ void ProcessDraw(
             {
                 if (!IsIndexedT::value)
                 {
-                    fetchInfo_lo.pLastIndex = fetchInfo_lo.pIndices;
+                    fetchInfo_lo.xpLastIndex = fetchInfo_lo.xpIndices;
                     uint32_t offset;
                     offset = std::min(endVertex-i, (uint32_t) KNOB_SIMD16_WIDTH);
 #if USE_SIMD16_SHADERS
-                    fetchInfo_lo.pLastIndex += offset;
+                    offset *= 4; // convert from index to address
+                    fetchInfo_lo.xpLastIndex += offset;
 #else
-                    fetchInfo_lo.pLastIndex += std::min(offset, (uint32_t) KNOB_SIMD_WIDTH);
+                    fetchInfo_lo.xpLastIndex += std::min(offset, (uint32_t) KNOB_SIMD_WIDTH) * 4; // * 4 for converting index to address
                     uint32_t offset2 = std::min(offset, (uint32_t) KNOB_SIMD16_WIDTH)-KNOB_SIMD_WIDTH;
                     assert(offset >= 0);
-                    fetchInfo_hi.pLastIndex = fetchInfo_hi.pIndices;
-                    fetchInfo_hi.pLastIndex += offset2;
+                    fetchInfo_hi.xpLastIndex = fetchInfo_hi.xpIndices;
+                    fetchInfo_hi.xpLastIndex += offset2 * 4; // * 4 for converting index to address
 #endif
                 }
                 // 1. Execute FS/VS for a single SIMD.
                 RDTSC_BEGIN(FEFetchShader, pDC->drawId);
 #if USE_SIMD16_SHADERS
-                state.pfnFetchFunc(GetPrivateState(pDC), fetchInfo_lo, vin);
+                state.pfnFetchFunc(GetPrivateState(pDC), pWorkerData, fetchInfo_lo, vin);
 #else
-                state.pfnFetchFunc(GetPrivateState(pDC), fetchInfo_lo, vin_lo);
+                state.pfnFetchFunc(GetPrivateState(pDC), pWorkerData, fetchInfo_lo, vin_lo);
 
                 if ((i + KNOB_SIMD_WIDTH) < endVertex)  // 1/2 of KNOB_SIMD16_WIDTH
                 {
-                    state.pfnFetchFunc(GetPrivateState(pDC), fetchInfo_hi, vin_hi);
+                    state.pfnFetchFunc(GetPrivateState(pDC), pWorkerData, fetchInfo_hi, vin_hi);
                 }
 #endif
                 RDTSC_END(FEFetchShader, 0);
@@ -1792,13 +1798,16 @@ void ProcessDraw(
                 {
                     RDTSC_BEGIN(FEVertexShader, pDC->drawId);
 #if USE_SIMD16_VS
-                    state.pfnVertexFunc(GetPrivateState(pDC), &vsContext_lo);
+                    state.pfnVertexFunc(GetPrivateState(pDC), pWorkerData, &vsContext_lo);
+                    AR_EVENT(VSStats(vsContext_lo.stats.numInstExecuted));
 #else
-                    state.pfnVertexFunc(GetPrivateState(pDC), &vsContext_lo);
+                    state.pfnVertexFunc(GetPrivateState(pDC), pWorkerData, &vsContext_lo);
+                    AR_EVENT(VSStats(vsContext_lo.stats.numInstExecuted));
 
                     if ((i + KNOB_SIMD_WIDTH) < endVertex)  // 1/2 of KNOB_SIMD16_WIDTH
                     {
-                        state.pfnVertexFunc(GetPrivateState(pDC), &vsContext_hi);
+                        state.pfnVertexFunc(GetPrivateState(pDC), pWorkerData, &vsContext_hi);
+                        AR_EVENT(VSStats(vsContext_hi.stats.numInstExecuted));
                     }
 #endif
                     RDTSC_END(FEVertexShader, 0);
@@ -1911,8 +1920,8 @@ void ProcessDraw(
 
             if (IsIndexedT::value)
             {
-                fetchInfo_lo.pIndices = (int32_t *)((uint8_t*)fetchInfo_lo.pIndices + KNOB_SIMD16_WIDTH * indexSize);
-                fetchInfo_hi.pIndices = (int32_t *)((uint8_t*)fetchInfo_hi.pIndices + KNOB_SIMD16_WIDTH * indexSize);
+                fetchInfo_lo.xpIndices = fetchInfo_lo.xpIndices + KNOB_SIMD16_WIDTH * indexSize;
+                fetchInfo_hi.xpIndices = fetchInfo_hi.xpIndices + KNOB_SIMD16_WIDTH * indexSize;
             }
             else
             {
@@ -1940,9 +1949,9 @@ void ProcessDraw(
         // if the entire index buffer isn't being consumed, set the last index
         // so that fetches < a SIMD wide will be masked off
         fetchInfo.pLastIndex = (const int32_t*)(((uint8_t*)state.indexBuffer.pIndices) + state.indexBuffer.size);
-        if (pLastRequestedIndex < fetchInfo.pLastIndex)
+        if (xpLastRequestedIndex < fetchInfo.pLastIndex)
         {
-            fetchInfo.pLastIndex = pLastRequestedIndex;
+            fetchInfo.pLastIndex = xpLastRequestedIndex;
         }
     }
     else
@@ -1990,7 +1999,7 @@ void ProcessDraw(
 
                 // 1. Execute FS/VS for a single SIMD.
                 RDTSC_BEGIN(FEFetchShader, pDC->drawId);
-                state.pfnFetchFunc(GetPrivateState(pDC), fetchInfo, vout);
+                state.pfnFetchFunc(GetPrivateState(pDC), pWorkerData, fetchInfo, vout);
                 RDTSC_END(FEFetchShader, 0);
 
                 // forward fetch generated vertex IDs to the vertex shader
@@ -2012,10 +2021,11 @@ void ProcessDraw(
 #endif
                 {
                     RDTSC_BEGIN(FEVertexShader, pDC->drawId);
-                    state.pfnVertexFunc(GetPrivateState(pDC), &vsContext);
+                    state.pfnVertexFunc(GetPrivateState(pDC), pWorkerData, &vsContext);
                     RDTSC_END(FEVertexShader, 0);
 
                     UPDATE_STAT_FE(VsInvocations, GetNumInvocations(i, endVertex));
+                    AR_EVENT(VSStats(vsContext.stats.numInstExecuted));
                 }
             }
 

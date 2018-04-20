@@ -1908,7 +1908,6 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    const struct glsl_type *image_type = sampled.type->type;
    const enum glsl_sampler_dim sampler_dim = glsl_get_sampler_dim(image_type);
    const bool is_array = glsl_sampler_type_is_array(image_type);
-   const bool is_shadow = glsl_sampler_type_is_shadow(image_type);
 
    /* Figure out the base texture operation */
    nir_texop texop;
@@ -2032,6 +2031,7 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
       break;
    }
 
+   bool is_shadow = false;
    unsigned gather_component = 0;
    switch (opcode) {
    case SpvOpImageSampleDrefImplicitLod:
@@ -2040,6 +2040,7 @@ vtn_handle_texture(struct vtn_builder *b, SpvOp opcode,
    case SpvOpImageSampleProjDrefExplicitLod:
    case SpvOpImageDrefGather:
       /* These all have an explicit depth value as their next source */
+      is_shadow = true;
       (*p++) = vtn_tex_src(b, w[idx++], nir_tex_src_comparator);
       break;
 
@@ -2434,8 +2435,7 @@ vtn_handle_image(struct vtn_builder *b, SpvOp opcode,
       struct vtn_value *val = vtn_push_value(b, w[2], vtn_value_type_ssa);
       struct vtn_type *type = vtn_value(b, w[1], vtn_value_type_type)->type;
 
-      unsigned dest_components =
-         nir_intrinsic_infos[intrin->intrinsic].dest_components;
+      unsigned dest_components = nir_intrinsic_dest_components(intrin);
       if (intrin->intrinsic == nir_intrinsic_image_var_size) {
          dest_components = intrin->num_components =
             glsl_get_vector_elements(type->type);
@@ -3361,10 +3361,12 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
 
       case SpvCapabilityGroupNonUniformQuad:
          spv_check_supported(subgroup_quad, cap);
+         break;
 
       case SpvCapabilityGroupNonUniformArithmetic:
       case SpvCapabilityGroupNonUniformClustered:
          spv_check_supported(subgroup_arithmetic, cap);
+         break;
 
       case SpvCapabilityVariablePointersStorageBuffer:
       case SpvCapabilityVariablePointers:
@@ -3380,6 +3382,16 @@ vtn_handle_preamble_instruction(struct vtn_builder *b, SpvOp opcode,
 
       case SpvCapabilityShaderViewportIndexLayerEXT:
          spv_check_supported(shader_viewport_index_layer, cap);
+         break;
+
+      case SpvCapabilityInputAttachmentArrayDynamicIndexingEXT:
+      case SpvCapabilityUniformTexelBufferArrayDynamicIndexingEXT:
+      case SpvCapabilityStorageTexelBufferArrayDynamicIndexingEXT:
+         spv_check_supported(descriptor_array_dynamic_indexing, cap);
+         break;
+
+      case SpvCapabilityRuntimeDescriptorArrayEXT:
+         spv_check_supported(runtime_descriptor_array, cap);
          break;
 
       default:

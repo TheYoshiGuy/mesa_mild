@@ -101,11 +101,21 @@ convert_block(nir_block *block, nir_builder *b)
          break;
       }
 
+      case SYSTEM_VALUE_LOCAL_GROUP_SIZE: {
+         nir_const_value local_size;
+         memset(&local_size, 0, sizeof(local_size));
+         local_size.u32[0] = b->shader->info.cs.local_size[0];
+         local_size.u32[1] = b->shader->info.cs.local_size[1];
+         local_size.u32[2] = b->shader->info.cs.local_size[2];
+         sysval = nir_build_imm(b, 3, 32, local_size);
+         break;
+      }
+
       case SYSTEM_VALUE_VERTEX_ID:
          if (b->shader->options->vertex_id_zero_based) {
             sysval = nir_iadd(b,
                               nir_load_vertex_id_zero_base(b),
-                              nir_load_base_vertex(b));
+                              nir_load_first_vertex(b));
          } else {
             sysval = nir_load_vertex_id(b);
          }

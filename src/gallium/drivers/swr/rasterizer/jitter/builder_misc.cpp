@@ -33,10 +33,10 @@
 
 #include <cstdarg>
 
+extern "C" void CallPrint(const char* fmt, ...);
+
 namespace SwrJit
 {
-    void __cdecl CallPrint(const char* fmt, ...);
-
     //////////////////////////////////////////////////////////////////////////
     /// @brief Convert an IEEE 754 32-bit single precision float to an
     ///        16 bit float with 5 exponent bits and a variable
@@ -335,13 +335,6 @@ namespace SwrJit
         return CALLA(Callee, args);
     }
 
-    //////////////////////////////////////////////////////////////////////////
-    Value *Builder::DEBUGTRAP()
-    {
-        Function *func = Intrinsic::getDeclaration(JM()->mpCurrentModule, Intrinsic::debugtrap);
-        return CALL(func);
-    }
-
     Value *Builder::VRCP(Value *va, const llvm::Twine& name)
     {
         return FDIV(VIMMED1(1.0f), va, name);  // 1 / a
@@ -532,6 +525,28 @@ namespace SwrJit
         return S_EXT(mask, mSimd16Int32Ty);
     }
 
+    /// @brief Convert <Nxi1> llvm mask to integer
+    Value *Builder::VMOVMSK(Value* mask)
+    {
+        SWR_ASSERT(mask->getType()->getVectorElementType() == mInt1Ty);
+        uint32_t numLanes = mask->getType()->getVectorNumElements();
+        Value* i32Result;
+        if (numLanes == 8)
+        {
+            i32Result = BITCAST(mask, mInt8Ty);
+        }
+        else if (numLanes == 16)
+        {
+            i32Result = BITCAST(mask, mInt16Ty);
+        }
+        else
+        {
+            SWR_ASSERT("Unsupported vector width");
+            i32Result = BITCAST(mask, mInt8Ty);
+        }
+        return Z_EXT(i32Result, mInt32Ty);
+    }
+
     //////////////////////////////////////////////////////////////////////////
     /// @brief Generate a VPSHUFB operation in LLVM IR.  If not  
     /// supported on the underlying platform, emulate it
@@ -606,76 +621,6 @@ namespace SwrJit
         Type* v8x32Ty = VectorType::get(mInt32Ty, 8);
         // Extract 8 values from 128bit lane and sign extend
         return S_EXT(VSHUFFLE(a, a, C<int>({0, 1, 2, 3, 4, 5, 6, 7})), v8x32Ty);
-    }
-
-    //////////////////////////////////////////////////////////////////////////
-    /// @brief Generate a VPERMD operation (shuffle 32 bit integer values 
-    /// across 128 bit lanes) in LLVM IR.  If not supported on the underlying 
-    /// platform, emulate it
-    /// @param a - 256bit SIMD lane(8x32bit) of integer values.
-    /// @param idx - 256bit SIMD lane(8x32bit) of 3 bit lane index values
-    Value *Builder::PERMD(Value* a, Value* idx)
-    {
-        Value* res;
-        // use avx2 permute instruction if available
-        if(JM()->mArch.AVX2())
-        {
-            res = VPERMD(a, idx);
-        }
-        else
-        {
-            if (isa<Constant>(idx))
-            {
-                res = VSHUFFLE(a, a, idx);
-            }
-            else
-            {
-                res = VUNDEF_I();
-                for (uint32_t l = 0; l < JM()->mVWidth; ++l)
-                {
-                    Value* pIndex = VEXTRACT(idx, C(l));
-                    Value* pVal = VEXTRACT(a, pIndex);
-                    res = VINSERT(res, pVal, C(l));
-                }
-            }
-        }
-        return res;
-    }
-
-    //////////////////////////////////////////////////////////////////////////
-    /// @brief Generate a VPERMPS operation (shuffle 32 bit float values 
-    /// across 128 bit lanes) in LLVM IR.  If not supported on the underlying 
-    /// platform, emulate it
-    /// @param a - 256bit SIMD lane(8x32bit) of float values.
-    /// @param idx - 256bit SIMD lane(8x32bit) of 3 bit lane index values
-    Value *Builder::PERMPS(Value* a, Value* idx)
-    {
-        Value* res;
-        // use avx2 permute instruction if available
-        if (JM()->mArch.AVX2())
-        {
-            // llvm 3.6.0 swapped the order of the args to vpermd
-            res = VPERMPS(idx, a);
-        }
-        else
-        {
-            if (isa<Constant>(idx))
-            {
-                res = VSHUFFLE(a, a, idx);
-            }
-            else
-            {
-                res = VUNDEF_F();
-                for (uint32_t l = 0; l < JM()->mVWidth; ++l)
-                {
-                    Value* pIndex = VEXTRACT(idx, C(l));
-                    Value* pVal = VEXTRACT(a, pIndex);
-                    res = VINSERT(res, pVal, C(l));
-                }
-            }
-        }
-
-        return res;
     }
 
     //////////////////////////////////////////////////////////////////////////
@@ -756,6 +701,18 @@ namespace SwrJit
         return SELECT(cmp, a, b);
     }
 
+    Value *Builder::PMAXUD(Value* a, Value* b)
+    {
+        Value* cmp = ICMP_UGT(a, b);
+        return SELECT(cmp, a, b);
+    }
+
+    Value *Builder::PMINUD(Value* a, Value* b)
+    {
+        Value* cmp = ICMP_ULT(a, b);
+        return SELECT(cmp, a, b);
+    }
+
     // Helper function to create alloca in entry block of function
     Value* Builder::CreateEntryAlloca(Function* pFunc, Type* pType)
     {
@@ -829,41 +786,16 @@ namespace SwrJit
         return vOut;
     }
 
-    Value* Builder::POPCNT(Value* a)
-    {
-        Function* pCtPop = Intrinsic::getDeclaration(JM()->mpCurrentModule, Intrinsic::ctpop, { a->getType() });
-        return CALL(pCtPop, std::initializer_list<Value*>{a});
-    }
-
     //////////////////////////////////////////////////////////////////////////
     /// @brief pop count on vector mask (e.g. <8 x i1>)
     Value* Builder::VPOPCNT(Value* a)
     {
-        Value* b = BITCAST(VMASK(a), mSimdFP32Ty);
-        return POPCNT(VMOVMSKPS(b));
+        return POPCNT(VMOVMSK(a));
     }
 
     //////////////////////////////////////////////////////////////////////////
     /// @brief C functions called by LLVM IR
     //////////////////////////////////////////////////////////////////////////
-
-    //////////////////////////////////////////////////////////////////////////
-    /// @brief called in JIT code, inserted by PRINT
-    /// output to both stdout and visual studio debug console
-    void __cdecl CallPrint(const char* fmt, ...)
-    {
-        va_list args;
-        va_start(args, fmt);
-        vprintf(fmt, args);
-
-    #if defined( _WIN32 )
-        char strBuf[1024];
-        vsnprintf_s(strBuf, _TRUNCATE, fmt, args);
-        OutputDebugStringA(strBuf);
-    #endif
-
-        va_end(args);
-    }
 
     Value *Builder::VEXTRACTI128(Value* a, Constant* imm8)
     {

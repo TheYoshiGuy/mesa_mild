@@ -212,6 +212,9 @@ nir_function_create(nir_shader *shader, const char *name)
    return func;
 }
 
+/* NOTE: if the instruction you are copying a src to is already added
+ * to the IR, use nir_instr_rewrite_src() instead.
+ */
 void nir_src_copy(nir_src *dest, const nir_src *src, void *mem_ctx)
 {
    dest->is_ssa = src->is_ssa;
@@ -1988,6 +1991,8 @@ nir_intrinsic_from_system_value(gl_system_value val)
       return nir_intrinsic_load_base_instance;
    case SYSTEM_VALUE_VERTEX_ID_ZERO_BASE:
       return nir_intrinsic_load_vertex_id_zero_base;
+   case SYSTEM_VALUE_FIRST_VERTEX:
+      return nir_intrinsic_load_first_vertex;
    case SYSTEM_VALUE_BASE_VERTEX:
       return nir_intrinsic_load_base_vertex;
    case SYSTEM_VALUE_INVOCATION_ID:
@@ -2063,6 +2068,8 @@ nir_system_value_from_intrinsic(nir_intrinsic_op intrin)
       return SYSTEM_VALUE_BASE_INSTANCE;
    case nir_intrinsic_load_vertex_id_zero_base:
       return SYSTEM_VALUE_VERTEX_ID_ZERO_BASE;
+   case nir_intrinsic_load_first_vertex:
+      return SYSTEM_VALUE_FIRST_VERTEX;
    case nir_intrinsic_load_base_vertex:
       return SYSTEM_VALUE_BASE_VERTEX;
    case nir_intrinsic_load_invocation_id:

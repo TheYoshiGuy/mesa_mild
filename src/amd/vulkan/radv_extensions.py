@@ -87,14 +87,18 @@ EXTENSIONS = [
     Extension('VK_KHR_multiview',                         1, True),
     Extension('VK_EXT_debug_report',                      9, True),
     Extension('VK_EXT_depth_range_unrestricted',          1, True),
+    Extension('VK_EXT_descriptor_indexing',               2, True),
     Extension('VK_EXT_discard_rectangles',                1, True),
     Extension('VK_EXT_external_memory_dma_buf',           1, True),
     Extension('VK_EXT_external_memory_host',              1, 'device->rad_info.has_userptr'),
     Extension('VK_EXT_global_priority',                   1, 'device->rad_info.has_ctx_priority'),
     Extension('VK_EXT_sampler_filter_minmax',             1, 'device->rad_info.chip_class >= CIK'),
+    Extension('VK_EXT_shader_viewport_index_layer',       1, True),
+    Extension('VK_EXT_vertex_attribute_divisor',          1, True),
     Extension('VK_AMD_draw_indirect_count',               1, True),
     Extension('VK_AMD_gcn_shader',                        1, True),
-    Extension('VK_AMD_rasterization_order',               1, 'device->rad_info.chip_class >= VI && device->rad_info.max_se >= 2'),
+    Extension('VK_AMD_rasterization_order',               1, 'device->has_out_of_order_rast'),
+    Extension('VK_AMD_shader_core_properties',            1, True),
     Extension('VK_AMD_shader_info',                       1, True),
     Extension('VK_AMD_shader_trinary_minmax',             1, True),
 ]
@@ -155,16 +159,6 @@ def _init_exts_from_xml(xml):
     for ext_elem in xml.findall('.extensions/extension'):
         ext_name = ext_elem.attrib['name']
         if ext_name not in ext_name_map:
-            continue
-
-        # Workaround for VK_ANDROID_native_buffer. Its <extension> element in
-        # vk.xml lists it as supported="disabled" and provides only a stub
-        # definition.  Its <extension> element in Mesa's custom
-        # vk_android_native_buffer.xml, though, lists it as
-        # supported='android-vendor' and fully defines the extension. We want
-        # to skip the <extension> element in vk.xml.
-        if ext_elem.attrib['supported'] == 'disabled':
-            assert ext_name == 'VK_ANDROID_native_buffer'
             continue
 
         ext = ext_name_map[ext_name]

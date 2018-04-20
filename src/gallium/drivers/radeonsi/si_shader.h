@@ -1,5 +1,6 @@
 /*
  * Copyright 2012 Advanced Micro Devices, Inc.
+ * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -541,6 +542,9 @@ struct si_shader_key {
 			unsigned	vs_export_prim_id:1;
 			struct {
 				unsigned interpolate_at_sample_force_center:1;
+				unsigned fbfetch_msaa;
+				unsigned fbfetch_is_1D;
+				unsigned fbfetch_layered;
 			} ps;
 		} u;
 	} mono;

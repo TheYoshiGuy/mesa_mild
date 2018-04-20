@@ -895,6 +895,7 @@ struct anv_device {
 
     struct anv_bo                               workaround_bo;
     struct anv_bo                               trivial_batch_bo;
+    struct anv_bo                               hiz_clear_bo;
 
     struct anv_pipeline_cache                   blorp_shader_cache;
     struct blorp_context                        blorp;
@@ -1700,10 +1701,15 @@ struct anv_surface_state {
     *
     * This field is 0 if and only if no aux surface exists.
     *
-    * This address is relative to the start of the BO.  On gen7, the bottom 12
-    * bits of this address include extra aux information.
+    * This address is relative to the start of the BO.  With the exception of
+    * gen8, the bottom 12 bits of this address include extra aux information.
     */
    uint64_t aux_address;
+   /* Address of the clear color, if any
+    *
+    * This address is relative to the start of the BO.
+    */
+   uint64_t clear_address;
 };
 
 /**
@@ -2350,6 +2356,10 @@ anv_image_aspect_get_planes(VkImageAspectFlags aspect_mask)
    if (aspect_mask & VK_IMAGE_ASPECT_PLANE_2_BIT)
       planes++;
 
+   if ((aspect_mask & VK_IMAGE_ASPECT_DEPTH_BIT) != 0 &&
+       (aspect_mask & VK_IMAGE_ASPECT_STENCIL_BIT) != 0)
+      planes++;
+
    return planes;
 }
 
@@ -2614,7 +2624,11 @@ anv_image_get_fast_clear_type_addr(const struct anv_device *device,
 {
    struct anv_address addr =
       anv_image_get_clear_color_addr(device, image, aspect);
-   addr.offset += device->isl_dev.ss.clear_value_size;
+
+   const unsigned clear_color_state_size = device->info.gen >= 10 ?
+      device->isl_dev.ss.clear_color_state_size :
+      device->isl_dev.ss.clear_value_size;
+   addr.offset += clear_color_state_size;
    return addr;
 }
 
@@ -2702,13 +2716,15 @@ anv_image_mcs_op(struct anv_cmd_buffer *cmd_buffer,
                  const struct anv_image *image,
                  VkImageAspectFlagBits aspect,
                  uint32_t base_layer, uint32_t layer_count,
-                 enum isl_aux_op mcs_op, bool predicate);
+                 enum isl_aux_op mcs_op, union isl_color_value *clear_value,
+                 bool predicate);
 void
 anv_image_ccs_op(struct anv_cmd_buffer *cmd_buffer,
                  const struct anv_image *image,
                  VkImageAspectFlagBits aspect, uint32_t level,
                  uint32_t base_layer, uint32_t layer_count,
-                 enum isl_aux_op ccs_op, bool predicate);
+                 enum isl_aux_op ccs_op, union isl_color_value *clear_value,
+                 bool predicate);
 
 void
 anv_image_copy_to_shadow(struct anv_cmd_buffer *cmd_buffer,
@@ -2897,6 +2913,26 @@ void anv_fill_buffer_surface_state(struct anv_device *device,
                                    enum isl_format format,
                                    uint32_t offset, uint32_t range,
                                    uint32_t stride);
+
+static inline void
+anv_clear_color_from_att_state(union isl_color_value *clear_color,
+                               const struct anv_attachment_state *att_state,
+                               const struct anv_image_view *iview)
+{
+   const struct isl_format_layout *view_fmtl =
+      isl_format_get_layout(iview->planes[0].isl.format);
+
+#define COPY_CLEAR_COLOR_CHANNEL(c, i) \
+   if (view_fmtl->channels.c.bits) \
+      clear_color->u32[i] = att_state->clear_value.color.uint32[i]
+
+   COPY_CLEAR_COLOR_CHANNEL(r, 0);
+   COPY_CLEAR_COLOR_CHANNEL(g, 1);
+   COPY_CLEAR_COLOR_CHANNEL(b, 2);
+   COPY_CLEAR_COLOR_CHANNEL(a, 3);
+
+#undef COPY_CLEAR_COLOR_CHANNEL
+}
 
 
 struct anv_ycbcr_conversion {

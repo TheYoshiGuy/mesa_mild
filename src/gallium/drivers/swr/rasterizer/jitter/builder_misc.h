@@ -96,20 +96,13 @@ CallInst *CALL(Value *Callee, Value* arg);
 CallInst *CALL2(Value *Callee, Value* arg1, Value* arg2);
 CallInst *CALL3(Value *Callee, Value* arg1, Value* arg2, Value* arg3);
 
-Value *VCMPPS_EQ(Value* a, Value* b)    { return VCMPPS(a, b, C((uint8_t)_CMP_EQ_OQ)); }
-Value *VCMPPS_LT(Value* a, Value* b)    { return VCMPPS(a, b, C((uint8_t)_CMP_LT_OQ)); }
-Value *VCMPPS_LE(Value* a, Value* b)    { return VCMPPS(a, b, C((uint8_t)_CMP_LE_OQ)); }
-Value *VCMPPS_ISNAN(Value* a, Value* b) { return VCMPPS(a, b, C((uint8_t)_CMP_UNORD_Q)); }
-Value *VCMPPS_NEQ(Value* a, Value* b)   { return VCMPPS(a, b, C((uint8_t)_CMP_NEQ_OQ)); }
-Value *VCMPPS_GE(Value* a, Value* b)    { return VCMPPS(a, b, C((uint8_t)_CMP_GE_OQ)); }
-Value *VCMPPS_GT(Value* a, Value* b)    { return VCMPPS(a, b, C((uint8_t)_CMP_GT_OQ)); }
-Value *VCMPPS_NOTNAN(Value* a, Value* b){ return VCMPPS(a, b, C((uint8_t)_CMP_ORD_Q)); }
-
 Value *MASK(Value *vmask);
 Value *MASK_16(Value *vmask);
 
 Value *VMASK(Value *mask);
 Value *VMASK_16(Value *mask);
+
+Value *VMOVMSK(Value *mask);
 
 //////////////////////////////////////////////////////////////////////////
 /// @brief functions that build IR to call x86 intrinsics directly, or
@@ -122,23 +115,14 @@ Value *JOIN_16(Value *a, Value *b);
 Value *PSHUFB(Value* a, Value* b);
 Value *PMOVSXBD(Value* a);
 Value *PMOVSXWD(Value* a);
-Value *PERMD(Value* a, Value* idx);
-Value *PERMPS(Value* a, Value* idx);
 Value *CVTPH2PS(Value* a, const llvm::Twine& name = "");
 Value *CVTPS2PH(Value* a, Value* rounding);
 Value *PMAXSD(Value* a, Value* b);
 Value *PMINSD(Value* a, Value* b);
+Value *PMAXUD(Value* a, Value* b);
+Value *PMINUD(Value* a, Value* b);
 Value *VABSPS(Value* a);
 Value *FMADDPS(Value* a, Value* b, Value* c);
-
-// LLVM removed VPCMPGTD x86 intrinsic.  This emulates that behavior
-Value *VPCMPGTD(Value* a, Value* b)
-{
-    Value* vIndexMask = ICMP_UGT(a,b);
-
-    // need to set the high bit for x86 intrinsic masks
-    return S_EXT(vIndexMask,VectorType::get(mInt32Ty,JM()->mVWidth));
-}
 
 Value *ICLAMP(Value* src, Value* low, Value* high, const llvm::Twine& name = "");
 Value *FCLAMP(Value* src, Value* low, Value* high);
@@ -147,10 +131,8 @@ Value *FCLAMP(Value* src, float low, float high);
 CallInst *PRINT(const std::string &printStr);
 CallInst *PRINT(const std::string &printStr,const std::initializer_list<Value*> &printArgs);
 
-Value* POPCNT(Value* a);
 Value* VPOPCNT(Value* a);
 
-Value* DEBUGTRAP();
 Value* INT3() { return DEBUGTRAP(); }
 
 

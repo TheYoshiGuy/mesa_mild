@@ -371,7 +371,7 @@ void radeon_bo_destroy(struct pb_buffer *_buf)
     if (bo->u.real.ptr)
         os_munmap(bo->u.real.ptr, bo->base.size);
 
-    if (rws->info.has_virtual_memory) {
+    if (rws->info.r600_has_virtual_memory) {
         if (rws->va_unmap_working) {
             struct drm_radeon_gem_va va;
 
@@ -516,7 +516,8 @@ static void *radeon_bo_map(struct pb_buffer *buf,
                  *
                  * Only check whether the buffer is being used for write. */
                 if (cs && radeon_bo_is_referenced_by_cs_for_write(cs, bo)) {
-                    cs->flush_cs(cs->flush_data, PIPE_FLUSH_ASYNC, NULL);
+                    cs->flush_cs(cs->flush_data,
+				 RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
                     return NULL;
                 }
 
@@ -526,7 +527,8 @@ static void *radeon_bo_map(struct pb_buffer *buf,
                 }
             } else {
                 if (cs && radeon_bo_is_referenced_by_cs(cs, bo)) {
-                    cs->flush_cs(cs->flush_data, PIPE_FLUSH_ASYNC, NULL);
+                    cs->flush_cs(cs->flush_data,
+				 RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
                     return NULL;
                 }
 
@@ -547,7 +549,8 @@ static void *radeon_bo_map(struct pb_buffer *buf,
                  *
                  * Only check whether the buffer is being used for write. */
                 if (cs && radeon_bo_is_referenced_by_cs_for_write(cs, bo)) {
-                    cs->flush_cs(cs->flush_data, 0, NULL);
+                    cs->flush_cs(cs->flush_data,
+				 RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
                 }
                 radeon_bo_wait((struct pb_buffer*)bo, PIPE_TIMEOUT_INFINITE,
                                RADEON_USAGE_WRITE);
@@ -555,7 +558,8 @@ static void *radeon_bo_map(struct pb_buffer *buf,
                 /* Mapping for write. */
                 if (cs) {
                     if (radeon_bo_is_referenced_by_cs(cs, bo)) {
-                        cs->flush_cs(cs->flush_data, 0, NULL);
+                        cs->flush_cs(cs->flush_data,
+				     RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
                     } else {
                         /* Try to avoid busy-waiting in radeon_bo_wait. */
                         if (p_atomic_read(&bo->num_active_ioctls))
@@ -679,7 +683,7 @@ static struct radeon_bo *radeon_create_bo(struct radeon_drm_winsys *rws,
                             heap);
     }
 
-    if (rws->info.has_virtual_memory) {
+    if (rws->info.r600_has_virtual_memory) {
         struct drm_radeon_gem_va va;
         unsigned va_gap_size;
 
@@ -974,7 +978,7 @@ radeon_winsys_bo_create(struct radeon_winsys *rws,
     /* Sub-allocate small buffers from slabs. */
     if (!(flags & RADEON_FLAG_NO_SUBALLOC) &&
         size <= (1 << RADEON_SLAB_MAX_SIZE_LOG2) &&
-        ws->info.has_virtual_memory &&
+        ws->info.r600_has_virtual_memory &&
         alignment <= MAX2(1 << RADEON_SLAB_MIN_SIZE_LOG2, util_next_power_of_two(size))) {
         struct pb_slab_entry *entry;
         int heap = radeon_get_heap_index(domain, flags);
@@ -1027,7 +1031,7 @@ no_slab:
     bo = radeon_create_bo(ws, size, alignment, domain, flags, heap);
     if (!bo) {
         /* Clear the cache and try again. */
-        if (ws->info.has_virtual_memory)
+        if (ws->info.r600_has_virtual_memory)
             pb_slabs_reclaim(&ws->bo_slabs);
         pb_cache_release_all_buffers(&ws->bo_cache);
         bo = radeon_create_bo(ws, size, alignment, domain, flags, heap);
@@ -1089,7 +1093,7 @@ static struct pb_buffer *radeon_winsys_bo_from_ptr(struct radeon_winsys *rws,
 
     mtx_unlock(&ws->bo_handles_mutex);
 
-    if (ws->info.has_virtual_memory) {
+    if (ws->info.r600_has_virtual_memory) {
         struct drm_radeon_gem_va va;
 
         bo->va = radeon_bomgr_find_va64(ws, bo->base.size, 1 << 20);
@@ -1232,7 +1236,7 @@ done:
     if (offset)
         *offset = whandle->offset;
 
-    if (ws->info.has_virtual_memory && !bo->va) {
+    if (ws->info.r600_has_virtual_memory && !bo->va) {
         struct drm_radeon_gem_va va;
 
         bo->va = radeon_bomgr_find_va64(ws, bo->base.size, 1 << 20);

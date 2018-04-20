@@ -21,8 +21,8 @@
  * IN THE SOFTWARE.
  */
 
-#include "main/mtypes.h"
 #include "nir.h"
+#include "main/menums.h"
 
 static void
 set_io_mask(nir_shader *shader, nir_variable *var, int offset, int len,
@@ -265,6 +265,7 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
    case nir_intrinsic_load_vertex_id:
    case nir_intrinsic_load_vertex_id_zero_base:
    case nir_intrinsic_load_base_vertex:
+   case nir_intrinsic_load_first_vertex:
    case nir_intrinsic_load_base_instance:
    case nir_intrinsic_load_instance_id:
    case nir_intrinsic_load_sample_id:

@@ -1,5 +1,5 @@
 /****************************************************************************
-* Copyright (C) 2014-2015 Intel Corporation.   All Rights Reserved.
+* Copyright (C) 2014-2018 Intel Corporation.   All Rights Reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -19,13 +19,13 @@
 * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 * IN THE SOFTWARE.
-* 
+*
 * @file JitManager.cpp
-* 
+*
 * @brief Implementation if the Jit Manager.
-* 
+*
 * Notes:
-* 
+*
 ******************************************************************************/
 #include "jit_pch.hpp"
 
@@ -66,6 +66,7 @@ JitManager::JitManager(uint32_t simdWidth, const char *arch, const char* core)
     InitializeNativeTargetAsmPrinter();
     InitializeNativeTargetDisassembler();
 
+
     TargetOptions    tOpts;
     tOpts.AllowFPOpFusion = FPOpFusion::Fast;
     tOpts.NoInfsFPMath = false;
@@ -73,9 +74,6 @@ JitManager::JitManager(uint32_t simdWidth, const char *arch, const char* core)
     tOpts.UnsafeFPMath = false;
 
     //tOpts.PrintMachineCode    = true;
-
-    mCore = std::string(core);
-    std::transform(mCore.begin(), mCore.end(), mCore.begin(), ::tolower);
 
     std::unique_ptr<Module> newModule(new Module("", mContext));
     mpCurrentModule = newModule.get();
@@ -92,6 +90,12 @@ JitManager::JitManager(uint32_t simdWidth, const char *arch, const char* core)
 #endif // _WIN32
 
     auto optLevel = CodeGenOpt::Aggressive;
+
+    if (KNOB_JIT_OPTIMIZATION_LEVEL >= CodeGenOpt::None &&
+        KNOB_JIT_OPTIMIZATION_LEVEL <= CodeGenOpt::Aggressive)
+    {
+        optLevel = CodeGenOpt::Level(KNOB_JIT_OPTIMIZATION_LEVEL);
+    }
 
     mpExec = EngineBuilder(std::move(newModule))
         .setTargetOptions(tOpts)
@@ -110,11 +114,6 @@ JitManager::JitManager(uint32_t simdWidth, const char *arch, const char* core)
     mpExec->RegisterJITEventListener(vTune);
 #endif
 
-    mFP32Ty = Type::getFloatTy(mContext);   // float type
-    mInt8Ty = Type::getInt8Ty(mContext);
-    mInt32Ty = Type::getInt32Ty(mContext);   // int type
-    mInt64Ty = Type::getInt64Ty(mContext);   // int type
-
     // fetch function signature
 #if USE_SIMD16_SHADERS
     // typedef void(__cdecl *PFN_FETCH_FUNC)(SWR_FETCH_CONTEXT& fetchInfo, simd16vertex& out);
@@ -126,6 +125,8 @@ JitManager::JitManager(uint32_t simdWidth, const char *arch, const char* core)
     // llvm5 is picky and does not take a void * type
     fsArgs.push_back(PointerType::get(Gen_SWR_FETCH_CONTEXT(this), 0));
 
+    fsArgs.push_back(Type::getInt8PtrTy(mContext));
+
     fsArgs.push_back(PointerType::get(Gen_SWR_FETCH_CONTEXT(this), 0));
 #if USE_SIMD16_SHADERS
     fsArgs.push_back(PointerType::get(Gen_simd16vertex(this), 0));
@@ -135,20 +136,6 @@ JitManager::JitManager(uint32_t simdWidth, const char *arch, const char* core)
 
     mFetchShaderTy = FunctionType::get(Type::getVoidTy(mContext), fsArgs, false);
 
-    mSimtFP32Ty = VectorType::get(mFP32Ty, mVWidth);
-    mSimtInt32Ty = VectorType::get(mInt32Ty, mVWidth);
-
-    mSimdVectorTy = ArrayType::get(mSimtFP32Ty, 4);
-    mSimdVectorInt32Ty = ArrayType::get(mSimtInt32Ty, 4);
-
-#if USE_SIMD16_SHADERS
-    mSimd16FP32Ty = ArrayType::get(mSimtFP32Ty, 2);
-    mSimd16Int32Ty = ArrayType::get(mSimtInt32Ty, 2);
-
-    mSimd16VectorFP32Ty = ArrayType::get(mSimd16FP32Ty, 4);
-    mSimd16VectorInt32Ty = ArrayType::get(mSimd16Int32Ty, 4);
-
-#endif
 #if defined(_WIN32)
     // explicitly instantiate used symbols from potentially staticly linked libs
     sys::DynamicLibrary::AddSymbol("exp2f", &exp2f);
@@ -173,7 +160,7 @@ JitManager::JitManager(uint32_t simdWidth, const char *arch, const char* core)
 void JitManager::SetupNewModule()
 {
     SWR_ASSERT(mIsModuleFinalized == true && "Current module is not finalized!");
-    
+
     std::unique_ptr<Module> newModule(new Module("", mContext));
     mpCurrentModule = newModule.get();
 #if defined(_WIN32)
@@ -288,6 +275,7 @@ DIType* JitManager::GetDebugIntegerType(Type* pTy)
     case 16: return builder.createBasicType("int16", 16, dwarf::DW_ATE_signed); break;
     case 32: return builder.createBasicType("int", 32, dwarf::DW_ATE_signed); break;
     case 64: return builder.createBasicType("int64", 64, dwarf::DW_ATE_signed); break;
+    case 128: return builder.createBasicType("int128", 128, dwarf::DW_ATE_signed); break;
     default: SWR_ASSERT(false, "Unimplemented integer bit width");
     }
     return nullptr;

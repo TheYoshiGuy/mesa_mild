@@ -200,6 +200,17 @@ add_image_view_relocs(struct anv_cmd_buffer *cmd_buffer,
       if (result != VK_SUCCESS)
          anv_batch_set_error(&cmd_buffer->batch, result);
    }
+
+   if (state.clear_address) {
+      VkResult result =
+         anv_reloc_list_add(&cmd_buffer->surface_relocs,
+                            &cmd_buffer->pool->alloc,
+                            state.state.offset +
+                            isl_dev->ss.clear_color_state_offset,
+                            image->planes[image_plane].bo, state.clear_address);
+      if (result != VK_SUCCESS)
+         anv_batch_set_error(&cmd_buffer->batch, result);
+   }
 }
 
 static void
@@ -272,20 +283,8 @@ color_attachment_compute_aux_usage(struct anv_device * device,
    assert(iview->image->planes[0].aux_surface.isl.usage &
           (ISL_SURF_USAGE_CCS_BIT | ISL_SURF_USAGE_MCS_BIT));
 
-   const struct isl_format_layout *view_fmtl =
-      isl_format_get_layout(iview->planes[0].isl.format);
    union isl_color_value clear_color = {};
-
-#define COPY_CLEAR_COLOR_CHANNEL(c, i) \
-   if (view_fmtl->channels.c.bits) \
-      clear_color.u32[i] = att_state->clear_value.color.uint32[i]
-
-   COPY_CLEAR_COLOR_CHANNEL(r, 0);
-   COPY_CLEAR_COLOR_CHANNEL(g, 1);
-   COPY_CLEAR_COLOR_CHANNEL(b, 2);
-   COPY_CLEAR_COLOR_CHANNEL(a, 3);
-
-#undef COPY_CLEAR_COLOR_CHANNEL
+   anv_clear_color_from_att_state(&clear_color, att_state, iview);
 
    att_state->clear_color_is_zero_one =
       isl_color_value_is_zero_one(clear_color, iview->planes[0].isl.format);
@@ -751,7 +750,7 @@ anv_cmd_predicated_ccs_resolve(struct anv_cmd_buffer *cmd_buffer,
       resolve_op = ISL_AUX_OP_FULL_RESOLVE;
 
    anv_image_ccs_op(cmd_buffer, image, aspect, level,
-                    array_layer, 1, resolve_op, true);
+                    array_layer, 1, resolve_op, NULL, true);
 }
 
 static void
@@ -771,7 +770,7 @@ anv_cmd_predicated_mcs_resolve(struct anv_cmd_buffer *cmd_buffer,
                                      resolve_op, fast_clear_supported);
 
    anv_image_mcs_op(cmd_buffer, image, aspect,
-                    array_layer, 1, resolve_op, true);
+                    array_layer, 1, resolve_op, NULL, true);
 #else
    unreachable("MCS resolves are unsupported on Ivybridge and Bay Trail");
 #endif
@@ -826,35 +825,36 @@ init_fast_clear_color(struct anv_cmd_buffer *cmd_buffer,
     */
    struct anv_address addr =
       anv_image_get_clear_color_addr(cmd_buffer->device, image, aspect);
-   unsigned i = 0;
-   for (; i < cmd_buffer->device->isl_dev.ss.clear_value_size; i += 4) {
-      anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
-         sdi.Address = addr;
 
-         if (GEN_GEN >= 9) {
+   if (GEN_GEN >= 9) {
+      for (unsigned i = 0; i < 4; i++) {
+         anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
+            sdi.Address = addr;
+            sdi.Address.offset += i * 4;
             /* MCS buffers on SKL+ can only have 1/0 clear colors. */
             assert(image->samples > 1);
             sdi.ImmediateData = 0;
-         } else if (GEN_VERSIONx10 >= 75) {
+         }
+      }
+   } else {
+      anv_batch_emit(&cmd_buffer->batch, GENX(MI_STORE_DATA_IMM), sdi) {
+         sdi.Address = addr;
+         if (GEN_GEN >= 8 || GEN_IS_HASWELL) {
             /* Pre-SKL, the dword containing the clear values also contains
              * other fields, so we need to initialize those fields to match the
              * values that would be in a color attachment.
              */
-            assert(i == 0);
             sdi.ImmediateData = ISL_CHANNEL_SELECT_RED   << 25 |
                                 ISL_CHANNEL_SELECT_GREEN << 22 |
                                 ISL_CHANNEL_SELECT_BLUE  << 19 |
                                 ISL_CHANNEL_SELECT_ALPHA << 16;
-         }  else if (GEN_VERSIONx10 == 70) {
+         } else if (GEN_GEN == 7) {
             /* On IVB, the dword containing the clear values also contains
              * other fields that must be zero or can be zero.
              */
-            assert(i == 0);
             sdi.ImmediateData = 0;
          }
       }
-
-      addr.offset += 4;
    }
 }
 
@@ -1026,7 +1026,7 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
 
             anv_image_ccs_op(cmd_buffer, image, aspect, level,
                              base_layer, level_layer_count,
-                             ISL_AUX_OP_AMBIGUATE, false);
+                             ISL_AUX_OP_AMBIGUATE, NULL, false);
 
             if (image->planes[plane].aux_usage == ISL_AUX_USAGE_CCS_E) {
                set_image_compressed_bit(cmd_buffer, image, aspect,
@@ -1044,7 +1044,7 @@ transition_color_buffer(struct anv_cmd_buffer *cmd_buffer,
          assert(base_level == 0 && level_count == 1);
          anv_image_mcs_op(cmd_buffer, image, aspect,
                           base_layer, layer_count,
-                          ISL_AUX_OP_FAST_CLEAR, false);
+                          ISL_AUX_OP_FAST_CLEAR, NULL, false);
       }
       return;
    }
@@ -1248,13 +1248,13 @@ genX(cmd_buffer_setup_attachments)(struct anv_cmd_buffer *cmd_buffer,
 
          struct anv_image_view *iview = framebuffer->attachments[i];
          anv_assert(iview->vk_format == att->format);
-         anv_assert(iview->n_planes == 1);
 
          const uint32_t num_layers = iview->planes[0].isl.array_len;
          state->attachments[i].pending_clear_views = (1 << num_layers) - 1;
 
          union isl_color_value clear_color = { .u32 = { 0, } };
          if (att_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) {
+            anv_assert(iview->n_planes == 1);
             assert(att_aspects == VK_IMAGE_ASPECT_COLOR_BIT);
             color_attachment_compute_aux_usage(cmd_buffer->device,
                                                state, i, begin->renderArea,
@@ -2673,7 +2673,8 @@ void genX(CmdDraw)(
 
    genX(cmd_buffer_flush_state)(cmd_buffer);
 
-   if (vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance)
+   if (vs_prog_data->uses_firstvertex ||
+       vs_prog_data->uses_baseinstance)
       emit_base_vertex_instance(cmd_buffer, firstVertex, firstInstance);
    if (vs_prog_data->uses_drawid)
       emit_draw_index(cmd_buffer, 0);
@@ -2711,7 +2712,8 @@ void genX(CmdDrawIndexed)(
 
    genX(cmd_buffer_flush_state)(cmd_buffer);
 
-   if (vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance)
+   if (vs_prog_data->uses_firstvertex ||
+       vs_prog_data->uses_baseinstance)
       emit_base_vertex_instance(cmd_buffer, vertexOffset, firstInstance);
    if (vs_prog_data->uses_drawid)
       emit_draw_index(cmd_buffer, 0);
@@ -2850,7 +2852,8 @@ void genX(CmdDrawIndirect)(
       struct anv_bo *bo = buffer->bo;
       uint32_t bo_offset = buffer->offset + offset;
 
-      if (vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance)
+      if (vs_prog_data->uses_firstvertex ||
+          vs_prog_data->uses_baseinstance)
          emit_base_vertex_instance_bo(cmd_buffer, bo, bo_offset + 8);
       if (vs_prog_data->uses_drawid)
          emit_draw_index(cmd_buffer, i);
@@ -2889,7 +2892,8 @@ void genX(CmdDrawIndexedIndirect)(
       uint32_t bo_offset = buffer->offset + offset;
 
       /* TODO: We need to stomp base vertex to 0 somehow */
-      if (vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance)
+      if (vs_prog_data->uses_firstvertex ||
+          vs_prog_data->uses_baseinstance)
          emit_base_vertex_instance_bo(cmd_buffer, bo, bo_offset + 12);
       if (vs_prog_data->uses_drawid)
          emit_draw_index(cmd_buffer, i);
@@ -3566,21 +3570,23 @@ cmd_buffer_begin_subpass(struct anv_cmd_buffer *cmd_buffer,
             assert(iview->planes[0].isl.base_level == 0);
             assert(iview->planes[0].isl.base_array_layer == 0);
 
+            union isl_color_value clear_color = {};
+            anv_clear_color_from_att_state(&clear_color, att_state, iview);
             if (iview->image->samples == 1) {
                anv_image_ccs_op(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
-                                0, 0, 1, ISL_AUX_OP_FAST_CLEAR, false);
+                                0, 0, 1, ISL_AUX_OP_FAST_CLEAR,
+                                &clear_color,
+                                false);
             } else {
                anv_image_mcs_op(cmd_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT,
-                                0, 1, ISL_AUX_OP_FAST_CLEAR, false);
+                                0, 1, ISL_AUX_OP_FAST_CLEAR,
+                                &clear_color,
+                                false);
             }
             base_clear_layer++;
             clear_layer_count--;
             if (is_multiview)
                att_state->pending_clear_views &= ~1;
-
-            genX(copy_fast_clear_dwords)(cmd_buffer, att_state->color.state,
-                                         image, VK_IMAGE_ASPECT_COLOR_BIT,
-                                         true /* copy from ss */);
 
             if (att_state->clear_color_is_zero) {
                /* This image has the auxiliary buffer enabled. We can mark the
@@ -3692,7 +3698,8 @@ cmd_buffer_begin_subpass(struct anv_cmd_buffer *cmd_buffer,
          assert(att_state->pending_clear_aspects == 0);
       }
 
-      if ((att_state->pending_load_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) &&
+      if (GEN_GEN < 10 &&
+          (att_state->pending_load_aspects & VK_IMAGE_ASPECT_ANY_COLOR_BIT_ANV) &&
           image->planes[0].aux_surface.isl.size > 0 &&
           iview->planes[0].isl.base_level == 0 &&
           iview->planes[0].isl.base_array_layer == 0) {

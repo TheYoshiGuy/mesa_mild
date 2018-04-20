@@ -78,7 +78,7 @@ static void
 blorp_surface_reloc(struct blorp_batch *batch, uint32_t ss_offset,
                     struct blorp_address address, uint32_t delta);
 
-#if GEN_GEN >= 7 && GEN_GEN <= 10
+#if GEN_GEN >= 7 && GEN_GEN < 10
 static struct blorp_address
 blorp_get_surface_base_address(struct blorp_batch *batch);
 #endif
@@ -310,10 +310,11 @@ blorp_emit_vertex_buffers(struct blorp_batch *batch,
 
    uint32_t num_vbs = 2;
    if (params->dst_clear_color_as_input) {
+      const unsigned clear_color_size =
+         GEN_GEN < 10 ? batch->blorp->isl_dev->ss.clear_value_size : 4 * 4;
       blorp_fill_vertex_buffer_state(batch, vb, num_vbs++,
                                      params->dst.clear_color_addr,
-                                     batch->blorp->isl_dev->ss.clear_value_size,
-                                     0);
+                                     clear_color_size, 0);
    }
 
    const unsigned num_dwords = 1 + num_vbs * GENX(VERTEX_BUFFER_STATE_length);
@@ -1243,7 +1244,7 @@ blorp_emit_pipeline(struct blorp_batch *batch,
 
 #endif /* GEN_GEN >= 6 */
 
-#if GEN_GEN >= 7 && GEN_GEN <= 10
+#if GEN_GEN >= 7 && GEN_GEN < 10
 static void
 blorp_emit_memcpy(struct blorp_batch *batch,
                   struct blorp_address dst,
@@ -1282,6 +1283,7 @@ blorp_emit_memcpy(struct blorp_batch *batch,
 static void
 blorp_emit_surface_state(struct blorp_batch *batch,
                          const struct brw_blorp_surface_info *surface,
+                         enum isl_aux_op op,
                          void *state, uint32_t state_offset,
                          const bool color_write_disables[4],
                          bool is_render_target)
@@ -1312,11 +1314,15 @@ blorp_emit_surface_state(struct blorp_batch *batch,
          write_disable_mask |= ISL_CHANNEL_ALPHA_BIT;
    }
 
+   const bool use_clear_address =
+      GEN_GEN >= 10 && (surface->clear_color_addr.buffer != NULL);
+
    isl_surf_fill_state(batch->blorp->isl_dev, state,
                        .surf = &surf, .view = &surface->view,
                        .aux_surf = &surface->aux_surf, .aux_usage = aux_usage,
                        .mocs = surface->addr.mocs,
                        .clear_color = surface->clear_color,
+                       .use_clear_address = use_clear_address,
                        .write_disables = write_disable_mask);
 
    blorp_surface_reloc(batch, state_offset + isl_dev->ss.addr_offset,
@@ -1333,20 +1339,26 @@ blorp_emit_surface_state(struct blorp_batch *batch,
                           surface->aux_addr, *aux_addr);
    }
 
-   blorp_flush_range(batch, state, GENX(RENDER_SURFACE_STATE_length) * 4);
-
    if (surface->clear_color_addr.buffer) {
-#if GEN_GEN > 10
-      unreachable("Implement indirect clear support on gen11+");
-#elif GEN_GEN >= 7 && GEN_GEN <= 10
-      struct blorp_address dst_addr = blorp_get_surface_base_address(batch);
-      dst_addr.offset += state_offset + isl_dev->ss.clear_value_offset;
-      blorp_emit_memcpy(batch, dst_addr, surface->clear_color_addr,
-                        isl_dev->ss.clear_value_size);
+#if GEN_GEN >= 10
+      assert((surface->clear_color_addr.offset & 0x3f) == 0);
+      uint32_t *clear_addr = state + isl_dev->ss.clear_color_state_offset;
+      blorp_surface_reloc(batch, state_offset +
+                          isl_dev->ss.clear_color_state_offset,
+                          surface->clear_color_addr, *clear_addr);
+#elif GEN_GEN >= 7
+      if (op == ISL_AUX_OP_FULL_RESOLVE || op == ISL_AUX_OP_PARTIAL_RESOLVE) {
+         struct blorp_address dst_addr = blorp_get_surface_base_address(batch);
+         dst_addr.offset += state_offset + isl_dev->ss.clear_value_offset;
+         blorp_emit_memcpy(batch, dst_addr, surface->clear_color_addr,
+                           isl_dev->ss.clear_value_size);
+      }
 #else
       unreachable("Fast clears are only supported on gen7+");
 #endif
    }
+
+   blorp_flush_range(batch, state, GENX(RENDER_SURFACE_STATE_length) * 4);
 }
 
 static void
@@ -1402,6 +1414,7 @@ blorp_emit_surface_states(struct blorp_batch *batch,
 
       if (params->dst.enabled) {
          blorp_emit_surface_state(batch, &params->dst,
+                                  params->fast_clear_op,
                                   surface_maps[BLORP_RENDERBUFFER_BT_INDEX],
                                   surface_offsets[BLORP_RENDERBUFFER_BT_INDEX],
                                   params->color_write_disable, true);
@@ -1417,6 +1430,7 @@ blorp_emit_surface_states(struct blorp_batch *batch,
 
       if (params->src.enabled) {
          blorp_emit_surface_state(batch, &params->src,
+                                  params->fast_clear_op,
                                   surface_maps[BLORP_TEXTURE_BT_INDEX],
                                   surface_offsets[BLORP_TEXTURE_BT_INDEX],
                                   NULL, false);
@@ -1629,6 +1643,51 @@ blorp_emit_gen8_hiz_op(struct blorp_batch *batch,
 }
 #endif
 
+static void
+blorp_update_clear_color(struct blorp_batch *batch,
+                         const struct brw_blorp_surface_info *info,
+                         enum isl_aux_op op)
+{
+   if (info->clear_color_addr.buffer && op == ISL_AUX_OP_FAST_CLEAR) {
+#if GEN_GEN >= 9
+      for (int i = 0; i < 4; i++) {
+         blorp_emit(batch, GENX(MI_STORE_DATA_IMM), sdi) {
+            sdi.Address = info->clear_color_addr;
+            sdi.Address.offset += i * 4;
+            sdi.ImmediateData = info->clear_color.u32[i];
+         }
+      }
+#elif GEN_GEN >= 7
+      blorp_emit(batch, GENX(MI_STORE_DATA_IMM), sdi) {
+         sdi.Address = info->clear_color_addr;
+         sdi.ImmediateData = ISL_CHANNEL_SELECT_RED   << 25 |
+                             ISL_CHANNEL_SELECT_GREEN << 22 |
+                             ISL_CHANNEL_SELECT_BLUE  << 19 |
+                             ISL_CHANNEL_SELECT_ALPHA << 16;
+         if (isl_format_has_int_channel(info->view.format)) {
+            for (unsigned i = 0; i < 4; i++) {
+               assert(info->clear_color.u32[i] == 0 ||
+                      info->clear_color.u32[i] == 1);
+            }
+            sdi.ImmediateData |= (info->clear_color.u32[0] != 0) << 31;
+            sdi.ImmediateData |= (info->clear_color.u32[1] != 0) << 30;
+            sdi.ImmediateData |= (info->clear_color.u32[2] != 0) << 29;
+            sdi.ImmediateData |= (info->clear_color.u32[3] != 0) << 28;
+         } else {
+            for (unsigned i = 0; i < 4; i++) {
+               assert(info->clear_color.f32[i] == 0.0f ||
+                      info->clear_color.f32[i] == 1.0f);
+            }
+            sdi.ImmediateData |= (info->clear_color.f32[0] != 0.0f) << 31;
+            sdi.ImmediateData |= (info->clear_color.f32[1] != 0.0f) << 30;
+            sdi.ImmediateData |= (info->clear_color.f32[2] != 0.0f) << 29;
+            sdi.ImmediateData |= (info->clear_color.f32[3] != 0.0f) << 28;
+         }
+      }
+#endif
+   }
+}
+
 /**
  * \brief Execute a blit or render pass operation.
  *
@@ -1641,6 +1700,9 @@ blorp_emit_gen8_hiz_op(struct blorp_batch *batch,
 static void
 blorp_exec(struct blorp_batch *batch, const struct blorp_params *params)
 {
+   blorp_update_clear_color(batch, &params->dst, params->fast_clear_op);
+   blorp_update_clear_color(batch, &params->depth, params->hiz_op);
+
 #if GEN_GEN >= 8
    if (params->hiz_op != ISL_AUX_OP_NONE) {
       blorp_emit_gen8_hiz_op(batch, params);

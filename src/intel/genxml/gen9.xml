@@ -2752,6 +2752,12 @@
     <field name="MI Command Opcode" start="23" end="28" type="uint" default="5"/>
   </instruction>
 
+  <instruction name="MI_ARB_ON_OFF" bias="1" length="1">
+    <field name="Command Type" start="29" end="31" type="uint" default="0"/>
+    <field name="MI Command Opcode" start="23" end="28" type="uint" default="8"/>
+    <field name="Arbitration Enable" start="0" end="0" type="bool" default="1"/>
+  </instruction>
+
   <instruction name="MI_ATOMIC" bias="2" length="3">
     <field name="Command Type" start="29" end="31" type="uint" default="0"/>
     <field name="MI Command Opcode" start="23" end="28" type="uint" default="47"/>
@@ -2888,6 +2894,10 @@
     <field name="DWord Length" start="0" end="7" type="uint" default="1"/>
     <field name="Register Offset" start="34" end="54" type="offset"/>
     <field name="Data DWord" start="64" end="95" type="uint"/>
+    <group count="0" start="96" size="64">
+      <field name="Register Offset" start="2" end="22" type="offset"/>
+      <field name="Data DWord" start="32" end="63" type="uint"/>
+    </group>
   </instruction>
 
   <instruction name="MI_LOAD_REGISTER_MEM" bias="2" length="4">

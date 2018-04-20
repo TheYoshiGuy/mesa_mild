@@ -36,6 +36,7 @@
 
 #include "brw_blorp.h"
 #include "brw_context.h"
+#include "brw_meta_util.h"
 #include "brw_state.h"
 
 #include "main/enums.h"
@@ -969,6 +970,23 @@ create_ccs_buf_for_image(struct brw_context *brw,
       return false;
    }
 
+   /* On gen10+ we start using an extra space in the aux buffer to store the
+    * indirect clear color. However, if we imported an image from the window
+    * system with CCS, we don't have the extra space at the end of the aux
+    * buffer. So create a new bo here that will store that clear color.
+    */
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+   if (devinfo->gen >= 10) {
+      mt->mcs_buf->clear_color_bo =
+         brw_bo_alloc(brw->bufmgr, "clear_color_bo",
+                      brw->isl_dev.ss.clear_color_state_size);
+      if (!mt->mcs_buf->clear_color_bo) {
+         free(mt->mcs_buf);
+         mt->mcs_buf = NULL;
+         return false;
+      }
+   }
+
    mt->mcs_buf->bo = image->bo;
    brw_bo_reference(image->bo);
 
@@ -1211,6 +1229,7 @@ intel_miptree_aux_buffer_free(struct intel_miptree_aux_buffer *aux_buf)
       return;
 
    brw_bo_unreference(aux_buf->bo);
+   brw_bo_unreference(aux_buf->clear_color_bo);
 
    free(aux_buf);
 }
@@ -1678,6 +1697,17 @@ intel_alloc_aux_buffer(struct brw_context *brw,
       return false;
 
    buf->size = aux_surf->size;
+
+   const struct gen_device_info *devinfo = &brw->screen->devinfo;
+   if (devinfo->gen >= 10) {
+      /* On CNL, instead of setting the clear color in the SURFACE_STATE, we
+       * will set a pointer to a dword somewhere that contains the color. So,
+       * allocate the space for the clear color value here on the aux buffer.
+       */
+      buf->clear_color_offset = buf->size;
+      buf->size += brw->isl_dev.ss.clear_color_state_size;
+   }
+
    buf->pitch = aux_surf->row_pitch;
    buf->qpitch = isl_surf_get_array_pitch_sa_rows(aux_surf);
 
@@ -1690,6 +1720,11 @@ intel_alloc_aux_buffer(struct brw_context *brw,
    if (!buf->bo) {
       free(buf);
       return NULL;
+   }
+
+   if (devinfo->gen >= 10) {
+      buf->clear_color_bo = buf->bo;
+      brw_bo_reference(buf->clear_color_bo);
    }
 
    buf->surf = *aux_surf;
@@ -3769,4 +3804,33 @@ intel_miptree_get_aux_isl_usage(const struct brw_context *brw,
       return ISL_AUX_USAGE_NONE;
 
    return mt->aux_usage;
+}
+
+bool
+intel_miptree_set_clear_color(struct brw_context *brw,
+                              struct intel_mipmap_tree *mt,
+                              const union gl_color_union *color)
+{
+   const union isl_color_value clear_color =
+      brw_meta_convert_fast_clear_color(brw, mt, color);
+
+   if (memcmp(&mt->fast_clear_color, &clear_color, sizeof(clear_color)) != 0) {
+      mt->fast_clear_color = clear_color;
+      brw->ctx.NewDriverState |= BRW_NEW_AUX_STATE;
+      return true;
+   }
+   return false;
+}
+
+bool
+intel_miptree_set_depth_clear_value(struct brw_context *brw,
+                                    struct intel_mipmap_tree *mt,
+                                    float clear_value)
+{
+   if (mt->fast_clear_color.f32[0] != clear_value) {
+      mt->fast_clear_color.f32[0] = clear_value;
+      brw->ctx.NewDriverState |= BRW_NEW_AUX_STATE;
+      return true;
+   }
+   return false;
 }

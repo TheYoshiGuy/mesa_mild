@@ -1,5 +1,5 @@
 /****************************************************************************
-* Copyright (C) 2014-2015 Intel Corporation.   All Rights Reserved.
+* Copyright (C) 2014-2018 Intel Corporation.   All Rights Reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -709,8 +709,8 @@ static INLINE void CalcSampleBarycentrics(const BarycentricCoeffs& coeffs, SWR_P
 }
 
 // Merge Output to 4x2 SIMD Tile Format
-INLINE void OutputMerger4x2(SWR_PS_CONTEXT &psContext, uint8_t* (&pColorBase)[SWR_NUM_RENDERTARGETS], uint32_t sample, const SWR_BLEND_STATE *pBlendState,
-    const PFN_BLEND_JIT_FUNC (&pfnBlendFunc)[SWR_NUM_RENDERTARGETS], simdscalar &coverageMask, simdscalar const &depthPassMask, uint32_t renderTargetMask)
+INLINE void OutputMerger4x2(DRAW_CONTEXT *pDC, SWR_PS_CONTEXT &psContext, uint8_t* (&pColorBase)[SWR_NUM_RENDERTARGETS], uint32_t sample, const SWR_BLEND_STATE *pBlendState,
+    const PFN_BLEND_JIT_FUNC (&pfnBlendFunc)[SWR_NUM_RENDERTARGETS], simdscalar &coverageMask, simdscalar const &depthPassMask, uint32_t renderTargetMask, uint32_t workerId)
 {
     // type safety guaranteed from template instantiation in BEChooser<>::GetFunc
     const uint32_t rasterTileColorOffset = RasterTileColorOffset(sample);
@@ -724,26 +724,31 @@ INLINE void OutputMerger4x2(SWR_PS_CONTEXT &psContext, uint8_t* (&pColorBase)[SW
 
         const SWR_RENDER_TARGET_BLEND_STATE *pRTBlend = &pBlendState->renderTarget[rt];
 
+        SWR_BLEND_CONTEXT blendContext = { 0 };
         {
             // pfnBlendFunc may not update all channels.  Initialize with PS output.
             /// TODO: move this into the blend JIT.
             blendOut = psContext.shaded[rt];
 
+            blendContext.pBlendState = pBlendState;
+            blendContext.src = &psContext.shaded[rt];
+            blendContext.src1 = &psContext.shaded[1];
+            blendContext.src0alpha = reinterpret_cast<simdvector *>(&psContext.shaded[0].w);
+            blendContext.sampleNum = sample;
+            blendContext.pDst = (simdvector *) &pColorSample;
+            blendContext.result = &blendOut;
+            blendContext.oMask = &psContext.oMask;
+            blendContext.pMask = reinterpret_cast<simdscalari *>(&coverageMask);
+
             // Blend outputs and update coverage mask for alpha test
             if(pfnBlendFunc[rt] != nullptr)
             {
-                pfnBlendFunc[rt](
-                    pBlendState,
-                    psContext.shaded[rt],
-                    psContext.shaded[1],
-                    psContext.shaded[0].w,
-                    sample,
-                    pColorSample,
-                    blendOut,
-                    &psContext.oMask,
-                    (simdscalari*)&coverageMask);
+                pfnBlendFunc[rt](&blendContext);
             }
         }
+
+        // Track alpha events
+        AR_EVENT(AlphaInfoEvent(pDC->drawId, blendContext.isAlphaTested, blendContext.isAlphaBlended));
 
         // final write mask 
         simdscalari outputMask = _simd_castps_si(_simd_and_ps(coverageMask, depthPassMask));
@@ -775,8 +780,8 @@ INLINE void OutputMerger4x2(SWR_PS_CONTEXT &psContext, uint8_t* (&pColorBase)[SW
 
 #if USE_8x2_TILE_BACKEND
 // Merge Output to 8x2 SIMD16 Tile Format
-INLINE void OutputMerger8x2(SWR_PS_CONTEXT &psContext, uint8_t* (&pColorBase)[SWR_NUM_RENDERTARGETS], uint32_t sample, const SWR_BLEND_STATE *pBlendState,
-    const PFN_BLEND_JIT_FUNC(&pfnBlendFunc)[SWR_NUM_RENDERTARGETS], simdscalar &coverageMask, simdscalar const &depthPassMask, uint32_t renderTargetMask, bool useAlternateOffset)
+INLINE void OutputMerger8x2(DRAW_CONTEXT *pDC, SWR_PS_CONTEXT &psContext, uint8_t* (&pColorBase)[SWR_NUM_RENDERTARGETS], uint32_t sample, const SWR_BLEND_STATE *pBlendState,
+    const PFN_BLEND_JIT_FUNC(&pfnBlendFunc)[SWR_NUM_RENDERTARGETS], simdscalar &coverageMask, simdscalar const &depthPassMask, uint32_t renderTargetMask, bool useAlternateOffset, uint32_t workerId)
 {
     // type safety guaranteed from template instantiation in BEChooser<>::GetFunc
     uint32_t rasterTileColorOffset = RasterTileColorOffset(sample);
@@ -811,26 +816,31 @@ INLINE void OutputMerger8x2(SWR_PS_CONTEXT &psContext, uint8_t* (&pColorBase)[SW
             pColorSample = nullptr;
         }
 
+        SWR_BLEND_CONTEXT blendContext = { 0 };
         {
             // pfnBlendFunc may not update all channels.  Initialize with PS output.
             /// TODO: move this into the blend JIT.
             blendOut = psContext.shaded[rt];
 
+            blendContext.pBlendState    = pBlendState;
+            blendContext.src            = &psContext.shaded[rt];
+            blendContext.src1           = &psContext.shaded[1];
+            blendContext.src0alpha      = reinterpret_cast<simdvector *>(&psContext.shaded[0].w);
+            blendContext.sampleNum      = sample;
+            blendContext.pDst           = &blendSrc;
+            blendContext.result         = &blendOut;
+            blendContext.oMask          = &psContext.oMask;
+            blendContext.pMask          = reinterpret_cast<simdscalari *>(&coverageMask);
+
             // Blend outputs and update coverage mask for alpha test
             if(pfnBlendFunc[rt] != nullptr)
             {
-                pfnBlendFunc[rt](
-                    pBlendState,
-                    psContext.shaded[rt],
-                    psContext.shaded[1],
-                    psContext.shaded[0].w,
-                    sample,
-                    reinterpret_cast<uint8_t *>(&blendSrc),
-                    blendOut,
-                    &psContext.oMask,
-                    reinterpret_cast<simdscalari *>(&coverageMask));
+                pfnBlendFunc[rt](&blendContext);
             }
         }
+
+        // Track alpha events
+        AR_EVENT(AlphaInfoEvent(pDC->drawId, blendContext.isAlphaTested, blendContext.isAlphaBlended));
 
         // final write mask 
         simdscalari outputMask = _simd_castps_si(_simd_and_ps(coverageMask, depthPassMask));
@@ -873,6 +883,9 @@ void BackendPixelRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t
 
     BarycentricCoeffs coeffs;
     SetupBarycentricCoeffs(&coeffs, work);
+
+    SWR_CONTEXT *pContext = pDC->pContext;
+    void* pWorkerData = pContext->threadPool.pThreadData[workerId].pWorkerPrivateData;
 
     SWR_PS_CONTEXT psContext;
     const SWR_MULTISAMPLE_POS& samplePos = state.rastState.samplePositions;
@@ -954,9 +967,13 @@ void BackendPixelRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t
 
             // execute pixel shader
             RDTSC_BEGIN(BEPixelShader, pDC->drawId);
-            state.psState.pfnPixelShader(GetPrivateState(pDC), &psContext);
+            state.psState.pfnPixelShader(GetPrivateState(pDC), pWorkerData, &psContext);
             UPDATE_STAT_BE(PsInvocations, _mm_popcnt_u32(_simd_movemask_ps(activeLanes)));
             RDTSC_END(BEPixelShader, 0);
+
+            // update stats
+            UPDATE_STAT_BE(PsInvocations, _mm_popcnt_u32(_simd_movemask_ps(activeLanes)));
+            AR_EVENT(PSStats(psContext.stats.numInstExecuted));
 
             // update active lanes to remove any discarded or oMask'd pixels
             activeLanes = _simd_castsi_ps(_simd_and_si(psContext.activeMask, _simd_cmpgt_epi32(psContext.oMask, _simd_setzero_si())));
@@ -999,9 +1016,9 @@ void BackendPixelRate(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t x, uint32_t
                 
                 // broadcast the results of the PS to all passing pixels
 #if USE_8x2_TILE_BACKEND
-                OutputMerger8x2(psContext, psContext.pColorBuffer, sample, &state.blendState,state.pfnBlendFunc, coverageMask, depthMask, state.psState.renderTargetMask, useAlternateOffset);
+                OutputMerger8x2(pDC, psContext, psContext.pColorBuffer, sample, &state.blendState,state.pfnBlendFunc, coverageMask, depthMask, state.psState.renderTargetMask, useAlternateOffset, workerId);
 #else // USE_8x2_TILE_BACKEND
-                OutputMerger4x2(psContext, psContext.pColorBuffer, sample, &state.blendState, state.pfnBlendFunc, coverageMask, depthMask, state.psState.renderTargetMask);
+                OutputMerger4x2(pDC, psContext, psContext.pColorBuffer, sample, &state.blendState, state.pfnBlendFunc, coverageMask, depthMask, state.psState.renderTargetMask, workerId);
 #endif // USE_8x2_TILE_BACKEND
 
                 if(!state.psState.forceEarlyZ && !T::bForcedSampleCount)

@@ -389,11 +389,12 @@ vc5_job_submit(struct vc5_context *vc5, struct vc5_job *job)
                         v3d33_bcl_epilogue(vc5, job);
         }
 
+        job->submit.out_sync = vc5->out_sync;
         job->submit.bcl_end = job->bcl.bo->offset + cl_offset(&job->bcl);
         job->submit.rcl_end = job->rcl.bo->offset + cl_offset(&job->rcl);
 
         /* On V3D 4.1, the tile alloc/state setup moved to register writes
-         * instead of binner pac`kets.
+         * instead of binner packets.
          */
         if (screen->devinfo.ver >= 41) {
                 vc5_job_add_bo(job, job->tile_alloc);
@@ -419,15 +420,6 @@ vc5_job_submit(struct vc5_context *vc5, struct vc5_job *job)
                         fprintf(stderr, "Draw call returned %s.  "
                                         "Expect corruption.\n", strerror(errno));
                         warned = true;
-                }
-        }
-
-        if (vc5->last_emit_seqno - vc5->screen->finished_seqno > 5) {
-                if (!vc5_wait_seqno(vc5->screen,
-                                    vc5->last_emit_seqno - 5,
-                                    PIPE_TIMEOUT_INFINITE,
-                                    "job throttling")) {
-                        fprintf(stderr, "Job throttling failed\n");
                 }
         }
 

@@ -154,11 +154,11 @@ blorp_surf_for_miptree(struct brw_context *brw,
       .aux_usage = aux_usage,
    };
 
-   struct isl_surf *aux_surf = NULL;
+   struct intel_miptree_aux_buffer *aux_buf = NULL;
    if (mt->mcs_buf)
-      aux_surf = &mt->mcs_buf->surf;
+      aux_buf = mt->mcs_buf;
    else if (mt->hiz_buf)
-      aux_surf = &mt->hiz_buf->surf;
+      aux_buf = mt->hiz_buf;
 
    if (mt->format == MESA_FORMAT_S_UINT8 && is_render_target &&
        devinfo->gen <= 7)
@@ -174,21 +174,20 @@ blorp_surf_for_miptree(struct brw_context *brw,
        */
       surf->clear_color = mt->fast_clear_color;
 
-      surf->aux_surf = aux_surf;
+      surf->aux_surf = &aux_buf->surf;
       surf->aux_addr = (struct blorp_address) {
          .reloc_flags = is_render_target ? EXEC_OBJECT_WRITE : 0,
          .mocs = surf->addr.mocs,
       };
 
-      if (mt->mcs_buf) {
-         surf->aux_addr.buffer = mt->mcs_buf->bo;
-         surf->aux_addr.offset = mt->mcs_buf->offset;
-      } else {
-         assert(mt->hiz_buf);
-         assert(surf->aux_usage == ISL_AUX_USAGE_HIZ);
+      surf->aux_addr.buffer = aux_buf->bo;
+      surf->aux_addr.offset = aux_buf->offset;
 
-         surf->aux_addr.buffer = mt->hiz_buf->bo;
-         surf->aux_addr.offset = mt->hiz_buf->offset;
+      if (devinfo->gen >= 10) {
+         surf->clear_color_addr = (struct blorp_address) {
+            .buffer = aux_buf->clear_color_bo,
+            .offset = aux_buf->clear_color_offset,
+         };
       }
    } else {
       surf->aux_addr = (struct blorp_address) {
@@ -1236,12 +1235,9 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
    if (can_fast_clear) {
       const enum isl_aux_state aux_state =
          intel_miptree_get_aux_state(irb->mt, irb->mt_level, irb->mt_layer);
-      union isl_color_value clear_color =
-         brw_meta_convert_fast_clear_color(brw, irb->mt,
-                                           &ctx->Color.ClearColor);
 
       bool same_clear_color =
-         !intel_miptree_set_clear_color(ctx, irb->mt, clear_color);
+         !intel_miptree_set_clear_color(brw, irb->mt, &ctx->Color.ClearColor);
 
       /* If the buffer is already in INTEL_FAST_CLEAR_STATE_CLEAR, the clear
        * is redundant and can be skipped.

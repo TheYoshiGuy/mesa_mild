@@ -31,6 +31,7 @@
   */
 
 
+#include "main/errors.h"
 #include "main/imports.h"
 #include "main/hash.h"
 #include "main/mtypes.h"
@@ -645,6 +646,12 @@ bool
 st_translate_fragment_program(struct st_context *st,
                               struct st_fragment_program *stfp)
 {
+   /* We have already compiled to NIR so just return */
+   if (stfp->shader_program) {
+      st_store_ir_in_disk_cache(st, &stfp->Base, true);
+      return true;
+   }
+
    ubyte outputMapping[2 * FRAG_RESULT_MAX];
    ubyte inputMapping[VARYING_SLOT_MAX];
    ubyte inputSlotToAttr[VARYING_SLOT_MAX];
@@ -898,12 +905,6 @@ st_translate_fragment_program(struct st_context *st,
 
          fs_num_outputs++;
       }
-   }
-
-   /* We have already compiled to NIR so just return */
-   if (stfp->shader_program) {
-      st_store_ir_in_disk_cache(st, &stfp->Base, true);
-      return true;
    }
 
    ureg = ureg_create_with_screen(PIPE_SHADER_FRAGMENT, st->pipe->screen);
@@ -1473,6 +1474,9 @@ st_translate_geometry_program(struct st_context *st,
 
    /* We have already compiled to NIR so just return */
    if (stgp->shader_program) {
+      /* No variants */
+      st_finalize_nir(st, &stgp->Base, stgp->shader_program,
+                      stgp->tgsi.ir.nir);
       st_translate_program_stream_output(&stgp->Base, &stgp->tgsi.stream_output);
       st_store_ir_in_disk_cache(st, &stgp->Base, true);
       return true;
@@ -1530,8 +1534,6 @@ st_get_basic_variant(struct st_context *st,
 	 if (prog->tgsi.type == PIPE_SHADER_IR_NIR) {
 	    tgsi.type = PIPE_SHADER_IR_NIR;
 	    tgsi.ir.nir = nir_shader_clone(NULL, prog->tgsi.ir.nir);
-	    st_finalize_nir(st, &prog->Base, prog->shader_program,
-                            tgsi.ir.nir);
             tgsi.stream_output = prog->tgsi.stream_output;
 	 } else
 	    tgsi = prog->tgsi;
@@ -1575,6 +1577,9 @@ st_translate_tessctrl_program(struct st_context *st,
 
    /* We have already compiled to NIR so just return */
    if (sttcp->shader_program) {
+      /* No variants */
+      st_finalize_nir(st, &sttcp->Base, sttcp->shader_program,
+                      sttcp->tgsi.ir.nir);
       st_store_ir_in_disk_cache(st, &sttcp->Base, true);
       return true;
    }
@@ -1606,6 +1611,9 @@ st_translate_tesseval_program(struct st_context *st,
 
    /* We have already compiled to NIR so just return */
    if (sttep->shader_program) {
+      /* No variants */
+      st_finalize_nir(st, &sttep->Base, sttep->shader_program,
+                      sttep->tgsi.ir.nir);
       st_translate_program_stream_output(&sttep->Base, &sttep->tgsi.stream_output);
       st_store_ir_in_disk_cache(st, &sttep->Base, true);
       return true;

@@ -1,6 +1,8 @@
 /*
  * Copyright 2008 Corbin Simpson <MostAwesomeDude@gmail.com>
  * Copyright 2010 Marek Olšák <maraeo@gmail.com>
+ * Copyright 2018 Advanced Micro Devices, Inc.
+ * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -25,6 +27,13 @@
 #define RADEON_WINSYS_H
 
 /* The public winsys interface header for the radeon driver. */
+
+/* Whether the next IB can start immediately and not wait for draws and
+ * dispatches from the current IB to finish. */
+#define RADEON_FLUSH_START_NEXT_GFX_IB_NOW	(1u << 31)
+
+#define RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW \
+	(PIPE_FLUSH_ASYNC | RADEON_FLUSH_START_NEXT_GFX_IB_NOW)
 
 #include "pipebuffer/pb_buffer.h"
 

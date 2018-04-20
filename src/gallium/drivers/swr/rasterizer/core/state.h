@@ -1,5 +1,5 @@
 /****************************************************************************
-* Copyright (C) 2014-2015 Intel Corporation.   All Rights Reserved.
+* Copyright (C) 2014-2018 Intel Corporation.   All Rights Reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
 * copy of this software and associated documentation files (the "Software"),
@@ -214,6 +214,15 @@ struct SIMDVERTEX_T
 };
 
 //////////////////////////////////////////////////////////////////////////
+/// SWR_SHADER_STATS
+/// @brief Structure passed to shader for stats collection.
+/////////////////////////////////////////////////////////////////////////
+struct SWR_SHADER_STATS
+{
+    uint32_t numInstExecuted; // This is roughly the API instructions executed and not x86.
+};
+
+//////////////////////////////////////////////////////////////////////////
 /// SWR_VS_CONTEXT
 /// @brief Input to vertex shader
 /////////////////////////////////////////////////////////////////////////
@@ -225,13 +234,13 @@ struct SWR_VS_CONTEXT
     uint32_t InstanceID;        // IN: Instance ID, constant across all verts of the SIMD
     simdscalari VertexID;       // IN: Vertex ID
     simdscalari mask;           // IN: Active mask for shader
-#if USE_SIMD16_FRONTEND
+
+    // SIMD16 Frontend fields.
     uint32_t AlternateOffset;   // IN: amount to offset for interleaving even/odd simd8 in simd16vertex output
-#if USE_SIMD16_VS
     simd16scalari mask16;       // IN: Active mask for shader (16-wide)
     simd16scalari VertexID16;   // IN: Vertex ID (16-wide)
-#endif
-#endif
+
+    SWR_SHADER_STATS stats;     // OUT: shader statistics used for archrast.
 };
 
 /////////////////////////////////////////////////////////////////////////
@@ -281,6 +290,7 @@ struct SWR_HS_CONTEXT
     simdscalari mask;           // IN: Active mask for shader
     ScalarPatch* pCPout;        // OUT: Output control point patch
                                 // SIMD-sized-array of SCALAR patches
+    SWR_SHADER_STATS stats;     // OUT: shader statistics used for archrast.
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -298,6 +308,7 @@ struct SWR_DS_CONTEXT
     simdscalar*     pDomainV;       // IN: (SIMD) Domain Point V coords
     simdscalari     mask;           // IN: Active mask for shader
     simdscalar*     pOutputData;    // OUT: (SIMD) Vertex Attributes (2D array of vectors, one row per attribute-component)
+    SWR_SHADER_STATS stats;         // OUT: shader statistics used for archrast.
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -312,6 +323,7 @@ struct SWR_GS_CONTEXT
     uint32_t InstanceID;                // IN: input instance ID
     simdscalari mask;                   // IN: Active mask for shader
     uint8_t* pStreams[KNOB_SIMD_WIDTH]; // OUT: output stream (contains vertices for all output streams)
+    SWR_SHADER_STATS stats;             // OUT: shader statistics used for archrast.
 };
 
 struct PixelPositions
@@ -358,6 +370,8 @@ struct SWR_PS_CONTEXT
     uint32_t rasterizerSampleCount;     // IN: sample count used by the rasterizer
 
     uint8_t* pColorBuffer[SWR_NUM_RENDERTARGETS]; // IN: Pointers to render target hottiles
+
+    SWR_SHADER_STATS stats;             // OUT: shader statistics used for archrast.
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -391,14 +405,13 @@ struct SWR_CS_CONTEXT
     // Dispatch dimensions used by shader to compute system values from the tile counter.
     uint32_t dispatchDims[3];
 
-    uint8_t* pTGSM;  // Thread Group Shared Memory pointer.
-
-    uint8_t* pSpillFillBuffer;  // Spill/fill buffer for barrier support
-
-    uint8_t* pScratchSpace;     // Pointer to scratch space buffer used by the shader, shader is responsible
-                                // for subdividing scratch space per instance/simd
-
+    uint8_t* pTGSM;               // Thread Group Shared Memory pointer.
+    uint8_t* pSpillFillBuffer;    // Spill/fill buffer for barrier support
+    uint8_t* pScratchSpace;       // Pointer to scratch space buffer used by the shader, shader is responsible
+                                  // for subdividing scratch space per instance/simd
     uint32_t scratchSpacePerSimd; // Scratch space per work item x SIMD_WIDTH
+
+    SWR_SHADER_STATS stats;       // OUT: shader statistics used for archrast.
 };
 
 // enums
@@ -513,6 +526,11 @@ enum SWR_AUX_MODE
     AUX_MODE_DEPTH,
 };
 
+struct SWR_LOD_OFFSETS
+{
+    uint32_t offsets[2][15];
+};
+
 //////////////////////////////////////////////////////////////////////////
 /// SWR_SURFACE_STATE
 //////////////////////////////////////////////////////////////////////////
@@ -564,7 +582,7 @@ struct SWR_VERTEX_BUFFER_STATE
 
 struct SWR_INDEX_BUFFER_STATE
 {
-    const void *pIndices;
+    gfxptr_t xpIndices;
     // Format type for indices (e.g. UINT16, UINT32, etc.)
     SWR_FORMAT format; // @llvm_enum
     uint32_t size;
@@ -580,8 +598,8 @@ struct SWR_INDEX_BUFFER_STATE
 struct SWR_FETCH_CONTEXT
 {
     const SWR_VERTEX_BUFFER_STATE* pStreams;    // IN: array of bound vertex buffers
-    const int32_t* pIndices;                    // IN: pointer to index buffer for indexed draws
-    const int32_t* pLastIndex;                  // IN: pointer to end of index buffer, used for bounds checking
+    gfxptr_t xpIndices;                          // IN: pointer to int32 index buffer for indexed draws
+    gfxptr_t xpLastIndex;                        // IN: pointer to end of index buffer, used for bounds checking
     uint32_t CurInstance;                       // IN: current instance
     uint32_t BaseVertex;                        // IN: base vertex
     uint32_t StartVertex;                       // IN: start vertex
@@ -853,11 +871,9 @@ enum SWR_MULTISAMPLE_COUNT
     SWR_MULTISAMPLE_TYPE_COUNT
 };
 
-INLINE uint32_t GetNumSamples(SWR_MULTISAMPLE_COUNT sampleCount) // @llvm_func_start
+static INLINE uint32_t GetNumSamples(/* SWR_SAMPLE_COUNT */ int sampleCountEnum) // @llvm_func_start
 {
-    static const uint32_t sampleCountLUT[SWR_MULTISAMPLE_TYPE_COUNT] {1, 2, 4, 8, 16};
-    assert(sampleCount < SWR_MULTISAMPLE_TYPE_COUNT);
-    return sampleCountLUT[sampleCount];
+    return uint32_t(1) << sampleCountEnum;
 } // @llvm_func_end
 
 struct SWR_BLEND_STATE
@@ -876,25 +892,38 @@ struct SWR_BLEND_STATE
 };
 static_assert(sizeof(SWR_BLEND_STATE) == 36, "Invalid SWR_BLEND_STATE size");
 
+struct SWR_BLEND_CONTEXT
+{
+    const SWR_BLEND_STATE*  pBlendState;
+    simdvector*             src;
+    simdvector*             src1;
+    simdvector*             src0alpha;
+    uint32_t                sampleNum;
+    simdvector*             pDst;
+    simdvector*             result;
+    simdscalari*            oMask;
+    simdscalari*            pMask;
+    uint32_t                isAlphaTested;
+    uint32_t                isAlphaBlended;
+};
+
 //////////////////////////////////////////////////////////////////////////
 /// FUNCTION POINTERS FOR SHADERS
 
 #if USE_SIMD16_SHADERS
-typedef void(__cdecl *PFN_FETCH_FUNC)(HANDLE hPrivateData, SWR_FETCH_CONTEXT& fetchInfo, simd16vertex& out);
+typedef void(__cdecl *PFN_FETCH_FUNC)(HANDLE hPrivateData, HANDLE hWorkerPrivateData, SWR_FETCH_CONTEXT& fetchInfo, simd16vertex& out);
 #else
-typedef void(__cdecl *PFN_FETCH_FUNC)(HANDLE hPrivateData, SWR_FETCH_CONTEXT& fetchInfo, simdvertex& out);
+typedef void(__cdecl *PFN_FETCH_FUNC)(HANDLE hPrivateData, HANDLE hWorkerPrivateData, SWR_FETCH_CONTEXT& fetchInfo, simdvertex& out);
 #endif
-typedef void(__cdecl *PFN_VERTEX_FUNC)(HANDLE hPrivateData, SWR_VS_CONTEXT* pVsContext);
-typedef void(__cdecl *PFN_HS_FUNC)(HANDLE hPrivateData, SWR_HS_CONTEXT* pHsContext);
-typedef void(__cdecl *PFN_DS_FUNC)(HANDLE hPrivateData, SWR_DS_CONTEXT* pDsContext);
-typedef void(__cdecl *PFN_GS_FUNC)(HANDLE hPrivateData, SWR_GS_CONTEXT* pGsContext);
-typedef void(__cdecl *PFN_CS_FUNC)(HANDLE hPrivateData, SWR_CS_CONTEXT* pCsContext);
+typedef void(__cdecl *PFN_VERTEX_FUNC)(HANDLE hPrivateData, HANDLE hWorkerPrivateData, SWR_VS_CONTEXT* pVsContext);
+typedef void(__cdecl *PFN_HS_FUNC)(HANDLE hPrivateData, HANDLE hWorkerPrivateData, SWR_HS_CONTEXT* pHsContext);
+typedef void(__cdecl *PFN_DS_FUNC)(HANDLE hPrivateData, HANDLE hWorkerPrivateData, SWR_DS_CONTEXT* pDsContext);
+typedef void(__cdecl *PFN_GS_FUNC)(HANDLE hPrivateData, HANDLE hWorkerPrivateData, SWR_GS_CONTEXT* pGsContext);
+typedef void(__cdecl *PFN_CS_FUNC)(HANDLE hPrivateData, HANDLE hWorkerPrivateData, SWR_CS_CONTEXT* pCsContext);
 typedef void(__cdecl *PFN_SO_FUNC)(SWR_STREAMOUT_CONTEXT& soContext);
-typedef void(__cdecl *PFN_PIXEL_KERNEL)(HANDLE hPrivateData, SWR_PS_CONTEXT *pContext);
-typedef void(__cdecl *PFN_CPIXEL_KERNEL)(HANDLE hPrivateData, SWR_PS_CONTEXT *pContext);
-typedef void(__cdecl *PFN_BLEND_JIT_FUNC)(const SWR_BLEND_STATE*,
-    simdvector& vSrc, simdvector& vSrc1, simdscalar& vSrc0Alpha, uint32_t sample,
-    uint8_t* pDst, simdvector& vResult, simdscalari* vOMask, simdscalari* vCoverageMask);
+typedef void(__cdecl *PFN_PIXEL_KERNEL)(HANDLE hPrivateData, HANDLE hWorkerPrivateData, SWR_PS_CONTEXT *pContext);
+typedef void(__cdecl *PFN_CPIXEL_KERNEL)(HANDLE hPrivateData, HANDLE hWorkerPrivateData, SWR_PS_CONTEXT *pContext);
+typedef void(__cdecl *PFN_BLEND_JIT_FUNC)(SWR_BLEND_CONTEXT*);
 typedef simdscalar(*PFN_QUANTIZE_DEPTH)(simdscalar const &);
 
 
