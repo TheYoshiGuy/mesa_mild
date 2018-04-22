@@ -2877,8 +2877,7 @@ intel_miptree_make_shareable(struct brw_context *brw,
                                 ISL_AUX_USAGE_NONE, false);
 
    if (mt->mcs_buf) {
-      brw_bo_unreference(mt->mcs_buf->bo);
-      free(mt->mcs_buf);
+      intel_miptree_aux_buffer_free(mt->mcs_buf);
       mt->mcs_buf = NULL;
 
       /* Any pending MCS/CCS operations are no longer needed. Trying to
@@ -3791,19 +3790,6 @@ get_isl_dim_layout(const struct gen_device_info *devinfo,
    }
 
    unreachable("Invalid texture target");
-}
-
-enum isl_aux_usage
-intel_miptree_get_aux_isl_usage(const struct brw_context *brw,
-                                const struct intel_mipmap_tree *mt)
-{
-   if (mt->hiz_buf)
-      return ISL_AUX_USAGE_HIZ;
-
-   if (!mt->mcs_buf)
-      return ISL_AUX_USAGE_NONE;
-
-   return mt->aux_usage;
 }
 
 bool
