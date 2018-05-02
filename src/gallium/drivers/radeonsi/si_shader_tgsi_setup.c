@@ -39,11 +39,6 @@
 #include "util/u_debug.h"
 
 #include <stdio.h>
-#include <llvm-c/Transforms/IPO.h>
-#include <llvm-c/Transforms/Scalar.h>
-#if HAVE_LLVM >= 0x0700
-#include <llvm-c/Transforms/Utils.h>
-#endif
 
 enum si_llvm_calling_convention {
 	RADEON_LLVM_AMDGPU_VS = 87,
@@ -99,7 +94,7 @@ static void si_diagnostic_handler(LLVMDiagnosticInfoRef di, void *context)
  * @returns 0 for success, 1 for failure
  */
 unsigned si_llvm_compile(LLVMModuleRef M, struct ac_shader_binary *binary,
-			 LLVMTargetMachineRef tm,
+			 struct si_compiler *compiler,
 			 struct pipe_debug_callback *debug)
 {
 	struct si_llvm_diagnostics diag;
@@ -119,8 +114,9 @@ unsigned si_llvm_compile(LLVMModuleRef M, struct ac_shader_binary *binary,
 	LLVMContextSetDiagnosticHandler(llvm_ctx, si_diagnostic_handler, &diag);
 
 	/* Compile IR*/
-	mem_err = LLVMTargetMachineEmitToMemoryBuffer(tm, M, LLVMObjectFile, &err,
-								 &out_buffer);
+	mem_err = LLVMTargetMachineEmitToMemoryBuffer(compiler->tm, M,
+						      LLVMObjectFile, &err,
+						      &out_buffer);
 
 	/* Process Errors/Warnings */
 	if (mem_err) {
@@ -992,7 +988,7 @@ static void emit_immediate(struct lp_build_tgsi_context *bld_base,
 
 void si_llvm_context_init(struct si_shader_context *ctx,
 			  struct si_screen *sscreen,
-			  LLVMTargetMachineRef tm)
+			  struct si_compiler *compiler)
 {
 	struct lp_type type;
 
@@ -1003,18 +999,13 @@ void si_llvm_context_init(struct si_shader_context *ctx,
 	 */
 	memset(ctx, 0, sizeof(*ctx));
 	ctx->screen = sscreen;
-	ctx->tm = tm;
+	ctx->compiler = compiler;
 
 	ctx->gallivm.context = LLVMContextCreate();
 	ctx->gallivm.module = LLVMModuleCreateWithNameInContext("tgsi",
 						ctx->gallivm.context);
-	LLVMSetTarget(ctx->gallivm.module, "amdgcn--");
-
-	LLVMTargetDataRef data_layout = LLVMCreateTargetDataLayout(tm);
-	char *data_layout_str = LLVMCopyStringRepOfTargetData(data_layout);
-	LLVMSetDataLayout(ctx->gallivm.module, data_layout_str);
-	LLVMDisposeTargetData(data_layout);
-	LLVMDisposeMessage(data_layout_str);
+	LLVMSetTarget(ctx->gallivm.module, compiler->triple);
+	LLVMSetDataLayout(ctx->gallivm.module, compiler->data_layout);
 
 	bool unsafe_fpmath = (sscreen->debug_flags & DBG(UNSAFE_MATH)) != 0;
 	enum ac_float_mode float_mode =
@@ -1211,44 +1202,14 @@ void si_llvm_create_func(struct si_shader_context *ctx,
 
 void si_llvm_optimize_module(struct si_shader_context *ctx)
 {
-	struct gallivm_state *gallivm = &ctx->gallivm;
-	const char *triple = LLVMGetTarget(gallivm->module);
-	LLVMTargetLibraryInfoRef target_library_info;
-
 	/* Dump LLVM IR before any optimization passes */
 	if (ctx->screen->debug_flags & DBG(PREOPT_IR) &&
 	    si_can_dump_shader(ctx->screen, ctx->type))
 		LLVMDumpModule(ctx->gallivm.module);
 
-	/* Create the pass manager */
-	gallivm->passmgr = LLVMCreatePassManager();
-
-	target_library_info = gallivm_create_target_library_info(triple);
-	LLVMAddTargetLibraryInfo(target_library_info, gallivm->passmgr);
-
-	if (si_extra_shader_checks(ctx->screen, ctx->type))
-		LLVMAddVerifierPass(gallivm->passmgr);
-
-	LLVMAddAlwaysInlinerPass(gallivm->passmgr);
-
-	/* This pass should eliminate all the load and store instructions */
-	LLVMAddPromoteMemoryToRegisterPass(gallivm->passmgr);
-
-	/* Add some optimization passes */
-	LLVMAddScalarReplAggregatesPass(gallivm->passmgr);
-	LLVMAddLICMPass(gallivm->passmgr);
-	LLVMAddAggressiveDCEPass(gallivm->passmgr);
-	LLVMAddCFGSimplificationPass(gallivm->passmgr);
-	/* This is recommended by the instruction combining pass. */
-	LLVMAddEarlyCSEMemSSAPass(gallivm->passmgr);
-	LLVMAddInstructionCombiningPass(gallivm->passmgr);
-
 	/* Run the pass */
-	LLVMRunPassManager(gallivm->passmgr, ctx->gallivm.module);
-
+	LLVMRunPassManager(ctx->compiler->passmgr, ctx->gallivm.module);
 	LLVMDisposeBuilder(ctx->ac.builder);
-	LLVMDisposePassManager(gallivm->passmgr);
-	gallivm_dispose_target_library_info(target_library_info);
 }
 
 void si_llvm_dispose(struct si_shader_context *ctx)

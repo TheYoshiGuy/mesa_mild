@@ -155,46 +155,27 @@ brw_emit_surface_state(struct brw_context *brw,
    struct brw_bo *aux_bo = NULL;
    struct isl_surf *aux_surf = NULL;
    uint64_t aux_offset = 0;
-   struct intel_miptree_aux_buffer *aux_buf = NULL;
-   switch (aux_usage) {
-   case ISL_AUX_USAGE_MCS:
-   case ISL_AUX_USAGE_CCS_D:
-   case ISL_AUX_USAGE_CCS_E:
-      aux_buf = mt->mcs_buf;
-      break;
-
-   case ISL_AUX_USAGE_HIZ:
-      aux_buf = mt->hiz_buf;
-      break;
-
-   case ISL_AUX_USAGE_NONE:
-      break;
-   }
+   struct brw_bo *clear_bo = NULL;
+   uint32_t clear_offset = 0;
 
    if (aux_usage != ISL_AUX_USAGE_NONE) {
-      aux_surf = &aux_buf->surf;
-      aux_bo = aux_buf->bo;
-      aux_offset = aux_buf->offset;
+      aux_surf = &mt->aux_buf->surf;
+      aux_bo = mt->aux_buf->bo;
+      aux_offset = mt->aux_buf->offset;
 
       /* We only really need a clear color if we also have an auxiliary
        * surface.  Without one, it does nothing.
        */
-      clear_color = mt->fast_clear_color;
+      clear_color =
+         intel_miptree_get_clear_color(devinfo, mt, view.format,
+                                       view.usage & ISL_SURF_USAGE_TEXTURE_BIT,
+                                       &clear_bo, &clear_offset);
    }
 
    void *state = brw_state_batch(brw,
                                  brw->isl_dev.ss.size,
                                  brw->isl_dev.ss.align,
                                  surf_offset);
-
-   bool use_clear_address = devinfo->gen >= 10 && aux_surf;
-
-   struct brw_bo *clear_bo = NULL;
-   uint32_t clear_offset = 0;
-   if (use_clear_address) {
-      clear_bo = aux_buf->clear_color_bo;
-      clear_offset = aux_buf->clear_color_offset;
-   }
 
    isl_surf_fill_state(&brw->isl_dev, state, .surf = &surf, .view = &view,
                        .address = brw_state_reloc(&brw->batch,
@@ -204,7 +185,7 @@ brw_emit_surface_state(struct brw_context *brw,
                        .aux_address = aux_offset,
                        .mocs = brw_get_bo_mocs(devinfo, mt->bo),
                        .clear_color = clear_color,
-                       .use_clear_address = use_clear_address,
+                       .use_clear_address = clear_bo != NULL,
                        .clear_address = clear_offset,
                        .x_offset_sa = tile_x, .y_offset_sa = tile_y);
    if (aux_surf) {
@@ -236,7 +217,7 @@ brw_emit_surface_state(struct brw_context *brw,
       }
    }
 
-   if (use_clear_address) {
+   if (clear_bo != NULL) {
       /* Make sure the offset is aligned with a cacheline. */
       assert((clear_offset & 0x3f) == 0);
       uint32_t *clear_address =

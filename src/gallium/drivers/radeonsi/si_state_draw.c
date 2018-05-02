@@ -720,7 +720,7 @@ static void si_emit_draw_packets(struct si_context *sctx,
 		index_va = r600_resource(indexbuf)->gpu_address + index_offset;
 
 		radeon_add_to_buffer_list(sctx, sctx->gfx_cs,
-				      (struct r600_resource *)indexbuf,
+				      r600_resource(indexbuf),
 				      RADEON_USAGE_READ, RADEON_PRIO_INDEX_BUFFER);
 	} else {
 		/* On CI and later, non-indexed draws overwrite VGT_INDEX_TYPE,
@@ -743,7 +743,7 @@ static void si_emit_draw_packets(struct si_context *sctx,
 		radeon_emit(cs, indirect_va >> 32);
 
 		radeon_add_to_buffer_list(sctx, sctx->gfx_cs,
-				      (struct r600_resource *)indirect->buffer,
+				      r600_resource(indirect->buffer),
 				      RADEON_USAGE_READ, RADEON_PRIO_DRAW_INDIRECT);
 
 		unsigned di_src_sel = index_size ? V_0287F0_DI_SRC_SEL_DMA
@@ -773,7 +773,7 @@ static void si_emit_draw_packets(struct si_context *sctx,
 
 			if (indirect->indirect_draw_count) {
 				struct r600_resource *params_buf =
-					(struct r600_resource *)indirect->indirect_draw_count;
+					r600_resource(indirect->indirect_draw_count);
 
 				radeon_add_to_buffer_list(
 					sctx, sctx->gfx_cs, params_buf,
@@ -1181,11 +1181,9 @@ static void si_emit_all_states(struct si_context *sctx, const struct pipe_draw_i
 {
 	/* Emit state atoms. */
 	unsigned mask = sctx->dirty_atoms & ~skip_atom_mask;
-	while (mask) {
-		struct r600_atom *atom = sctx->atoms.array[u_bit_scan(&mask)];
+	while (mask)
+		sctx->atoms.array[u_bit_scan(&mask)].emit(sctx);
 
-		atom->emit(sctx, atom);
-	}
 	sctx->dirty_atoms &= skip_atom_mask;
 
 	/* Emit states. */
@@ -1256,7 +1254,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		sctx->framebuffer.dirty_cbufs |=
 			((1 << sctx->framebuffer.state.nr_cbufs) - 1);
 		sctx->framebuffer.dirty_zsbuf = true;
-		si_mark_atom_dirty(sctx, &sctx->framebuffer.atom);
+		si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer);
 		si_update_all_texture_descriptors(sctx);
 	}
 
@@ -1282,7 +1280,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		bool new_is_poly = rast_prim >= PIPE_PRIM_TRIANGLES;
 		if (old_is_poly != new_is_poly) {
 			sctx->scissors.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
-			si_mark_atom_dirty(sctx, &sctx->scissors.atom);
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.scissors);
 		}
 
 		sctx->current_rast_prim = rast_prim;
@@ -1418,7 +1416,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	 * more involved alternative workaround.
 	 */
 	if ((sctx->family == CHIP_VEGA10 || sctx->family == CHIP_RAVEN) &&
-	    si_is_atom_dirty(sctx, &sctx->scissors.atom)) {
+	    si_is_atom_dirty(sctx, &sctx->atoms.s.scissors)) {
 		sctx->flags |= SI_CONTEXT_PS_PARTIAL_FLUSH;
 		si_emit_cache_flush(sctx);
 	}
@@ -1436,7 +1434,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		unsigned masked_atoms = 0;
 
 		if (unlikely(sctx->flags & SI_CONTEXT_FLUSH_FOR_RENDER_COND))
-			masked_atoms |= 1u << sctx->render_cond_atom.id;
+			masked_atoms |= si_get_atom_bit(sctx, &sctx->atoms.s.render_cond);
 
 		if (!si_upload_graphics_shader_descriptors(sctx))
 			return;
@@ -1446,8 +1444,8 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		si_emit_cache_flush(sctx);
 		/* <-- CUs are idle here. */
 
-		if (si_is_atom_dirty(sctx, &sctx->render_cond_atom))
-			sctx->render_cond_atom.emit(sctx, NULL);
+		if (si_is_atom_dirty(sctx, &sctx->atoms.s.render_cond))
+			sctx->atoms.s.render_cond.emit(sctx);
 		sctx->dirty_atoms = 0;
 
 		si_emit_draw_packets(sctx, info, indexbuf, index_size, index_offset);

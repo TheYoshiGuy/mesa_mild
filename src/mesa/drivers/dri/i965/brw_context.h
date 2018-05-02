@@ -48,6 +48,7 @@
 #include <brw_bufmgr.h>
 
 #include "common/gen_debug.h"
+#include "common/gen_decoder.h"
 #include "intel_screen.h"
 #include "intel_tex_obj.h"
 
@@ -524,6 +525,8 @@ struct intel_batchbuffer {
 
    /** Map from batch offset to brw_state_batch data (with DEBUG_BATCH) */
    struct hash_table *state_batch_sizes;
+
+   struct gen_batch_decode_ctx decoder;
 };
 
 #define BRW_MAX_XFB_STREAMS 4
@@ -681,7 +684,8 @@ struct gen_l3_config;
 
 enum brw_query_kind {
    OA_COUNTERS,
-   PIPELINE_STATS
+   OA_COUNTERS_RAW,
+   PIPELINE_STATS,
 };
 
 struct brw_perf_query_register_prog {
@@ -899,20 +903,35 @@ struct brw_context
       } params;
 
       /**
-       * Buffer and offset used for GL_ARB_shader_draw_parameters
-       * (for now, only gl_BaseVertex).
+       * Buffer and offset used for GL_ARB_shader_draw_parameters which will
+       * point to the indirect buffer for indirect draw calls.
        */
       struct brw_bo *draw_params_bo;
       uint32_t draw_params_offset;
 
+      struct {
+         /**
+          * The value of gl_DrawID for the current _mesa_prim. This always comes
+          * in from it's own vertex buffer since it's not part of the indirect
+          * draw parameters.
+          */
+         int gl_drawid;
+
+         /**
+          * Stores if the current _mesa_prim is an indexed or non-indexed draw
+          * (~0/0). Useful to calculate gl_BaseVertex as an AND of firstvertex
+          * and is_indexed_draw.
+          */
+         int is_indexed_draw;
+      } derived_params;
+
       /**
-       * The value of gl_DrawID for the current _mesa_prim. This always comes
-       * in from it's own vertex buffer since it's not part of the indirect
-       * draw parameters.
+       * Buffer and offset used for GL_ARB_shader_draw_parameters which contains
+       * parameters that are not present in the indirect buffer. They will go in
+       * their own vertex element.
        */
-      int gl_drawid;
-      struct brw_bo *draw_id_bo;
-      uint32_t draw_id_offset;
+      struct brw_bo *derived_draw_params_bo;
+      uint32_t derived_draw_params_offset;
 
       /**
        * Pointer to the the buffer storing the indirect draw parameters. It

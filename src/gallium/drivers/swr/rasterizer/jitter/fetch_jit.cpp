@@ -985,10 +985,6 @@ void FetchJit::JitGatherVertices(const FETCH_COMPILE_STATE &fetchState,
     }
 }
 
-typedef void*(*PFN_TRANSLATEGFXADDRESS_FUNC)(void* pdc, gfxptr_t va);
-extern "C" void GetSimdValid8bitIndicesGfx(gfxptr_t indices, gfxptr_t lastIndex, uint32_t vWidth, PFN_TRANSLATEGFXADDRESS_FUNC pfnTranslate, void* pdc, uint32_t* outIndices);
-extern "C" void GetSimdValid16bitIndicesGfx(gfxptr_t indices, gfxptr_t lastIndex, uint32_t vWidth, PFN_TRANSLATEGFXADDRESS_FUNC pfnTranslate, void* pdc, uint32_t* outIndices);
-
 template<typename T> Value* FetchJit::GetSimdValidIndicesHelper(Value* pIndices, Value* pLastIndex)
 {
     SWR_ASSERT(pIndices->getType() == mInt64Ty && pLastIndex->getType() == mInt64Ty, "Function expects gfxptr_t for both input parameters.");
@@ -1014,7 +1010,7 @@ template<typename T> Value* FetchJit::GetSimdValidIndicesHelper(Value* pIndices,
 
     {
         // store 0 index on stack to be used to conditionally load from if index address is OOB
-        Value* pZeroIndex = ALLOCA(Ty);
+        Value* pZeroIndex = ALLOCA(Ty->getPointerElementType());
         STORE(C((T)0), pZeroIndex);
 
         // Load a SIMD of index pointers
@@ -1070,7 +1066,6 @@ Value* FetchJit::GetSimdValid16bitIndices(Value* pIndices, Value* pLastIndex)
 Value* FetchJit::GetSimdValid32bitIndices(Value* pIndices, Value* pLastIndex)
 {
     DataLayout dL(JM()->mpCurrentModule);
-    unsigned int ptrSize = dL.getPointerSize() * 8;  // ptr size in bits
     Value* iLastIndex = pLastIndex; 
     Value* iIndices = pIndices;
 

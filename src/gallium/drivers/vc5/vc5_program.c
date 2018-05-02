@@ -125,6 +125,10 @@ vc5_set_transform_feedback_outputs(struct vc5_uncompiled_shader *so,
                                 .output_buffer_to_write_to = buffer,
                         };
 
+                        /* GFXH-1559 */
+                        assert(unpacked.first_shaded_vertex_value_to_output != 8 ||
+                               so->num_tf_specs != 0);
+
                         assert(so->num_tf_specs != ARRAY_SIZE(so->tf_specs));
                         V3D33_TRANSFORM_FEEDBACK_OUTPUT_DATA_SPEC_pack(NULL,
                                                                        (void *)&so->tf_specs[so->num_tf_specs],
@@ -136,6 +140,11 @@ vc5_set_transform_feedback_outputs(struct vc5_uncompiled_shader *so,
                          * though.
                          */
                         unpacked.first_shaded_vertex_value_to_output++;
+
+                        /* GFXH-1559 */
+                        assert(unpacked.first_shaded_vertex_value_to_output != 8 ||
+                               so->num_tf_specs != 0);
+
                         V3D33_TRANSFORM_FEEDBACK_OUTPUT_DATA_SPEC_pack(NULL,
                                                                        (void *)&so->tf_specs_psiz[so->num_tf_specs],
                                                                        &unpacked);
@@ -363,10 +372,7 @@ vc5_setup_shared_key(struct vc5_context *vc5, struct v3d_key *key,
                         key->tex[i].swizzle[3] = PIPE_SWIZZLE_W;
                 }
 
-                if (sampler->texture->nr_samples > 1) {
-                        key->tex[i].msaa_width = sampler->texture->width0;
-                        key->tex[i].msaa_height = sampler->texture->height0;
-                } else if (sampler){
+                if (sampler) {
                         key->tex[i].compare_mode = sampler_state->compare_mode;
                         key->tex[i].compare_func = sampler_state->compare_func;
                         key->tex[i].clamp_s =
@@ -471,10 +477,16 @@ vc5_update_compiled_fs(struct vc5_context *vc5, uint8_t prim_mode)
 
         vc5->dirty |= VC5_DIRTY_COMPILED_FS;
 
-        if (old_fs &&
-            vc5->prog.fs->prog_data.fs->flat_shade_flags !=
-            old_fs->prog_data.fs->flat_shade_flags) {
-                vc5->dirty |= VC5_DIRTY_FLAT_SHADE_FLAGS;
+        if (old_fs) {
+                if (vc5->prog.fs->prog_data.fs->flat_shade_flags !=
+                    old_fs->prog_data.fs->flat_shade_flags) {
+                        vc5->dirty |= VC5_DIRTY_FLAT_SHADE_FLAGS;
+                }
+
+                if (vc5->prog.fs->prog_data.fs->centroid_flags !=
+                    old_fs->prog_data.fs->centroid_flags) {
+                        vc5->dirty |= VC5_DIRTY_CENTROID_FLAGS;
+                }
         }
 
         if (old_fs && memcmp(vc5->prog.fs->prog_data.fs->input_slots,

@@ -566,9 +566,11 @@ vc5_resource_setup(struct pipe_screen *pscreen,
         prsc->screen = pscreen;
 
         if (prsc->nr_samples <= 1 ||
+            screen->devinfo.ver >= 40 ||
             util_format_is_depth_or_stencil(prsc->format)) {
-                rsc->cpp = util_format_get_blocksize(prsc->format) *
-                        MAX2(prsc->nr_samples, 1);
+                rsc->cpp = util_format_get_blocksize(prsc->format);
+                if (screen->devinfo.ver < 40 && prsc->nr_samples > 1)
+                        rsc->cpp *= prsc->nr_samples;
         } else {
                 assert(vc5_rt_format_supported(&screen->devinfo, prsc->format));
                 uint32_t output_image_format =
@@ -694,6 +696,7 @@ vc5_resource_from_handle(struct pipe_screen *pscreen,
 
         switch (whandle->modifier) {
         case DRM_FORMAT_MOD_LINEAR:
+        case DRM_FORMAT_MOD_INVALID:
                 rsc->tiled = false;
                 break;
         /* XXX: UIF */
@@ -729,6 +732,8 @@ vc5_resource_from_handle(struct pipe_screen *pscreen,
 
         if (!rsc->bo)
                 goto fail;
+
+        rsc->internal_format = prsc->format;
 
         vc5_setup_slices(rsc);
         vc5_debug_resource_layout(rsc, "import");

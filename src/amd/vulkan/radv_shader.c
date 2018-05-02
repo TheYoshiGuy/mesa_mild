@@ -491,7 +491,7 @@ shader_variant_create(struct radv_device *device,
 		tm_options |= AC_TM_SUPPORTS_SPILL;
 	if (device->instance->perftest_flags & RADV_PERFTEST_SISCHED)
 		tm_options |= AC_TM_SISCHED;
-	tm = ac_create_target_machine(chip_family, tm_options);
+	tm = ac_create_target_machine(chip_family, tm_options, NULL);
 
 	if (gs_copy_shader) {
 		assert(shader_count == 1);
@@ -615,17 +615,7 @@ generate_shader_stats(struct radv_device *device,
 	unsigned max_simd_waves;
 	unsigned lds_per_wave = 0;
 
-	switch (device->physical_device->rad_info.family) {
-	/* These always have 8 waves: */
-	case CHIP_POLARIS10:
-	case CHIP_POLARIS11:
-	case CHIP_POLARIS12:
-	case CHIP_VEGAM:
-		max_simd_waves = 8;
-		break;
-	default:
-		max_simd_waves = 10;
-	}
+	max_simd_waves = ac_get_max_simd_waves(device->physical_device->rad_info.family);
 
 	conf = &variant->config;
 

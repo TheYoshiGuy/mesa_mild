@@ -86,13 +86,13 @@ static void si_create_compute_state_async(void *job, int thread_index)
 	struct si_compute *program = (struct si_compute *)job;
 	struct si_shader *shader = &program->shader;
 	struct si_shader_selector sel;
-	LLVMTargetMachineRef tm;
+	struct si_compiler *compiler;
 	struct pipe_debug_callback *debug = &program->compiler_ctx_state.debug;
 
 	assert(!debug->debug_message || debug->async);
 	assert(thread_index >= 0);
-	assert(thread_index < ARRAY_SIZE(program->screen->tm));
-	tm = program->screen->tm[thread_index];
+	assert(thread_index < ARRAY_SIZE(program->screen->compiler));
+	compiler = &program->screen->compiler[thread_index];
 
 	memset(&sel, 0, sizeof(sel));
 
@@ -123,7 +123,7 @@ static void si_create_compute_state_async(void *job, int thread_index)
 	program->uses_bindless_samplers = sel.info.uses_bindless_samplers;
 	program->uses_bindless_images = sel.info.uses_bindless_images;
 
-	if (si_shader_create(program->screen, tm, &program->shader, debug)) {
+	if (si_shader_create(program->screen, compiler, &program->shader, debug)) {
 		program->shader.compilation_failed = true;
 	} else {
 		bool scratch_enabled = shader->config.scratch_bytes_per_wave > 0;
@@ -356,11 +356,11 @@ static bool si_setup_compute_scratch_buffer(struct si_context *sctx,
 	if (scratch_bo_size < scratch_needed) {
 		r600_resource_reference(&sctx->compute_scratch_buffer, NULL);
 
-		sctx->compute_scratch_buffer = (struct r600_resource*)
+		sctx->compute_scratch_buffer =
 			si_aligned_buffer_create(&sctx->screen->b,
-						   SI_RESOURCE_FLAG_UNMAPPABLE,
-						   PIPE_USAGE_DEFAULT,
-						   scratch_needed, 256);
+						 SI_RESOURCE_FLAG_UNMAPPABLE,
+						 PIPE_USAGE_DEFAULT,
+						 scratch_needed, 256);
 
 		if (!sctx->compute_scratch_buffer)
 			return false;
@@ -703,7 +703,7 @@ static void si_setup_tgsi_grid(struct si_context *sctx,
 			int i;
 
 			radeon_add_to_buffer_list(sctx, sctx->gfx_cs,
-					 (struct r600_resource *)info->indirect,
+					 r600_resource(info->indirect),
 					 RADEON_USAGE_READ, RADEON_PRIO_DRAW_INDIRECT);
 
 			for (i = 0; i < 3; ++i) {
@@ -774,7 +774,7 @@ static void si_emit_dispatch_packets(struct si_context *sctx,
 		uint64_t base_va = r600_resource(info->indirect)->gpu_address;
 
 		radeon_add_to_buffer_list(sctx, sctx->gfx_cs,
-		                 (struct r600_resource *)info->indirect,
+		                 r600_resource(info->indirect),
 		                 RADEON_USAGE_READ, RADEON_PRIO_DRAW_INDIRECT);
 
 		radeon_emit(cs, PKT3(PKT3_SET_BASE, 2, 0) |
@@ -863,10 +863,9 @@ static void si_launch_grid(
 	si_upload_compute_shader_descriptors(sctx);
 	si_emit_compute_shader_pointers(sctx);
 
-	if (si_is_atom_dirty(sctx, sctx->atoms.s.render_cond)) {
-		sctx->atoms.s.render_cond->emit(sctx,
-		                                sctx->atoms.s.render_cond);
-		si_set_atom_dirty(sctx, sctx->atoms.s.render_cond, false);
+	if (si_is_atom_dirty(sctx, &sctx->atoms.s.render_cond)) {
+		sctx->atoms.s.render_cond.emit(sctx);
+		si_set_atom_dirty(sctx, &sctx->atoms.s.render_cond, false);
 	}
 
 	if ((program->input_size ||
@@ -878,7 +877,7 @@ static void si_launch_grid(
 	/* Global buffers */
 	for (i = 0; i < MAX_GLOBAL_BUFFERS; i++) {
 		struct r600_resource *buffer =
-				(struct r600_resource*)program->global_buffers[i];
+			r600_resource(program->global_buffers[i]);
 		if (!buffer) {
 			continue;
 		}

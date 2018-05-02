@@ -46,6 +46,7 @@
 
 #include "compiler/glsl/standalone.h"
 #include "compiler/glsl/glsl_to_nir.h"
+#include "compiler/glsl/gl_nir.h"
 #include "compiler/nir_types.h"
 #include "compiler/spirv/nir_spirv.h"
 
@@ -162,7 +163,7 @@ load_glsl(unsigned num_files, char* const* files, gl_shader_stage stage)
 
 	NIR_PASS_V(nir, nir_lower_system_values);
 	NIR_PASS_V(nir, nir_lower_io, nir_var_all, ir3_glsl_type_size, 0);
-	NIR_PASS_V(nir, nir_lower_samplers, prog);
+	NIR_PASS_V(nir, gl_nir_lower_samplers, prog);
 
 	return nir;
 }

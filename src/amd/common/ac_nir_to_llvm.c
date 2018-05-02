@@ -87,7 +87,6 @@ get_ac_sampler_dim(const struct ac_llvm_context *ctx, enum glsl_sampler_dim dim,
 		return is_array ? ac_image_1darray : ac_image_1d;
 	case GLSL_SAMPLER_DIM_2D:
 	case GLSL_SAMPLER_DIM_RECT:
-	case GLSL_SAMPLER_DIM_SUBPASS:
 	case GLSL_SAMPLER_DIM_EXTERNAL:
 		return is_array ? ac_image_2darray : ac_image_2d;
 	case GLSL_SAMPLER_DIM_3D:
@@ -95,8 +94,11 @@ get_ac_sampler_dim(const struct ac_llvm_context *ctx, enum glsl_sampler_dim dim,
 	case GLSL_SAMPLER_DIM_CUBE:
 		return ac_image_cube;
 	case GLSL_SAMPLER_DIM_MS:
-	case GLSL_SAMPLER_DIM_SUBPASS_MS:
 		return is_array ? ac_image_2darraymsaa : ac_image_2dmsaa;
+	case GLSL_SAMPLER_DIM_SUBPASS:
+		return ac_image_2darray;
+	case GLSL_SAMPLER_DIM_SUBPASS_MS:
+		return ac_image_2darraymsaa;
 	default:
 		unreachable("bad sampler dim");
 	}
@@ -1307,6 +1309,14 @@ static LLVMValueRef build_tex_intrinsic(struct ac_nir_context *ctx,
 		}
 	}
 
+	/* Fixup for GFX9 which allocates 1D textures as 2D. */
+	if (instr->op == nir_texop_lod && ctx->ac.chip_class >= GFX9) {
+		if ((args->dim == ac_image_2darray ||
+		     args->dim == ac_image_2d) && !args->coords[1]) {
+			args->coords[1] = ctx->ac.i32_0;
+		}
+	}
+
 	args->attributes = AC_FUNC_ATTR_READNONE;
 	return ac_build_image_opcode(&ctx->ac, args);
 }
@@ -1561,6 +1571,11 @@ static LLVMValueRef visit_load_buffer(struct ac_nir_context *ctx,
 			LLVMConstInt(ctx->ac.i32, 4, false), LLVMConstInt(ctx->ac.i32, 5, false),
 		        LLVMConstInt(ctx->ac.i32, 6, false), LLVMConstInt(ctx->ac.i32, 7, false)
 		};
+
+		if (num_components == 6) {
+			/* we end up with a v4f32 and v2f32 but shuffle fails on that */
+			results[1] = ac_build_expand_to_vec4(&ctx->ac, results[1], 4);
+		}
 
 		LLVMValueRef swizzle = LLVMConstVector(masks, num_components);
 		ret = LLVMBuildShuffleVector(ctx->ac.builder, results[0],
@@ -2090,18 +2105,6 @@ static LLVMValueRef adjust_sample_index_using_fmask(struct ac_llvm_context *ctx,
 	return sample_index;
 }
 
-static bool
-glsl_is_array_image(const struct glsl_type *type)
-{
-	const enum glsl_sampler_dim dim = glsl_get_sampler_dim(type);
-
-	if (glsl_sampler_type_is_array(type))
-		return true;
-
-	return dim == GLSL_SAMPLER_DIM_SUBPASS ||
-	       dim == GLSL_SAMPLER_DIM_SUBPASS_MS;
-}
-
 static void get_image_coords(struct ac_nir_context *ctx,
 			     const nir_intrinsic_instr *instr,
 			     struct ac_image_args *args)
@@ -2247,7 +2250,7 @@ static LLVMValueRef visit_image_load(struct ac_nir_context *ctx,
 		args.resource = get_sampler_desc(ctx, instr->variables[0],
 						 AC_DESC_IMAGE, NULL, true, false);
 		args.dim = get_ac_image_dim(&ctx->ac, glsl_get_sampler_dim(type),
-					    glsl_is_array_image(type));
+					    glsl_sampler_type_is_array(type));
 		args.dmask = 15;
 		args.attributes = AC_FUNC_ATTR_READONLY;
 		if (var->data.image._volatile || var->data.image.coherent)
@@ -2290,7 +2293,7 @@ static void visit_image_store(struct ac_nir_context *ctx,
 		args.resource = get_sampler_desc(ctx, instr->variables[0],
 						 AC_DESC_IMAGE, NULL, true, false);
 		args.dim = get_ac_image_dim(&ctx->ac, glsl_get_sampler_dim(type),
-					    glsl_is_array_image(type));
+					    glsl_sampler_type_is_array(type));
 		args.dmask = 15;
 		if (force_glc || var->data.image._volatile || var->data.image.coherent)
 			args.cache_policy |= ac_glc;
@@ -2381,7 +2384,7 @@ static LLVMValueRef visit_image_atomic(struct ac_nir_context *ctx,
 		args.resource = get_sampler_desc(ctx, instr->variables[0],
 						 AC_DESC_IMAGE, NULL, true, false);
 		args.dim = get_ac_image_dim(&ctx->ac, glsl_get_sampler_dim(type),
-					    glsl_is_array_image(type));
+					    glsl_sampler_type_is_array(type));
 
 		return ac_build_image_opcode(&ctx->ac, &args);
 	}
@@ -3397,6 +3400,13 @@ static void visit_tex(struct ac_nir_context *ctx, nir_tex_instr *instr)
 	}
 
 	/* Texture coordinates fixups */
+	if (instr->coord_components > 1 &&
+	    instr->sampler_dim == GLSL_SAMPLER_DIM_1D &&
+	    instr->is_array &&
+	    instr->op != nir_texop_txf) {
+		args.coords[1] = apply_round_slice(&ctx->ac, args.coords[1]);
+	}
+
 	if (instr->coord_components > 2 &&
 	    (instr->sampler_dim == GLSL_SAMPLER_DIM_2D ||
 	     instr->sampler_dim == GLSL_SAMPLER_DIM_MS ||

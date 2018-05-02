@@ -179,9 +179,8 @@ static void si_begin_gfx_cs_debug(struct si_context *ctx)
 
 	pipe_reference_init(&ctx->current_saved_cs->reference, 1);
 
-	ctx->current_saved_cs->trace_buf = (struct r600_resource*)
-				 pipe_buffer_create(ctx->b.screen, 0,
-						    PIPE_USAGE_STAGING, 8);
+	ctx->current_saved_cs->trace_buf = r600_resource(
+		pipe_buffer_create(ctx->b.screen, 0, PIPE_USAGE_STAGING, 8));
 	if (!ctx->current_saved_cs->trace_buf) {
 		free(ctx->current_saved_cs);
 		ctx->current_saved_cs = NULL;
@@ -257,39 +256,39 @@ void si_begin_new_gfx_cs(struct si_context *ctx)
 	}
 	/* This should always be marked as dirty to set the framebuffer scissor
 	 * at least. */
-	si_mark_atom_dirty(ctx, &ctx->framebuffer.atom);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.framebuffer);
 
-	si_mark_atom_dirty(ctx, &ctx->clip_regs);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.clip_regs);
 	/* CLEAR_STATE sets zeros. */
 	if (!has_clear_state || ctx->clip_state.any_nonzeros)
-		si_mark_atom_dirty(ctx, &ctx->clip_state.atom);
-	ctx->msaa_sample_locs.nr_samples = 0;
-	si_mark_atom_dirty(ctx, &ctx->msaa_sample_locs.atom);
-	si_mark_atom_dirty(ctx, &ctx->msaa_config);
+		si_mark_atom_dirty(ctx, &ctx->atoms.s.clip_state);
+	ctx->sample_locs_num_samples = 0;
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.msaa_sample_locs);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.msaa_config);
 	/* CLEAR_STATE sets 0xffff. */
-	if (!has_clear_state || ctx->sample_mask.sample_mask != 0xffff)
-		si_mark_atom_dirty(ctx, &ctx->sample_mask.atom);
-	si_mark_atom_dirty(ctx, &ctx->cb_render_state);
+	if (!has_clear_state || ctx->sample_mask != 0xffff)
+		si_mark_atom_dirty(ctx, &ctx->atoms.s.sample_mask);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.cb_render_state);
 	/* CLEAR_STATE sets zeros. */
 	if (!has_clear_state || ctx->blend_color.any_nonzeros)
-		si_mark_atom_dirty(ctx, &ctx->blend_color.atom);
-	si_mark_atom_dirty(ctx, &ctx->db_render_state);
+		si_mark_atom_dirty(ctx, &ctx->atoms.s.blend_color);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.db_render_state);
 	if (ctx->chip_class >= GFX9)
-		si_mark_atom_dirty(ctx, &ctx->dpbb_state);
-	si_mark_atom_dirty(ctx, &ctx->stencil_ref.atom);
-	si_mark_atom_dirty(ctx, &ctx->spi_map);
-	si_mark_atom_dirty(ctx, &ctx->streamout.enable_atom);
-	si_mark_atom_dirty(ctx, &ctx->render_cond_atom);
+		si_mark_atom_dirty(ctx, &ctx->atoms.s.dpbb_state);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.stencil_ref);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.spi_map);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.streamout_enable);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.render_cond);
 	si_all_descriptors_begin_new_cs(ctx);
 	si_all_resident_buffers_begin_new_cs(ctx);
 
 	ctx->scissors.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
 	ctx->viewports.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
 	ctx->viewports.depth_range_dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
-	si_mark_atom_dirty(ctx, &ctx->scissors.atom);
-	si_mark_atom_dirty(ctx, &ctx->viewports.atom);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.scissors);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.viewports);
 
-	si_mark_atom_dirty(ctx, &ctx->scratch_state);
+	si_mark_atom_dirty(ctx, &ctx->atoms.s.scratch_state);
 	if (ctx->scratch_buffer) {
 		si_context_add_resource_size(ctx, &ctx->scratch_buffer->b.b);
 	}

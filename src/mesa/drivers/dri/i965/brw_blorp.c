@@ -154,12 +154,6 @@ blorp_surf_for_miptree(struct brw_context *brw,
       .aux_usage = aux_usage,
    };
 
-   struct intel_miptree_aux_buffer *aux_buf = NULL;
-   if (mt->mcs_buf)
-      aux_buf = mt->mcs_buf;
-   else if (mt->hiz_buf)
-      aux_buf = mt->hiz_buf;
-
    if (mt->format == MESA_FORMAT_S_UINT8 && is_render_target &&
        devinfo->gen <= 7)
       mt->r8stencil_needs_update = true;
@@ -172,23 +166,20 @@ blorp_surf_for_miptree(struct brw_context *brw,
       /* We only really need a clear color if we also have an auxiliary
        * surface.  Without one, it does nothing.
        */
-      surf->clear_color = mt->fast_clear_color;
+      surf->clear_color =
+         intel_miptree_get_clear_color(devinfo, mt, mt->surf.format,
+                                       !is_render_target, (struct brw_bo **)
+                                       &surf->clear_color_addr.buffer,
+                                       &surf->clear_color_addr.offset);
 
-      surf->aux_surf = &aux_buf->surf;
+      surf->aux_surf = &mt->aux_buf->surf;
       surf->aux_addr = (struct blorp_address) {
          .reloc_flags = is_render_target ? EXEC_OBJECT_WRITE : 0,
          .mocs = surf->addr.mocs,
       };
 
-      surf->aux_addr.buffer = aux_buf->bo;
-      surf->aux_addr.offset = aux_buf->offset;
-
-      if (devinfo->gen >= 10) {
-         surf->clear_color_addr = (struct blorp_address) {
-            .buffer = aux_buf->clear_color_bo,
-            .offset = aux_buf->clear_color_offset,
-         };
-      }
+      surf->aux_addr.buffer = mt->aux_buf->bo;
+      surf->aux_addr.offset = mt->aux_buf->offset;
    } else {
       surf->aux_addr = (struct blorp_address) {
          .buffer = NULL,
@@ -1216,7 +1207,7 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
 
    /* If the MCS buffer hasn't been allocated yet, we need to allocate it now.
     */
-   if (can_fast_clear && !irb->mt->mcs_buf) {
+   if (can_fast_clear && !irb->mt->aux_buf) {
       assert(irb->mt->aux_usage == ISL_AUX_USAGE_CCS_D);
       if (!intel_miptree_alloc_ccs(brw, irb->mt)) {
          /* There are a few reasons in addition to out-of-memory, that can
@@ -1615,7 +1606,7 @@ intel_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
        brw_emit_pipe_control_flush(brw, PIPE_CONTROL_DEPTH_STALL);
    }
 
-   assert(mt->aux_usage == ISL_AUX_USAGE_HIZ && mt->hiz_buf);
+   assert(mt->aux_usage == ISL_AUX_USAGE_HIZ && mt->aux_buf);
 
    struct isl_surf isl_tmp[2];
    struct blorp_surf surf;

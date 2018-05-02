@@ -80,14 +80,55 @@ JitManager::JitManager(uint32_t simdWidth, const char *arch, const char* core)
 
     StringRef hostCPUName;
 
-    hostCPUName = sys::getHostCPUName();
+    // force JIT to use the same CPU arch as the rest of swr
+    if(mArch.AVX512F())
+    {
+#if USE_SIMD16_SHADERS
+        if(mArch.AVX512ER())
+        {
+            hostCPUName = StringRef("knl");
+        }
+        else
+        {
+            hostCPUName = StringRef("skylake-avx512");
+        }
+        mUsingAVX512 = true;
+#else
+        hostCPUName = StringRef("core-avx2");
+#endif
+        if (mVWidth == 0)
+        {
+            mVWidth = 8;
+        }
+    }
+    else if(mArch.AVX2())
+    {
+        hostCPUName = StringRef("core-avx2");
+        if (mVWidth == 0)
+        {
+            mVWidth = 8;
+        }
+    }
+    else if(mArch.AVX())
+    {
+        if (mArch.F16C())
+        {
+            hostCPUName = StringRef("core-avx-i");
+        }
+        else
+        {
+            hostCPUName = StringRef("corei7-avx");
+        }
+        if (mVWidth == 0)
+        {
+            mVWidth = 8;
+        }
+    }
+    else
+    {
+        SWR_INVALID("Jitting requires at least AVX ISA support");
+    }
 
-#if defined(_WIN32)
-    // Needed for MCJIT on windows
-    Triple hostTriple(sys::getProcessTriple());
-    hostTriple.setObjectFormat(Triple::COFF);
-    mpCurrentModule->setTargetTriple(hostTriple.getTriple());
-#endif // _WIN32
 
     auto optLevel = CodeGenOpt::Aggressive;
 
@@ -97,6 +138,7 @@ JitManager::JitManager(uint32_t simdWidth, const char *arch, const char* core)
         optLevel = CodeGenOpt::Level(KNOB_JIT_OPTIMIZATION_LEVEL);
     }
 
+    mpCurrentModule->setTargetTriple(sys::getProcessTriple());
     mpExec = EngineBuilder(std::move(newModule))
         .setTargetOptions(tOpts)
         .setOptLevel(optLevel)
@@ -163,13 +205,7 @@ void JitManager::SetupNewModule()
 
     std::unique_ptr<Module> newModule(new Module("", mContext));
     mpCurrentModule = newModule.get();
-#if defined(_WIN32)
-    // Needed for MCJIT on windows
-    Triple hostTriple(sys::getProcessTriple());
-    hostTriple.setObjectFormat(Triple::COFF);
-    newModule->setTargetTriple(hostTriple.getTriple());
-#endif // _WIN32
-
+    mpCurrentModule->setTargetTriple(sys::getProcessTriple());
     mpExec->addModule(std::move(newModule));
     mIsModuleFinalized = false;
 }
@@ -486,7 +522,7 @@ struct JitCacheFileHeader
     uint64_t GetObjectCRC() const { return m_objCRC; }
 
 private:
-    static const uint64_t   JC_MAGIC_NUMBER = 0xfedcba9876543211ULL + 3;
+    static const uint64_t   JC_MAGIC_NUMBER = 0xfedcba9876543211ULL + 4;
     static const size_t     JC_STR_MAX_LEN = 32;
     static const uint32_t   JC_PLATFORM_KEY =
         (LLVM_VERSION_MAJOR << 24)  |
@@ -537,9 +573,7 @@ JitCache::JitCache()
 
 int ExecUnhookedProcess(const std::string& CmdLine, std::string* pStdOut, std::string* pStdErr)
 {
-    static const char *g_pEnv = "RASTY_DISABLE_HOOK=1\0";
-
-    return ExecCmd(CmdLine, g_pEnv, pStdOut, pStdErr);
+    return ExecCmd(CmdLine, "", pStdOut, pStdErr);
 }
 
 

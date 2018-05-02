@@ -528,10 +528,10 @@ static void StreamOut(
     for (uint32_t primIndex = 0; primIndex < numPrims; ++primIndex)
     {
         DWORD slot = 0;
-        uint32_t soMask = soState.streamMasks[streamIndex];
+        uint64_t soMask = soState.streamMasks[streamIndex];
 
         // Write all entries into primitive data buffer for SOS.
-        while (_BitScanForward(&slot, soMask))
+        while (_BitScanForward64(&slot, soMask))
         {
             simd4scalar attrib[MAX_NUM_VERTS_PER_PRIM];    // prim attribs (always 4 wide)
             uint32_t paSlot = slot + soState.vertexAttribOffset[streamIndex];
@@ -551,7 +551,7 @@ static void StreamOut(
                 _mm_store_ps((float*)pPrimDataAttrib, attrib[v]);
             }
 
-            soMask &= ~(1 << slot);
+            soMask &= ~(uint64_t(1) << slot);
         }
 
         // Update pPrimData pointer 
@@ -1729,15 +1729,15 @@ void ProcessDraw(
                     fetchInfo_lo.xpLastIndex = fetchInfo_lo.xpIndices;
                     uint32_t offset;
                     offset = std::min(endVertex-i, (uint32_t) KNOB_SIMD16_WIDTH);
-#if USE_SIMD16_SHADERS
                     offset *= 4; // convert from index to address
+#if USE_SIMD16_SHADERS
                     fetchInfo_lo.xpLastIndex += offset;
 #else
-                    fetchInfo_lo.xpLastIndex += std::min(offset, (uint32_t) KNOB_SIMD_WIDTH) * 4; // * 4 for converting index to address
+                    fetchInfo_lo.xpLastIndex += std::min(offset, (uint32_t) KNOB_SIMD_WIDTH);
                     uint32_t offset2 = std::min(offset, (uint32_t) KNOB_SIMD16_WIDTH)-KNOB_SIMD_WIDTH;
                     assert(offset >= 0);
                     fetchInfo_hi.xpLastIndex = fetchInfo_hi.xpIndices;
-                    fetchInfo_hi.xpLastIndex += offset2 * 4; // * 4 for converting index to address
+                    fetchInfo_hi.xpLastIndex += offset2;
 #endif
                 }
                 // 1. Execute FS/VS for a single SIMD.

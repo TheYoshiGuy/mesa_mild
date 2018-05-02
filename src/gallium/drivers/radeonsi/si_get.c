@@ -277,6 +277,12 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TILE_RASTER_ORDER:
 	case PIPE_CAP_MAX_COMBINED_SHADER_OUTPUT_RESOURCES:
 	case PIPE_CAP_CONTEXT_PRIORITY_MASK:
+	case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_TRIANGLES:
+	case PIPE_CAP_CONSERVATIVE_RASTER_POST_SNAP_POINTS_LINES:
+	case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_TRIANGLES:
+	case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_POINTS_LINES:
+	case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
+	case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
 		return 0;
 
 	case PIPE_CAP_FENCE_SIGNAL:
@@ -376,6 +382,10 @@ static float si_get_paramf(struct pipe_screen* pscreen, enum pipe_capf param)
 		return 16.0f;
 	case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
 		return 16.0f;
+	case PIPE_CAPF_MIN_CONSERVATIVE_RASTER_DILATE:
+	case PIPE_CAPF_MAX_CONSERVATIVE_RASTER_DILATE:
+	case PIPE_CAPF_CONSERVATIVE_RASTER_DILATE_GRANULARITY:
+		return 0.0f;
 	}
 	return 0.0f;
 }
@@ -477,12 +487,19 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 
 	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
 		/* TODO: Indirect indexing of GS inputs is unimplemented. */
-		return shader != PIPE_SHADER_GEOMETRY &&
-		       (sscreen->llvm_has_working_vgpr_indexing ||
-			/* TCS and TES load inputs directly from LDS or
-			 * offchip memory, so indirect indexing is trivial. */
-			shader == PIPE_SHADER_TESS_CTRL ||
-			shader == PIPE_SHADER_TESS_EVAL);
+		if (shader == PIPE_SHADER_GEOMETRY)
+			return 0;
+
+		if (shader == PIPE_SHADER_VERTEX &&
+		    !sscreen->llvm_has_working_vgpr_indexing)
+			return 0;
+
+		/* TCS and TES load inputs directly from LDS or offchip
+		 * memory, so indirect indexing is always supported.
+		 * PS has to support indirect indexing, because we can't
+		 * lower that to TEMPs for INTERP instructions.
+		 */
+		return 1;
 
 	case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
 		return sscreen->llvm_has_working_vgpr_indexing ||

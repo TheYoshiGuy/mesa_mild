@@ -842,6 +842,8 @@ fs_inst::size_read(int arg) const
    case SHADER_OPCODE_TYPED_ATOMIC:
    case SHADER_OPCODE_TYPED_SURFACE_READ:
    case SHADER_OPCODE_TYPED_SURFACE_WRITE:
+   case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
+   case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
    case SHADER_OPCODE_BYTE_SCATTERED_WRITE:
    case SHADER_OPCODE_BYTE_SCATTERED_READ:
@@ -7195,7 +7197,6 @@ static nir_shader *
 compile_cs_to_nir(const struct brw_compiler *compiler,
                   void *mem_ctx,
                   const struct brw_cs_prog_key *key,
-                  struct brw_cs_prog_data *prog_data,
                   const nir_shader *src_shader,
                   unsigned dispatch_width)
 {
@@ -7236,7 +7237,7 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
     */
    if (min_dispatch_width <= 8) {
       nir_shader *nir8 = compile_cs_to_nir(compiler, mem_ctx, key,
-                                           prog_data, src_shader, 8);
+                                           src_shader, 8);
       v8 = new fs_visitor(compiler, log_data, mem_ctx, key, &prog_data->base,
                           NULL, /* Never used in core profile */
                           nir8, 8, shader_time_index);
@@ -7257,7 +7258,7 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
        !fail_msg && min_dispatch_width <= 16) {
       /* Try a SIMD16 compile */
       nir_shader *nir16 = compile_cs_to_nir(compiler, mem_ctx, key,
-                                            prog_data, src_shader, 16);
+                                            src_shader, 16);
       v16 = new fs_visitor(compiler, log_data, mem_ctx, key, &prog_data->base,
                            NULL, /* Never used in core profile */
                            nir16, 16, shader_time_index);
@@ -7290,7 +7291,7 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
    if (!fail_msg && (min_dispatch_width > 16 || (INTEL_DEBUG & DEBUG_DO32))) {
       /* Try a SIMD32 compile */
       nir_shader *nir32 = compile_cs_to_nir(compiler, mem_ctx, key,
-                                            prog_data, src_shader, 32);
+                                            src_shader, 32);
       v32 = new fs_visitor(compiler, log_data, mem_ctx, key, &prog_data->base,
                            NULL, /* Never used in core profile */
                            nir32, 32, shader_time_index);

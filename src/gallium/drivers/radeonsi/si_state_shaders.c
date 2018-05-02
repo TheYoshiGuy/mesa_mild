@@ -1488,26 +1488,26 @@ static void si_build_shader_variant(struct si_shader *shader,
 {
 	struct si_shader_selector *sel = shader->selector;
 	struct si_screen *sscreen = sel->screen;
-	LLVMTargetMachineRef tm;
+	struct si_compiler *compiler;
 	struct pipe_debug_callback *debug = &shader->compiler_ctx_state.debug;
 	int r;
 
 	if (thread_index >= 0) {
 		if (low_priority) {
-			assert(thread_index < ARRAY_SIZE(sscreen->tm_low_priority));
-			tm = sscreen->tm_low_priority[thread_index];
+			assert(thread_index < ARRAY_SIZE(sscreen->compiler_lowp));
+			compiler = &sscreen->compiler_lowp[thread_index];
 		} else {
-			assert(thread_index < ARRAY_SIZE(sscreen->tm));
-			tm = sscreen->tm[thread_index];
+			assert(thread_index < ARRAY_SIZE(sscreen->compiler));
+			compiler = &sscreen->compiler[thread_index];
 		}
 		if (!debug->async)
 			debug = NULL;
 	} else {
 		assert(!low_priority);
-		tm = shader->compiler_ctx_state.tm;
+		compiler = shader->compiler_ctx_state.compiler;
 	}
 
-	r = si_shader_create(sscreen, tm, shader, debug);
+	r = si_shader_create(sscreen, compiler, shader, debug);
 	if (unlikely(r)) {
 		PRINT_ERR("Failed to build shader variant (type=%u) %d\n",
 			 sel->type, r);
@@ -1560,7 +1560,7 @@ static bool si_check_missing_main_part(struct si_screen *sscreen,
 		main_part->key.as_es = key->as_es;
 		main_part->key.as_ls = key->as_ls;
 
-		if (si_compile_tgsi_shader(sscreen, compiler_state->tm,
+		if (si_compile_tgsi_shader(sscreen, compiler_state->compiler,
 					   main_part, false,
 					   &compiler_state->debug) != 0) {
 			FREE(main_part);
@@ -1835,13 +1835,13 @@ static void si_init_shader_selector_async(void *job, int thread_index)
 {
 	struct si_shader_selector *sel = (struct si_shader_selector *)job;
 	struct si_screen *sscreen = sel->screen;
-	LLVMTargetMachineRef tm;
+	struct si_compiler *compiler;
 	struct pipe_debug_callback *debug = &sel->compiler_ctx_state.debug;
 
 	assert(!debug->debug_message || debug->async);
 	assert(thread_index >= 0);
-	assert(thread_index < ARRAY_SIZE(sscreen->tm));
-	tm = sscreen->tm[thread_index];
+	assert(thread_index < ARRAY_SIZE(sscreen->compiler));
+	compiler = &sscreen->compiler[thread_index];
 
 	/* Compile the main shader part for use with a prolog and/or epilog.
 	 * If this fails, the driver will try to compile a monolithic shader
@@ -1879,7 +1879,7 @@ static void si_init_shader_selector_async(void *job, int thread_index)
 			mtx_unlock(&sscreen->shader_cache_mutex);
 
 			/* Compile the shader if it hasn't been loaded from the cache. */
-			if (si_compile_tgsi_shader(sscreen, tm, shader, false,
+			if (si_compile_tgsi_shader(sscreen, compiler, shader, false,
 						   debug) != 0) {
 				FREE(shader);
 				FREE(ir_binary);
@@ -1942,7 +1942,7 @@ static void si_init_shader_selector_async(void *job, int thread_index)
 
 	/* The GS copy shader is always pre-compiled. */
 	if (sel->type == PIPE_SHADER_GEOMETRY) {
-		sel->gs_copy_shader = si_generate_gs_copy_shader(sscreen, tm, sel, debug);
+		sel->gs_copy_shader = si_generate_gs_copy_shader(sscreen, compiler, sel, debug);
 		if (!sel->gs_copy_shader) {
 			fprintf(stderr, "radeonsi: can't create GS copy shader\n");
 			return;
@@ -2272,7 +2272,7 @@ static void si_update_clip_regs(struct si_context *sctx,
 	     !next_hw_vs_variant ||
 	     old_hw_vs_variant->key.opt.clip_disable !=
 	     next_hw_vs_variant->key.opt.clip_disable))
-		si_mark_atom_dirty(sctx, &sctx->clip_regs);
+		si_mark_atom_dirty(sctx, &sctx->atoms.s.clip_regs);
 }
 
 static void si_update_common_shader_state(struct si_context *sctx)
@@ -2428,14 +2428,14 @@ static void si_bind_ps_shader(struct pipe_context *ctx, void *state)
 
 		if (!old_sel ||
 		    old_sel->info.colors_written != sel->info.colors_written)
-			si_mark_atom_dirty(sctx, &sctx->cb_render_state);
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.cb_render_state);
 
 		if (sctx->screen->has_out_of_order_rast &&
 		    (!old_sel ||
 		     old_sel->info.writes_memory != sel->info.writes_memory ||
 		     old_sel->info.properties[TGSI_PROPERTY_FS_EARLY_DEPTH_STENCIL] !=
 		     sel->info.properties[TGSI_PROPERTY_FS_EARLY_DEPTH_STENCIL]))
-			si_mark_atom_dirty(sctx, &sctx->msaa_config);
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.msaa_config);
 	}
 	si_set_active_descriptors_for_shader(sctx, sel);
 	si_update_ps_colorbuf0_slot(sctx);
@@ -2598,7 +2598,7 @@ static unsigned si_get_ps_input_cntl(struct si_context *sctx,
 	return ps_input_cntl;
 }
 
-static void si_emit_spi_map(struct si_context *sctx, struct r600_atom *atom)
+static void si_emit_spi_map(struct si_context *sctx)
 {
 	struct radeon_winsys_cs *cs = sctx->gfx_cs;
 	struct si_shader *ps = sctx->ps_shader.current;
@@ -2720,7 +2720,7 @@ static bool si_update_gs_ring_buffers(struct si_context *sctx)
 	if (update_esgs) {
 		pipe_resource_reference(&sctx->esgs_ring, NULL);
 		sctx->esgs_ring =
-			si_aligned_buffer_create(sctx->b.screen,
+			pipe_aligned_buffer_create(sctx->b.screen,
 						   SI_RESOURCE_FLAG_UNMAPPABLE,
 						   PIPE_USAGE_DEFAULT,
 						   esgs_ring_size, alignment);
@@ -2731,7 +2731,7 @@ static bool si_update_gs_ring_buffers(struct si_context *sctx)
 	if (update_gsvs) {
 		pipe_resource_reference(&sctx->gsvs_ring, NULL);
 		sctx->gsvs_ring =
-			si_aligned_buffer_create(sctx->b.screen,
+			pipe_aligned_buffer_create(sctx->b.screen,
 						   SI_RESOURCE_FLAG_UNMAPPABLE,
 						   PIPE_USAGE_DEFAULT,
 						   gsvs_ring_size, alignment);
@@ -2972,7 +2972,7 @@ static bool si_update_spi_tmpring_size(struct si_context *sctx)
 			/* Create a bigger scratch buffer */
 			r600_resource_reference(&sctx->scratch_buffer, NULL);
 
-			sctx->scratch_buffer = (struct r600_resource*)
+			sctx->scratch_buffer =
 				si_aligned_buffer_create(&sctx->screen->b,
 							   SI_RESOURCE_FLAG_UNMAPPABLE,
 							   PIPE_USAGE_DEFAULT,
@@ -2980,7 +2980,7 @@ static bool si_update_spi_tmpring_size(struct si_context *sctx)
 			if (!sctx->scratch_buffer)
 				return false;
 
-			si_mark_atom_dirty(sctx, &sctx->scratch_state);
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.scratch_state);
 			si_context_add_resource_size(sctx,
 						     &sctx->scratch_buffer->b.b);
 		}
@@ -2997,7 +2997,7 @@ static bool si_update_spi_tmpring_size(struct si_context *sctx)
 			   S_0286E8_WAVESIZE(scratch_bytes_per_wave >> 10);
 	if (spi_tmpring_size != sctx->spi_tmpring_size) {
 		sctx->spi_tmpring_size = spi_tmpring_size;
-		si_mark_atom_dirty(sctx, &sctx->scratch_state);
+		si_mark_atom_dirty(sctx, &sctx->atoms.s.scratch_state);
 	}
 	return true;
 }
@@ -3009,7 +3009,7 @@ static void si_init_tess_factor_ring(struct si_context *sctx)
 	/* The address must be aligned to 2^19, because the shader only
 	 * receives the high 13 bits.
 	 */
-	sctx->tess_rings = si_aligned_buffer_create(sctx->b.screen,
+	sctx->tess_rings = pipe_aligned_buffer_create(sctx->b.screen,
 						    SI_RESOURCE_FLAG_32BIT,
 						    PIPE_USAGE_DEFAULT,
 						    sctx->screen->tess_offchip_ring_size +
@@ -3134,7 +3134,7 @@ bool si_update_shaders(struct si_context *sctx)
 		old_ps ? old_ps->key.part.ps.epilog.spi_shader_col_format : 0;
 	int r;
 
-	compiler_state.tm = sctx->tm;
+	compiler_state.compiler = &sctx->compiler;
 	compiler_state.debug = sctx->debug;
 	compiler_state.is_debug_context = sctx->is_debug;
 
@@ -3234,7 +3234,7 @@ bool si_update_shaders(struct si_context *sctx)
 	si_update_vgt_shader_config(sctx);
 
 	if (old_clip_disable != si_get_vs_state(sctx)->key.opt.clip_disable)
-		si_mark_atom_dirty(sctx, &sctx->clip_regs);
+		si_mark_atom_dirty(sctx, &sctx->atoms.s.clip_regs);
 
 	if (sctx->ps_shader.cso) {
 		unsigned db_shader_control;
@@ -3253,7 +3253,7 @@ bool si_update_shaders(struct si_context *sctx)
 		    sctx->flatshade != rs->flatshade) {
 			sctx->sprite_coord_enable = rs->sprite_coord_enable;
 			sctx->flatshade = rs->flatshade;
-			si_mark_atom_dirty(sctx, &sctx->spi_map);
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.spi_map);
 		}
 
 		if (sctx->screen->rbplus_allowed &&
@@ -3261,24 +3261,24 @@ bool si_update_shaders(struct si_context *sctx)
 		    (!old_ps ||
 		     old_spi_shader_col_format !=
 		     sctx->ps_shader.current->key.part.ps.epilog.spi_shader_col_format))
-			si_mark_atom_dirty(sctx, &sctx->cb_render_state);
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.cb_render_state);
 
 		if (sctx->ps_db_shader_control != db_shader_control) {
 			sctx->ps_db_shader_control = db_shader_control;
-			si_mark_atom_dirty(sctx, &sctx->db_render_state);
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.db_render_state);
 			if (sctx->screen->dpbb_allowed)
-				si_mark_atom_dirty(sctx, &sctx->dpbb_state);
+				si_mark_atom_dirty(sctx, &sctx->atoms.s.dpbb_state);
 		}
 
 		if (sctx->smoothing_enabled != sctx->ps_shader.current->key.part.ps.epilog.poly_line_smoothing) {
 			sctx->smoothing_enabled = sctx->ps_shader.current->key.part.ps.epilog.poly_line_smoothing;
-			si_mark_atom_dirty(sctx, &sctx->msaa_config);
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.msaa_config);
 
 			if (sctx->chip_class == SI)
-				si_mark_atom_dirty(sctx, &sctx->db_render_state);
+				si_mark_atom_dirty(sctx, &sctx->atoms.s.db_render_state);
 
 			if (sctx->framebuffer.nr_samples <= 1)
-				si_mark_atom_dirty(sctx, &sctx->msaa_sample_locs.atom);
+				si_mark_atom_dirty(sctx, &sctx->atoms.s.msaa_sample_locs);
 		}
 	}
 
@@ -3328,8 +3328,7 @@ bool si_update_shaders(struct si_context *sctx)
 	return true;
 }
 
-static void si_emit_scratch_state(struct si_context *sctx,
-				  struct r600_atom *atom)
+static void si_emit_scratch_state(struct si_context *sctx)
 {
 	struct radeon_winsys_cs *cs = sctx->gfx_cs;
 
@@ -3409,9 +3408,8 @@ void *si_get_blit_vs(struct si_context *sctx, enum blitter_attrib_type type,
 
 void si_init_shader_functions(struct si_context *sctx)
 {
-	si_init_atom(sctx, &sctx->spi_map, &sctx->atoms.s.spi_map, si_emit_spi_map);
-	si_init_atom(sctx, &sctx->scratch_state, &sctx->atoms.s.scratch_state,
-		     si_emit_scratch_state);
+	sctx->atoms.s.spi_map.emit = si_emit_spi_map;
+	sctx->atoms.s.scratch_state.emit = si_emit_scratch_state;
 
 	sctx->b.create_vs_state = si_create_shader_selector;
 	sctx->b.create_tcs_state = si_create_shader_selector;

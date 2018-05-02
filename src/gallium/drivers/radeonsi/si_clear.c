@@ -46,7 +46,7 @@ static void si_alloc_separate_cmask(struct si_screen *sscreen,
 	if (!rtex->cmask.size)
 		return;
 
-	rtex->cmask_buffer = (struct r600_resource *)
+	rtex->cmask_buffer =
 		si_aligned_buffer_create(&sscreen->b,
 					 SI_RESOURCE_FLAG_UNMAPPABLE,
 					 PIPE_USAGE_DEFAULT,
@@ -93,58 +93,70 @@ static void si_set_clear_color(struct r600_texture *rtex,
 	memcpy(rtex->color_clear_value, &uc, 2 * sizeof(uint32_t));
 }
 
-static bool vi_get_fast_clear_parameters(enum pipe_format surface_format,
-					 const union pipe_color_union *color,
-					 uint32_t* reset_value,
-					 bool* clear_words_needed)
+/** Linearize and convert luminace/intensity to red. */
+enum pipe_format si_simplify_cb_format(enum pipe_format format)
 {
-	bool values[4] = {};
-	int i;
-	bool main_value = false;
-	bool extra_value = false;
-	int extra_channel;
+	format = util_format_linear(format);
+	format = util_format_luminance_to_red(format);
+	return util_format_intensity_to_red(format);
+}
 
-	/* This is needed to get the correct DCC clear value for luminance formats.
-	 * 1) Get the linear format (because the next step can't handle L8_SRGB).
-	 * 2) Convert luminance to red. (the real hw format for luminance)
+bool vi_alpha_is_on_msb(enum pipe_format format)
+{
+	format = si_simplify_cb_format(format);
+
+	/* Formats with 3 channels can't have alpha. */
+	if (util_format_description(format)->nr_channels == 3)
+		return true; /* same as xxxA; is any value OK here? */
+
+	return si_translate_colorswap(format, false) <= 1;
+}
+
+static bool vi_get_fast_clear_parameters(enum pipe_format base_format,
+					 enum pipe_format surface_format,
+					 const union pipe_color_union *color,
+					 uint32_t* clear_value,
+					 bool *eliminate_needed)
+{
+	/* If we want to clear without needing a fast clear eliminate step, we
+	 * can set color and alpha independently to 0 or 1 (or 0/max for integer
+	 * formats).
 	 */
-	surface_format = util_format_linear(surface_format);
-	surface_format = util_format_luminance_to_red(surface_format);
+	bool values[4] = {}; /* whether to clear to 0 or 1 */
+	bool color_value = false; /* clear color to 0 or 1 */
+	bool alpha_value = false; /* clear alpha to 0 or 1 */
+	int alpha_channel; /* index of the alpha component */
+	bool has_color = false;
+	bool has_alpha = false;
 
-	const struct util_format_description *desc = util_format_description(surface_format);
+	const struct util_format_description *desc =
+		util_format_description(si_simplify_cb_format(surface_format));
 
+	/* 128-bit fast clear with different R,G,B values is unsupported. */
 	if (desc->block.bits == 128 &&
 	    (color->ui[0] != color->ui[1] ||
 	     color->ui[0] != color->ui[2]))
 		return false;
 
-	*clear_words_needed = true;
-	*reset_value = 0x20202020U;
+	*eliminate_needed = true;
+	*clear_value = 0x20202020U; /* use CB clear color registers */
 
-	/* If we want to clear without needing a fast clear eliminate step, we
-	 * can set each channel to 0 or 1 (or 0/max for integer formats). We
-	 * have two sets of flags, one for the last or first channel(extra) and
-	 * one for the other channels(main).
-	 */
+	if (desc->layout != UTIL_FORMAT_LAYOUT_PLAIN)
+		return true; /* need ELIMINATE_FAST_CLEAR */
 
-	if (surface_format == PIPE_FORMAT_R11G11B10_FLOAT ||
-	    surface_format == PIPE_FORMAT_B5G6R5_UNORM ||
-	    surface_format == PIPE_FORMAT_B5G6R5_SRGB ||
-	    util_format_is_alpha(surface_format)) {
-		extra_channel = -1;
-	} else if (desc->layout == UTIL_FORMAT_LAYOUT_PLAIN) {
-		if (si_translate_colorswap(surface_format, false) <= 1)
-			extra_channel = desc->nr_channels - 1;
-		else
-			extra_channel = 0;
-	} else
-		return true;
+	bool base_alpha_is_on_msb = vi_alpha_is_on_msb(base_format);
+	bool surf_alpha_is_on_msb = vi_alpha_is_on_msb(surface_format);
 
-	for (i = 0; i < 4; ++i) {
-		int index = desc->swizzle[i] - PIPE_SWIZZLE_X;
+	/* Formats with 3 channels can't have alpha. */
+	if (desc->nr_channels == 3)
+		alpha_channel = -1;
+	else if (surf_alpha_is_on_msb)
+		alpha_channel = desc->nr_channels - 1;
+	else
+		alpha_channel = 0;
 
-		if (desc->swizzle[i] < PIPE_SWIZZLE_X ||
-		    desc->swizzle[i] > PIPE_SWIZZLE_W)
+	for (int i = 0; i < 4; ++i) {
+		if (desc->swizzle[i] >= PIPE_SWIZZLE_0)
 			continue;
 
 		if (desc->channel[i].pure_integer &&
@@ -154,7 +166,7 @@ static bool vi_get_fast_clear_parameters(enum pipe_format surface_format,
 
 			values[i] = color->i[i] != 0;
 			if (color->i[i] != 0 && MIN2(color->i[i], max) != max)
-				return true;
+				return true; /* need ELIMINATE_FAST_CLEAR */
 		} else if (desc->channel[i].pure_integer &&
 			   desc->channel[i].type == UTIL_FORMAT_TYPE_UNSIGNED) {
 			/* Use the maximum value for clamping the clear color. */
@@ -162,32 +174,50 @@ static bool vi_get_fast_clear_parameters(enum pipe_format surface_format,
 
 			values[i] = color->ui[i] != 0U;
 			if (color->ui[i] != 0U && MIN2(color->ui[i], max) != max)
-				return true;
+				return true; /* need ELIMINATE_FAST_CLEAR */
 		} else {
 			values[i] = color->f[i] != 0.0F;
 			if (color->f[i] != 0.0F && color->f[i] != 1.0F)
-				return true;
+				return true; /* need ELIMINATE_FAST_CLEAR */
 		}
 
-		if (index == extra_channel)
-			extra_value = values[i];
-		else
-			main_value = values[i];
+		if (desc->swizzle[i] == alpha_channel) {
+			alpha_value = values[i];
+			has_alpha = true;
+		} else {
+			color_value = values[i];
+			has_color = true;
+		}
 	}
 
-	for (int i = 0; i < 4; ++i)
-		if (values[i] != main_value &&
-		    desc->swizzle[i] - PIPE_SWIZZLE_X != extra_channel &&
-		    desc->swizzle[i] >= PIPE_SWIZZLE_X &&
-		    desc->swizzle[i] <= PIPE_SWIZZLE_W)
-			return true;
+	/* If alpha isn't present, make it the same as color, and vice versa. */
+	if (!has_alpha)
+		alpha_value = color_value;
+	else if (!has_color)
+		color_value = alpha_value;
 
-	*clear_words_needed = false;
-	if (main_value)
-		*reset_value |= 0x80808080U;
+	if (color_value != alpha_value &&
+	    base_alpha_is_on_msb != surf_alpha_is_on_msb)
+		return true; /* require ELIMINATE_FAST_CLEAR */
 
-	if (extra_value)
-		*reset_value |= 0x40404040U;
+	/* Check if all color values are equal if they are present. */
+	for (int i = 0; i < 4; ++i) {
+		if (desc->swizzle[i] <= PIPE_SWIZZLE_W &&
+		    desc->swizzle[i] != alpha_channel &&
+		    values[i] != color_value)
+			return true; /* require ELIMINATE_FAST_CLEAR */
+	}
+
+	/* This doesn't need ELIMINATE_FAST_CLEAR.
+	 * CB uses both the DCC clear codes and the CB clear color registers,
+	 * so they must match.
+	 */
+	*eliminate_needed = false;
+
+	if (color_value)
+		*clear_value |= 0x80808080U;
+	if (alpha_value)
+		*clear_value |= 0x40404040U;
 	return true;
 }
 
@@ -204,26 +234,27 @@ void vi_dcc_clear_level(struct si_context *sctx,
 		dcc_buffer = &rtex->dcc_separate_buffer->b.b;
 		dcc_offset = 0;
 	} else {
-		dcc_buffer = &rtex->resource.b.b;
+		dcc_buffer = &rtex->buffer.b.b;
 		dcc_offset = rtex->dcc_offset;
 	}
 
 	if (sctx->chip_class >= GFX9) {
 		/* Mipmap level clears aren't implemented. */
-		assert(rtex->resource.b.b.last_level == 0);
-		/* MSAA needs a different clear size. */
-		assert(rtex->resource.b.b.nr_samples <= 1);
+		assert(rtex->buffer.b.b.last_level == 0);
+		/* 4x and 8x MSAA needs a sophisticated compute shader for
+		 * the clear. See AMDVLK. */
+		assert(rtex->buffer.b.b.nr_samples <= 2);
 		clear_size = rtex->surface.dcc_size;
 	} else {
-		unsigned num_layers = util_num_layers(&rtex->resource.b.b, level);
+		unsigned num_layers = util_num_layers(&rtex->buffer.b.b, level);
 
 		/* If this is 0, fast clear isn't possible. (can occur with MSAA) */
 		assert(rtex->surface.u.legacy.level[level].dcc_fast_clear_size);
-		/* Layered MSAA DCC fast clears need to clear dcc_fast_clear_size
-		 * bytes for each layer. This is not currently implemented, and
-		 * therefore MSAA DCC isn't even enabled with multiple layers.
+		/* Layered 4x and 8x MSAA DCC fast clears need to clear
+		 * dcc_fast_clear_size bytes for each layer. A compute shader
+		 * would be more efficient than separate per-layer clear operations.
 		 */
-		assert(rtex->resource.b.b.nr_samples <= 1 || num_layers == 1);
+		assert(rtex->buffer.b.b.nr_samples <= 2 || num_layers == 1);
 
 		dcc_offset += rtex->surface.u.legacy.level[level].dcc_offset;
 		clear_size = rtex->surface.u.legacy.level[level].dcc_fast_clear_size *
@@ -241,14 +272,14 @@ void vi_dcc_clear_level(struct si_context *sctx,
 static void si_set_optimal_micro_tile_mode(struct si_screen *sscreen,
 					   struct r600_texture *rtex)
 {
-	if (rtex->resource.b.is_shared ||
-	    rtex->resource.b.b.nr_samples <= 1 ||
+	if (rtex->buffer.b.is_shared ||
+	    rtex->buffer.b.b.nr_samples <= 1 ||
 	    rtex->surface.micro_tile_mode == rtex->last_msaa_resolve_target_micro_mode)
 		return;
 
 	assert(sscreen->info.chip_class >= GFX9 ||
 	       rtex->surface.u.legacy.level[0].mode == RADEON_SURF_MODE_2D);
-	assert(rtex->resource.b.b.last_level == 0);
+	assert(rtex->buffer.b.b.last_level == 0);
 
 	if (sscreen->info.chip_class >= GFX9) {
 		/* 4K or larger tiles only. 0 is linear. 1-3 are 256B tiles. */
@@ -369,16 +400,23 @@ static void si_do_fast_color_clear(struct si_context *sctx,
 			continue;
 
 		unsigned level = fb->cbufs[i]->u.tex.level;
+		if (level > 0)
+			continue;
+
 		tex = (struct r600_texture *)fb->cbufs[i]->texture;
+
+		/* TODO: GFX9: Implement DCC fast clear for level 0 of
+		 * mipmapped textures. Mipmapped DCC has to clear a rectangular
+		 * area of DCC for level 0 (because the whole miptree is
+		 * organized in a 2D plane).
+		 */
+		if (sctx->chip_class >= GFX9 &&
+		    tex->buffer.b.b.last_level > 0)
+			continue;
 
 		/* the clear is allowed if all layers are bound */
 		if (fb->cbufs[i]->u.tex.first_layer != 0 ||
-		    fb->cbufs[i]->u.tex.last_layer != util_max_layer(&tex->resource.b.b, 0)) {
-			continue;
-		}
-
-		/* cannot clear mipmapped textures */
-		if (fb->cbufs[i]->texture->last_level != 0) {
+		    fb->cbufs[i]->u.tex.last_layer != util_max_layer(&tex->buffer.b.b, 0)) {
 			continue;
 		}
 
@@ -391,8 +429,8 @@ static void si_do_fast_color_clear(struct si_context *sctx,
 		 * because there is no way to communicate the clear color among
 		 * all clients
 		 */
-		if (tex->resource.b.is_shared &&
-		    !(tex->resource.external_usage & PIPE_HANDLE_USAGE_EXPLICIT_FLUSH))
+		if (tex->buffer.b.is_shared &&
+		    !(tex->buffer.external_usage & PIPE_HANDLE_USAGE_EXPLICIT_FLUSH))
 			continue;
 
 		/* fast color clear with 1D tiling doesn't work on old kernels and CIK */
@@ -428,14 +466,14 @@ static void si_do_fast_color_clear(struct si_context *sctx,
 		 *
 		 * This helps on both dGPUs and APUs, even small APUs like Mullins.
 		 */
-		bool too_small = tex->resource.b.b.nr_samples <= 1 &&
-				 tex->resource.b.b.width0 *
-				 tex->resource.b.b.height0 <= 512 * 512;
+		bool too_small = tex->buffer.b.b.nr_samples <= 1 &&
+				 tex->buffer.b.b.width0 *
+				 tex->buffer.b.b.height0 <= 512 * 512;
 
 		/* Try to clear DCC first, otherwise try CMASK. */
 		if (vi_dcc_enabled(tex, 0)) {
 			uint32_t reset_value;
-			bool clear_words_needed;
+			bool eliminate_needed;
 
 			if (sctx->screen->debug_flags & DBG(NO_DCC_CLEAR))
 				continue;
@@ -445,18 +483,19 @@ static void si_do_fast_color_clear(struct si_context *sctx,
 			    !tex->surface.u.legacy.level[level].dcc_fast_clear_size)
 				continue;
 
-			if (!vi_get_fast_clear_parameters(fb->cbufs[i]->format,
+			if (!vi_get_fast_clear_parameters(tex->buffer.b.b.format,
+							  fb->cbufs[i]->format,
 							  color, &reset_value,
-							  &clear_words_needed))
+							  &eliminate_needed))
 				continue;
 
-			if (clear_words_needed && too_small)
+			if (eliminate_needed && too_small)
 				continue;
 
 			/* DCC fast clear with MSAA should clear CMASK to 0xC. */
-			if (tex->resource.b.b.nr_samples >= 2 && tex->cmask.size) {
+			if (tex->buffer.b.b.nr_samples >= 2 && tex->cmask.size) {
 				/* TODO: This doesn't work with MSAA. */
-				if (clear_words_needed)
+				if (eliminate_needed)
 					continue;
 
 				si_clear_buffer(sctx, &tex->cmask_buffer->b.b,
@@ -467,7 +506,7 @@ static void si_do_fast_color_clear(struct si_context *sctx,
 
 			vi_dcc_clear_level(sctx, tex, 0, reset_value);
 
-			if (clear_words_needed)
+			if (eliminate_needed)
 				need_decompress_pass = true;
 
 			tex->separate_dcc_dirty = true;
@@ -509,7 +548,7 @@ static void si_do_fast_color_clear(struct si_context *sctx,
 		si_set_clear_color(tex, fb->cbufs[i]->format, color);
 
 		sctx->framebuffer.dirty_cbufs |= 1 << i;
-		si_mark_atom_dirty(sctx, &sctx->framebuffer.atom);
+		si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer);
 		*buffers &= ~clear_bit;
 	}
 }
@@ -546,7 +585,7 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 	if (zstex &&
 	    si_htile_enabled(zstex, zsbuf->u.tex.level) &&
 	    zsbuf->u.tex.first_layer == 0 &&
-	    zsbuf->u.tex.last_layer == util_max_layer(&zstex->resource.b.b, 0)) {
+	    zsbuf->u.tex.last_layer == util_max_layer(&zstex->buffer.b.b, 0)) {
 		/* TC-compatible HTILE only supports depth clears to 0 or 1. */
 		if (buffers & PIPE_CLEAR_DEPTH &&
 		    (!zstex->tc_compatible_htile ||
@@ -559,9 +598,9 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 
 			zstex->depth_clear_value = depth;
 			sctx->framebuffer.dirty_zsbuf = true;
-			si_mark_atom_dirty(sctx, &sctx->framebuffer.atom); /* updates DB_DEPTH_CLEAR */
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer); /* updates DB_DEPTH_CLEAR */
 			sctx->db_depth_clear = true;
-			si_mark_atom_dirty(sctx, &sctx->db_render_state);
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.db_render_state);
 		}
 
 		/* TC-compatible HTILE only supports stencil clears to 0. */
@@ -577,9 +616,9 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 
 			zstex->stencil_clear_value = stencil;
 			sctx->framebuffer.dirty_zsbuf = true;
-			si_mark_atom_dirty(sctx, &sctx->framebuffer.atom); /* updates DB_STENCIL_CLEAR */
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer); /* updates DB_STENCIL_CLEAR */
 			sctx->db_stencil_clear = true;
-			si_mark_atom_dirty(sctx, &sctx->db_render_state);
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.db_render_state);
 		}
 
 		/* TODO: Find out what's wrong here. Fast depth clear leads to
@@ -608,14 +647,14 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 		sctx->db_depth_clear = false;
 		sctx->db_depth_disable_expclear = false;
 		zstex->depth_cleared = true;
-		si_mark_atom_dirty(sctx, &sctx->db_render_state);
+		si_mark_atom_dirty(sctx, &sctx->atoms.s.db_render_state);
 	}
 
 	if (sctx->db_stencil_clear) {
 		sctx->db_stencil_clear = false;
 		sctx->db_stencil_disable_expclear = false;
 		zstex->stencil_cleared = true;
-		si_mark_atom_dirty(sctx, &sctx->db_render_state);
+		si_mark_atom_dirty(sctx, &sctx->atoms.s.db_render_state);
 	}
 }
 

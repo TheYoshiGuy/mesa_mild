@@ -40,8 +40,8 @@
 #include "util/macros.h"
 
 #include "common/gen_decoder.h"
+#include "common/gen_disasm.h"
 #include "intel_aub.h"
-#include "gen_disasm.h"
 
 /* Below is the only command missing from intel_aub.h in libdrm
  * So, reuse intel_aub.h from libdrm and #define the
@@ -178,7 +178,7 @@ aubinator_init(uint16_t aub_pci_id, const char *app_name)
    batch_flags |= GEN_BATCH_DECODE_FLOATS;
 
    gen_batch_decode_ctx_init(&batch_ctx, &devinfo, outfile, batch_flags,
-                             xml_path, get_gen_batch_bo, NULL);
+                             xml_path, get_gen_batch_bo, NULL, NULL);
 
    char *color = GREEN_HEADER, *reset_color = NORMAL;
    if (option_color == COLOR_NEVER)

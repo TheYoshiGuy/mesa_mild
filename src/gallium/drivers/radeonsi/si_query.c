@@ -29,6 +29,7 @@
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
 #include "util/os_time.h"
+#include "util/u_suballoc.h"
 #include "tgsi/tgsi_text.h"
 #include "amd/common/sid.h"
 
@@ -529,9 +530,9 @@ static struct r600_resource *si_new_query_buffer(struct si_screen *sscreen,
 	 * being written by the gpu, hence staging is probably a good
 	 * usage pattern.
 	 */
-	struct r600_resource *buf = (struct r600_resource*)
+	struct r600_resource *buf = r600_resource(
 		pipe_buffer_create(&sscreen->b, 0,
-				   PIPE_USAGE_STAGING, buf_size);
+				   PIPE_USAGE_STAGING, buf_size));
 	if (!buf)
 		return NULL;
 
@@ -935,8 +936,7 @@ static void emit_set_predicate(struct si_context *ctx,
 				  RADEON_PRIO_QUERY);
 }
 
-static void si_emit_query_predication(struct si_context *ctx,
-				      struct r600_atom *atom)
+static void si_emit_query_predication(struct si_context *ctx)
 {
 	struct si_query_hw *query = (struct si_query_hw *)ctx->render_cond;
 	struct si_query_buffer *qbuf;
@@ -1742,7 +1742,7 @@ static void si_query_hw_get_result_resource(struct si_context *sctx,
 			ssbo[2].buffer_offset = offset;
 			ssbo[2].buffer_size = 8;
 
-			((struct r600_resource *)resource)->TC_L2_dirty = true;
+			r600_resource(resource)->TC_L2_dirty = true;
 		}
 
 		sctx->b.set_shader_buffers(&sctx->b, PIPE_SHADER_COMPUTE, 0, 3, ssbo);
@@ -1775,7 +1775,7 @@ static void si_render_condition(struct pipe_context *ctx,
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct si_query_hw *rquery = (struct si_query_hw *)query;
-	struct r600_atom *atom = &sctx->render_cond_atom;
+	struct si_atom *atom = &sctx->atoms.s.render_cond;
 
 	if (query) {
 		bool needs_workaround = false;
@@ -2052,7 +2052,7 @@ void si_init_query_functions(struct si_context *sctx)
 	sctx->b.end_query = si_end_query;
 	sctx->b.get_query_result = si_get_query_result;
 	sctx->b.get_query_result_resource = si_get_query_result_resource;
-	sctx->render_cond_atom.emit = si_emit_query_predication;
+	sctx->atoms.s.render_cond.emit = si_emit_query_predication;
 
 	if (((struct si_screen*)sctx->b.screen)->info.num_render_backends > 0)
 	    sctx->b.render_condition = si_render_condition;

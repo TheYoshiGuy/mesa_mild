@@ -47,11 +47,6 @@
 /** Set to 1 to enable printing of coords before/after clipping */
 #define DEBUG_CLIP 0
 
-
-#ifndef DIFFERENT_SIGNS
-#define DIFFERENT_SIGNS(x, y) ((x) * (y) <= 0.0F && (x) - (y) != 0.0F)
-#endif
-
 #define MAX_CLIPPED_VERTICES ((2 * (6 + PIPE_MAX_CLIP_PLANES))+1)
 
 
@@ -252,8 +247,7 @@ static void emit_poly(struct draw_stage *stage,
    struct prim_header header;
    unsigned i;
    ushort edge_first, edge_middle, edge_last;
-   boolean last_tri_was_null = FALSE;
-   boolean tri_was_not_null = FALSE;
+   boolean tri_emitted = FALSE;
 
    if (stage->draw->rasterizer->flatshade_first) {
       edge_first  = DRAW_PIPE_EDGE_FLAG_0;
@@ -289,17 +283,16 @@ static void emit_poly(struct draw_stage *stage,
       }
 
       tri_null = is_tri_null(clipper, &header);
-      /* If we generated a triangle with an area, aka. non-null triangle,
-       * or if the previous triangle was also null then skip all subsequent
-       * null triangles */
-      if ((tri_was_not_null && tri_null) || (last_tri_was_null && tri_null)) {
-         last_tri_was_null = tri_null;
+      /*
+       * If we ever generated a tri (regardless if it had area or not),
+       * skip all subsequent null tris.
+       * FIXME: I think this logic was hiding bugs elsewhere. It should
+       * be possible now to always emit all tris.
+       */
+      if (tri_null && tri_emitted) {
          continue;
       }
-      last_tri_was_null = tri_null;
-      if (!tri_null) {
-         tri_was_not_null = TRUE;
-      }
+      tri_emitted = TRUE;
 
       if (!edgeflags[i-1]) {
          header.flags &= ~edge_middle;
@@ -480,6 +473,7 @@ do_clip_tri(struct draw_stage *stage,
       for (i = 1; i <= n; i++) {
          struct vertex_header *vert = inlist[i];
          boolean *edge = &inEdges[i];
+         boolean different_sign;
 
          float dp = getclipdist(clipper, vert, plane_idx);
 
@@ -492,9 +486,12 @@ do_clip_tri(struct draw_stage *stage,
                return;
             outEdges[outcount] = *edge_prev;
             outlist[outcount++] = vert_prev;
+            different_sign = dp < 0.0f;
+         } else {
+            different_sign = !(dp < 0.0f);
          }
 
-         if (DIFFERENT_SIGNS(dp, dp_prev)) {
+         if (different_sign) {
             struct vertex_header *new_vert;
             boolean *new_edge;
 
@@ -512,7 +509,7 @@ do_clip_tri(struct draw_stage *stage,
 
             if (dp < 0.0f) {
                /* Going out of bounds.  Avoid division by zero as we
-                * know dp != dp_prev from DIFFERENT_SIGNS, above.
+                * know dp != dp_prev from different_sign, above.
                 */
                float t = dp / (dp - dp_prev);
                interp( clipper, new_vert, t, vert, vert_prev, viewport_index );

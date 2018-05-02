@@ -134,14 +134,19 @@
 #include <llvm-c/Core.h> /* LLVMModuleRef */
 #include <llvm-c/TargetMachine.h>
 #include "tgsi/tgsi_scan.h"
+#include "util/u_inlines.h"
 #include "util/u_queue.h"
 
 #include "ac_binary.h"
 #include "ac_llvm_build.h"
-#include "si_state.h"
+
+#include <stdio.h>
 
 struct nir_shader;
+struct si_shader;
+struct si_context;
 
+#define SI_MAX_ATTRIBS		16
 #define SI_MAX_VS_OUTPUTS	40
 
 /* Shader IO unique indices are supported for TGSI_SEMANTIC_GENERIC with an
@@ -306,11 +311,20 @@ enum {
 
 struct si_shader;
 
+/* Per-thread persistent LLVM objects. */
+struct si_compiler {
+	LLVMTargetMachineRef		tm;
+	const char			*triple;
+	const char			*data_layout;
+	LLVMTargetLibraryInfoRef	target_library_info;
+	LLVMPassManagerRef		passmgr;
+};
+
 /* State of the context creating the shader object. */
 struct si_compiler_ctx_state {
 	/* Should only be used by si_init_shader_selector_async and
 	 * si_build_shader_variant if thread_index == -1 (non-threaded). */
-	LLVMTargetMachineRef		tm;
+	struct si_compiler		*compiler;
 
 	/* Used if thread_index == -1 or if debug.async is true. */
 	struct pipe_debug_callback	debug;
@@ -641,15 +655,15 @@ struct si_shader_part {
 /* si_shader.c */
 struct si_shader *
 si_generate_gs_copy_shader(struct si_screen *sscreen,
-			   LLVMTargetMachineRef tm,
+			   struct si_compiler *compiler,
 			   struct si_shader_selector *gs_selector,
 			   struct pipe_debug_callback *debug);
 int si_compile_tgsi_shader(struct si_screen *sscreen,
-			   LLVMTargetMachineRef tm,
+			   struct si_compiler *compiler,
 			   struct si_shader *shader,
 			   bool is_monolithic,
 			   struct pipe_debug_callback *debug);
-int si_shader_create(struct si_screen *sscreen, LLVMTargetMachineRef tm,
+int si_shader_create(struct si_screen *sscreen, struct si_compiler *compiler,
 		     struct si_shader *shader,
 		     struct pipe_debug_callback *debug);
 void si_shader_destroy(struct si_shader *shader);
