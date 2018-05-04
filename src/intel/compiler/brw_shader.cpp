@@ -580,9 +580,11 @@ brw_negate_immediate(enum brw_reg_type type, struct brw_reg *reg)
       reg->d = -reg->d;
       return true;
    case BRW_REGISTER_TYPE_W:
-   case BRW_REGISTER_TYPE_UW:
-      reg->d = -(int16_t)reg->ud;
+   case BRW_REGISTER_TYPE_UW: {
+      uint16_t value = -(int16_t)reg->ud;
+      reg->ud = value | (uint32_t)value << 16;
       return true;
+   }
    case BRW_REGISTER_TYPE_F:
       reg->f = -reg->f;
       return true;
@@ -603,7 +605,8 @@ brw_negate_immediate(enum brw_reg_type type, struct brw_reg *reg)
    case BRW_REGISTER_TYPE_V:
       assert(!"unimplemented: negate UV/V immediate");
    case BRW_REGISTER_TYPE_HF:
-      assert(!"unimplemented: negate HF immediate");
+      reg->ud ^= 0x80008000;
+      return true;
    case BRW_REGISTER_TYPE_NF:
       unreachable("no NF immediates");
    }
@@ -618,9 +621,11 @@ brw_abs_immediate(enum brw_reg_type type, struct brw_reg *reg)
    case BRW_REGISTER_TYPE_D:
       reg->d = abs(reg->d);
       return true;
-   case BRW_REGISTER_TYPE_W:
-      reg->d = abs((int16_t)reg->ud);
+   case BRW_REGISTER_TYPE_W: {
+      uint16_t value = abs((int16_t)reg->ud);
+      reg->ud = value | (uint32_t)value << 16;
       return true;
+   }
    case BRW_REGISTER_TYPE_F:
       reg->f = fabsf(reg->f);
       return true;
@@ -647,7 +652,8 @@ brw_abs_immediate(enum brw_reg_type type, struct brw_reg *reg)
    case BRW_REGISTER_TYPE_V:
       assert(!"unimplemented: abs V immediate");
    case BRW_REGISTER_TYPE_HF:
-      assert(!"unimplemented: abs HF immediate");
+      reg->ud &= ~0x80008000;
+      return true;
    case BRW_REGISTER_TYPE_NF:
       unreachable("no NF immediates");
    }

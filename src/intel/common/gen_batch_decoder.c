@@ -43,6 +43,7 @@ gen_batch_decode_ctx_init(struct gen_batch_decode_ctx *ctx,
    ctx->user_data = user_data;
    ctx->fp = fp;
    ctx->flags = flags;
+   ctx->max_vbo_decoded_lines = -1; /* No limit! */
 
    if (xml_path == NULL)
       ctx->spec = gen_spec_load(devinfo);
@@ -165,24 +166,29 @@ static void
 ctx_print_buffer(struct gen_batch_decode_ctx *ctx,
                  struct gen_batch_decode_bo bo,
                  uint32_t read_length,
-                 uint32_t pitch)
+                 uint32_t pitch,
+                 int max_lines)
 {
    const uint32_t *dw_end = bo.map + MIN2(bo.size, read_length);
 
-   unsigned line_count = 0;
+   int column_count = 0, line_count = -1;
    for (const uint32_t *dw = bo.map; dw < dw_end; dw++) {
-      if (line_count * 4 == pitch || line_count == 8) {
+      if (column_count * 4 == pitch || column_count == 8) {
          fprintf(ctx->fp, "\n");
-         line_count = 0;
+         column_count = 0;
+         line_count++;
+
+         if (max_lines >= 0 && line_count >= max_lines)
+            break;
       }
-      fprintf(ctx->fp, line_count == 0 ? "  " : " ");
+      fprintf(ctx->fp, column_count == 0 ? "  " : " ");
 
       if ((ctx->flags & GEN_BATCH_DECODE_FLOATS) && probably_float(*dw))
          fprintf(ctx->fp, "  %8.2f", *(float *) dw);
       else
          fprintf(ctx->fp, "  0x%08x", *dw);
 
-      line_count++;
+      column_count++;
    }
    fprintf(ctx->fp, "\n");
 }
@@ -387,7 +393,7 @@ handle_3dstate_vertex_buffers(struct gen_batch_decode_ctx *ctx,
          if (vb.map == 0 || vb_size == 0)
             continue;
 
-         ctx_print_buffer(ctx, vb, vb_size, pitch);
+         ctx_print_buffer(ctx, vb, vb_size, pitch, ctx->max_vbo_decoded_lines);
 
          vb.map = NULL;
          vb_size = 0;
@@ -543,31 +549,41 @@ static void
 decode_3dstate_constant(struct gen_batch_decode_ctx *ctx, const uint32_t *p)
 {
    struct gen_group *inst = gen_spec_find_instruction(ctx->spec, p);
+   struct gen_group *body =
+      gen_spec_find_struct(ctx->spec, "3DSTATE_CONSTANT_BODY");
 
    uint32_t read_length[4];
    struct gen_batch_decode_bo buffer[4];
    memset(buffer, 0, sizeof(buffer));
 
-   int rlidx = 0, bidx = 0;
-
-   struct gen_field_iterator iter;
-   gen_field_iterator_init(&iter, inst, p, 0, false);
-   while (gen_field_iterator_next(&iter)) {
-      if (strcmp(iter.name, "Read Length") == 0) {
-         read_length[rlidx++] = iter.raw_value;
-      } else if (strcmp(iter.name, "Buffer") == 0) {
-         buffer[bidx++] = ctx_get_bo(ctx, iter.raw_value);
-      }
-   }
-
-   for (int i = 0; i < 4; i++) {
-      if (read_length[i] == 0 || buffer[i].map == NULL)
+   struct gen_field_iterator outer;
+   gen_field_iterator_init(&outer, inst, p, 0, false);
+   while (gen_field_iterator_next(&outer)) {
+      if (outer.struct_desc != body)
          continue;
 
-      unsigned size = read_length[i] * 32;
-      fprintf(ctx->fp, "constant buffer %d, size %u\n", i, size);
+      struct gen_field_iterator iter;
+      gen_field_iterator_init(&iter, body, &outer.p[outer.start_bit / 32],
+                              0, false);
 
-      ctx_print_buffer(ctx, buffer[i], size, 0);
+      while (gen_field_iterator_next(&iter)) {
+         int idx;
+         if (sscanf(iter.name, "Read Length[%d]", &idx) == 1) {
+            read_length[idx] = iter.raw_value;
+         } else if (sscanf(iter.name, "Buffer[%d]", &idx) == 1) {
+            buffer[idx] = ctx_get_bo(ctx, iter.raw_value);
+         }
+      }
+
+      for (int i = 0; i < 4; i++) {
+         if (read_length[i] == 0 || buffer[i].map == NULL)
+            continue;
+
+         unsigned size = read_length[i] * 32;
+         fprintf(ctx->fp, "constant buffer %d, size %u\n", i, size);
+
+         ctx_print_buffer(ctx, buffer[i], size, 0, -1);
+      }
    }
 }
 

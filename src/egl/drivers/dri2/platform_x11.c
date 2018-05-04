@@ -251,6 +251,11 @@ dri2_x11_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
    config = dri2_get_dri_config(dri2_conf, type,
                                 dri2_surf->base.GLColorspace);
 
+   if (!config) {
+      _eglError(EGL_BAD_MATCH, "Unsupported surfacetype/colorspace configuration");
+      goto cleanup_pixmap;
+   }
+
    if (dri2_dpy->dri2) {
       dri2_surf->dri_drawable =
          dri2_dpy->dri2->createNewDrawable(dri2_dpy->dri_screen, config,
@@ -864,19 +869,22 @@ dri2_x11_swap_buffers_msc(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw,
    if (draw->Type == EGL_PIXMAP_BIT || draw->Type == EGL_PBUFFER_BIT)
       return 0;
 
-   if (draw->SwapBehavior == EGL_BUFFER_PRESERVED || !dri2_dpy->swap_available)
-      return dri2_copy_region(drv, disp, draw, dri2_surf->region) ? 0 : -1;
+   if (draw->SwapBehavior == EGL_BUFFER_PRESERVED || !dri2_dpy->swap_available) {
+      swap_count = dri2_copy_region(drv, disp, draw, dri2_surf->region) ? 0 : -1;
+   } else {
+      dri2_flush_drawable_for_swapbuffers(disp, draw);
 
-   dri2_flush_drawable_for_swapbuffers(disp, draw);
+      cookie = xcb_dri2_swap_buffers_unchecked(dri2_dpy->conn,
+                                               dri2_surf->drawable, msc_hi,
+                                               msc_lo, divisor_hi, divisor_lo,
+                                               remainder_hi, remainder_lo);
 
-   cookie = xcb_dri2_swap_buffers_unchecked(dri2_dpy->conn, dri2_surf->drawable,
-                  msc_hi, msc_lo, divisor_hi, divisor_lo, remainder_hi, remainder_lo);
+      reply = xcb_dri2_swap_buffers_reply(dri2_dpy->conn, cookie, NULL);
 
-   reply = xcb_dri2_swap_buffers_reply(dri2_dpy->conn, cookie, NULL);
-
-   if (reply) {
-      swap_count = (((int64_t)reply->swap_hi) << 32) | reply->swap_lo;
-      free(reply);
+      if (reply) {
+         swap_count = (((int64_t)reply->swap_hi) << 32) | reply->swap_lo;
+         free(reply);
+      }
    }
 
    /* Since we aren't watching for the server's invalidate events like we're
