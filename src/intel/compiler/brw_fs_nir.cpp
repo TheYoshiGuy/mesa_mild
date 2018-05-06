@@ -755,19 +755,9 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
        */
 
    case nir_op_f2f16_undef:
-   case nir_op_i2i16:
-   case nir_op_u2u16: {
-      /* TODO: Fixing aligment rules for conversions from 32-bits to
-       * 16-bit types should be moved to lower_conversions
-       */
-      fs_reg tmp = bld.vgrf(op[0].type, 1);
-      tmp = subscript(tmp, result.type, 0);
-      inst = bld.MOV(tmp, op[0]);
-      inst->saturate = instr->dest.saturate;
-      inst = bld.MOV(result, tmp);
+      inst = bld.MOV(result, op[0]);
       inst->saturate = instr->dest.saturate;
       break;
-   }
 
    case nir_op_f2f64:
    case nir_op_f2i64:
@@ -785,12 +775,12 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
        *        the same qword.
        *     (...)"
        *
-       * This means that 32-bit to 64-bit conversions need to have the 32-bit
-       * data elements aligned to 64-bit. This restriction does not apply to
-       * BDW and later.
+       * This means that conversions from bit-sizes smaller than 64-bit to
+       * 64-bit need to have the source data elements aligned to 64-bit.
+       * This restriction does not apply to BDW and later.
        */
       if (nir_dest_bit_size(instr->dest.dest) == 64 &&
-          nir_src_bit_size(instr->src[0].src) == 32 &&
+          nir_src_bit_size(instr->src[0].src) < 64 &&
           (devinfo->is_cherryview || gen_device_info_is_9lp(devinfo))) {
          fs_reg tmp = bld.vgrf(result.type, 1);
          tmp = subscript(tmp, op[0].type, 0);
@@ -807,6 +797,8 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
    case nir_op_f2u16:
    case nir_op_i2i32:
    case nir_op_u2u32:
+   case nir_op_i2i16:
+   case nir_op_u2u16:
    case nir_op_i2f16:
    case nir_op_u2f16:
       inst = bld.MOV(result, op[0]);
