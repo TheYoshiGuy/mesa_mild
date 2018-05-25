@@ -42,6 +42,7 @@
 #include "core/tilemgr.h"
 #include "core/clip.h"
 #include "core/utils.h"
+#include "core/tileset.h"
 
 #include "common/os.h"
 
@@ -137,6 +138,11 @@ HANDLE SwrCreateContext(
     if (pContext->apiThreadInfo.bindAPIThread0)
     {
         BindApiThread(pContext, 0);
+    }
+
+    if (pContext->threadInfo.SINGLE_THREADED)
+    {
+        pContext->pSingleThreadLockedTiles = new TileSet();
     }
 
     pContext->ppScratch = new uint8_t*[pContext->NumWorkerThreads];
@@ -245,7 +251,7 @@ void QueueWork(SWR_CONTEXT *pContext)
         {
             uint32_t curDraw[2] = { pContext->pCurDrawContext->drawId, pContext->pCurDrawContext->drawId };
             WorkOnFifoFE(pContext, 0, curDraw[0]);
-            WorkOnFifoBE(pContext, 0, curDraw[1], pContext->singleThreadLockedTiles, 0, 0);
+            WorkOnFifoBE(pContext, 0, curDraw[1], *pContext->pSingleThreadLockedTiles, 0, 0);
         }
         else
         {
@@ -427,7 +433,8 @@ void SwrDestroyContext(HANDLE hContext)
     delete[] pContext->ppScratch;
     AlignedFree(pContext->pStats);
 
-    delete(pContext->pHotTileMgr);
+    delete pContext->pHotTileMgr;
+    delete pContext->pSingleThreadLockedTiles;
 
     pContext->~SWR_CONTEXT();
     AlignedFree(GetContext(hContext));
@@ -475,7 +482,12 @@ void SetupDefaultState(SWR_CONTEXT *pContext)
     pState->depthBoundsState.depthBoundsTestMaxValue = 1.0f;
 }
 
-void SwrSync(HANDLE hContext, PFN_CALLBACK_FUNC pfnFunc, uint64_t userData, uint64_t userData2, uint64_t userData3)
+void SWR_API SwrSync(
+    HANDLE hContext,
+    PFN_CALLBACK_FUNC pfnFunc,
+    uint64_t userData,
+    uint64_t userData2,
+    uint64_t userData3)
 {
     SWR_ASSERT(pfnFunc != nullptr);
 
@@ -1716,10 +1728,6 @@ void InitBackendFuncTables();
 /// @brief Initialize swr backend and memory internal tables
 void SwrInit()
 {
-    InitSimLoadTilesTable();
-    InitSimStoreTilesTable();
-    InitSimClearTilesTable();
-
     InitClearTilesTable();
     InitBackendFuncTables();
     InitRasterizerFunctions();

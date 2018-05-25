@@ -89,7 +89,6 @@ extern const struct brw_tracked_state gen6_sampler_state;
 extern const struct brw_tracked_state gen6_sol_surface;
 extern const struct brw_tracked_state gen6_sf_vp;
 extern const struct brw_tracked_state gen6_urb;
-extern const struct brw_tracked_state gen7_depthbuffer;
 extern const struct brw_tracked_state gen7_l3_state;
 extern const struct brw_tracked_state gen7_push_constant_space;
 extern const struct brw_tracked_state gen7_urb;
@@ -114,9 +113,6 @@ void brw_upload_binding_table(struct brw_context *brw,
 void brw_upload_invariant_state(struct brw_context *brw);
 uint32_t
 brw_depthbuffer_format(struct brw_context *brw);
-
-uint32_t
-brw_convert_depth_value(mesa_format format, float value);
 
 void brw_upload_state_base_address(struct brw_context *brw);
 

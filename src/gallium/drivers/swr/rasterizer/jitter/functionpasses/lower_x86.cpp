@@ -136,21 +136,21 @@ namespace SwrJit
 
     struct LowerX86 : public FunctionPass
     {
-        LowerX86(JitManager* pJitMgr = nullptr, Builder* b = nullptr)
-            : FunctionPass(ID), mpJitMgr(pJitMgr), B(b)
+        LowerX86(Builder* b = nullptr)
+            : FunctionPass(ID), B(b)
         {
             initializeLowerX86Pass(*PassRegistry::getPassRegistry());
 
             // Determine target arch
-            if (mpJitMgr->mArch.AVX512F())
+            if (JM()->mArch.AVX512F())
             {
                 mTarget = AVX512;
             }
-            else if (mpJitMgr->mArch.AVX2())
+            else if (JM()->mArch.AVX2())
             {
                 mTarget = AVX2;
             }
-            else if (mpJitMgr->mArch.AVX())
+            else if (JM()->mArch.AVX())
             {
                 mTarget = AVX;
 
@@ -209,7 +209,7 @@ namespace SwrJit
             {
             case W256: numElem = 8; break;
             case W512: numElem = 16; break;
-	    default: SWR_ASSERT(false, "Unhandled vector width type %d\n", width);
+            default: SWR_ASSERT(false, "Unhandled vector width type %d\n", width);
             }
 
             return ConstantVector::getNullValue(VectorType::get(pTy, numElem));
@@ -222,7 +222,7 @@ namespace SwrJit
             {
             case W256: mask = B->C((uint8_t)-1); break;
             case W512: mask = B->C((uint16_t)-1); break;
-	    default: SWR_ASSERT(false, "Unhandled vector width type %d\n", width);
+            default: SWR_ASSERT(false, "Unhandled vector width type %d\n", width);
             }
             return mask;
         }
@@ -265,8 +265,16 @@ namespace SwrJit
                 // Assuming the intrinsics are consistent and place the src operand and mask last in the argument list.
                 if (mTarget == AVX512)
                 {
-                    args.push_back(GetZeroVec(vecWidth, pElemTy));
-                    args.push_back(GetMask(vecWidth));
+                    if (pFunc->getName().equals("meta.intrinsic.VCVTPD2PS")) {
+                        args.push_back(GetZeroVec(W256, pCallInst->getType()->getScalarType()));
+                        args.push_back(GetMask(W256));
+                        // for AVX512 VCVTPD2PS, we also have to add rounding mode
+                        args.push_back(B->C(_MM_FROUND_TO_NEAREST_INT |
+                                            _MM_FROUND_NO_EXC));
+                    } else {
+                        args.push_back(GetZeroVec(vecWidth, pElemTy));
+                        args.push_back(GetMask(vecWidth));
+                    }
                 }
 
                 return B->CALLA(pIntrin, args);
@@ -348,9 +356,8 @@ namespace SwrJit
         {
         }
 
-        JitManager* JM() { return mpJitMgr; }
+        JitManager* JM() { return B->JM(); }
 
-        JitManager* mpJitMgr;
         Builder* B;
 
         TargetArch mTarget;
@@ -360,9 +367,9 @@ namespace SwrJit
 
     char LowerX86::ID = 0;   // LLVM uses address of ID as the actual ID.
 
-    FunctionPass* createLowerX86Pass(JitManager* pJitMgr, Builder* b)
+    FunctionPass* createLowerX86Pass(Builder* b)
     {
-        return new LowerX86(pJitMgr, b);
+        return new LowerX86(b);
     }
 
     Instruction* NO_EMU(LowerX86* pThis, TargetArch arch, TargetWidth width, CallInst* pCallInst)

@@ -29,9 +29,10 @@
 
 #include "common/formats.h"
 #include "common/intrin.h"
-using gfxptr_t = unsigned long long;
 #include <functional>
 #include <algorithm>
+
+using gfxptr_t = unsigned long long;
 
 //////////////////////////////////////////////////////////////////////////
 /// PRIMITIVE_TOPOLOGY.
@@ -746,7 +747,7 @@ struct SWR_GS_STATE
     // Stride of incoming verts in attributes
     uint32_t inputVertStride;
 
-    // Output topology - can be point, tristrip, or linestrip
+    // Output topology - can be point, tristrip, linestrip, or rectlist
     PRIMITIVE_TOPOLOGY outputTopology;      // @llvm_enum
 
     // Maximum number of verts that can be emitted by a single instance of the GS

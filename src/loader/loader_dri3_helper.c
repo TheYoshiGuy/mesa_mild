@@ -370,9 +370,17 @@ dri3_handle_present_event(struct loader_dri3_drawable *draw,
        * checking for wrap.
        */
       if (ce->kind == XCB_PRESENT_COMPLETE_KIND_PIXMAP) {
-         draw->recv_sbc = (draw->send_sbc & 0xffffffff00000000LL) | ce->serial;
-         if (draw->recv_sbc > draw->send_sbc)
-            draw->recv_sbc -= 0x100000000;
+         uint64_t recv_sbc = (draw->send_sbc & 0xffffffff00000000LL) | ce->serial;
+
+         /* Only assume wraparound if that results in exactly the previous
+          * SBC + 1, otherwise ignore received SBC > sent SBC (those are
+          * probably from a previous loader_dri3_drawable instance) to avoid
+          * calculating bogus target MSC values in loader_dri3_swap_buffers_msc
+          */
+         if (recv_sbc <= draw->send_sbc)
+            draw->recv_sbc = recv_sbc;
+         else if (recv_sbc == (draw->recv_sbc + 0x100000001ULL))
+            draw->recv_sbc = recv_sbc - 0x100000000ULL;
 
          /* When moving from flip to copy, we assume that we can allocate in
           * a more optimal way if we don't need to cater for the display
@@ -420,13 +428,6 @@ dri3_handle_present_event(struct loader_dri3_drawable *draw,
 
          if (buf && buf->pixmap == ie->pixmap)
             buf->busy = 0;
-
-         if (buf && draw->cur_blit_source != b && !buf->busy &&
-             (buf->reallocate ||
-             (draw->num_back <= b && b < LOADER_DRI3_MAX_BACK))) {
-            dri3_free_render_buffer(draw, buf);
-            draw->buffers[b] = NULL;
-         }
       }
       break;
    }
@@ -559,7 +560,6 @@ dri3_find_back(struct loader_dri3_drawable *draw)
    /* Check whether we need to reuse the current back buffer as new back.
     * In that case, wait until it's not busy anymore.
     */
-   dri3_update_num_back(draw);
    num_to_consider = draw->num_back;
    if (!loader_dri3_have_image_blit(draw) && draw->cur_blit_source != -1) {
       num_to_consider = 1;
@@ -1815,6 +1815,7 @@ loader_dri3_get_buffers(__DRIdrawable *driDrawable,
 {
    struct loader_dri3_drawable *draw = loaderPrivate;
    struct loader_dri3_buffer   *front, *back;
+   int buf_id;
 
    buffers->image_mask = 0;
    buffers->front = NULL;
@@ -1825,6 +1826,16 @@ loader_dri3_get_buffers(__DRIdrawable *driDrawable,
 
    if (!dri3_update_drawable(driDrawable, draw))
       return false;
+
+   dri3_update_num_back(draw);
+
+   /* Free no longer needed back buffers */
+   for (buf_id = draw->num_back; buf_id < LOADER_DRI3_MAX_BACK; buf_id++) {
+      if (draw->cur_blit_source != buf_id && draw->buffers[buf_id]) {
+         dri3_free_render_buffer(draw, draw->buffers[buf_id]);
+         draw->buffers[buf_id] = NULL;
+      }
+   }
 
    /* pixmaps always have front buffers.
     * Exchange swaps also mandate fake front buffers.

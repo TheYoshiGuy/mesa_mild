@@ -119,7 +119,8 @@ struct brw_bufmgr {
    bool has_llc:1;
    bool has_mmap_wc:1;
    bool bo_reuse:1;
-   bool supports_48b_addresses:1;
+
+   uint64_t initial_kflags;
 };
 
 static int bo_set_tiling_internal(struct brw_bo *bo, uint32_t tiling_mode,
@@ -267,6 +268,7 @@ static struct brw_bo *
 bo_alloc_internal(struct brw_bufmgr *bufmgr,
                   const char *name,
                   uint64_t size,
+                  enum brw_memory_zone memzone,
                   unsigned flags,
                   uint32_t tiling_mode,
                   uint32_t stride)
@@ -407,8 +409,7 @@ retry:
    bo->reusable = true;
    bo->cache_coherent = bufmgr->has_llc;
    bo->index = -1;
-   if (bufmgr->supports_48b_addresses)
-      bo->kflags = EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
+   bo->kflags = bufmgr->initial_kflags;
 
    mtx_unlock(&bufmgr->lock);
 
@@ -426,23 +427,27 @@ err:
 
 struct brw_bo *
 brw_bo_alloc(struct brw_bufmgr *bufmgr,
-             const char *name, uint64_t size)
+             const char *name, uint64_t size,
+             enum brw_memory_zone memzone)
 {
-   return bo_alloc_internal(bufmgr, name, size, 0, I915_TILING_NONE, 0);
+   return bo_alloc_internal(bufmgr, name, size, memzone,
+                            0, I915_TILING_NONE, 0);
 }
 
 struct brw_bo *
 brw_bo_alloc_tiled(struct brw_bufmgr *bufmgr, const char *name,
-                   uint64_t size, uint32_t tiling_mode, uint32_t pitch,
+                   uint64_t size, enum brw_memory_zone memzone,
+                   uint32_t tiling_mode, uint32_t pitch,
                    unsigned flags)
 {
-   return bo_alloc_internal(bufmgr, name, size, flags, tiling_mode, pitch);
+   return bo_alloc_internal(bufmgr, name, size, memzone,
+                            flags, tiling_mode, pitch);
 }
 
 struct brw_bo *
 brw_bo_alloc_tiled_2d(struct brw_bufmgr *bufmgr, const char *name,
-                      int x, int y, int cpp, uint32_t tiling,
-                      uint32_t *pitch, unsigned flags)
+                      int x, int y, int cpp, enum brw_memory_zone memzone,
+                      uint32_t tiling, uint32_t *pitch, unsigned flags)
 {
    uint64_t size;
    uint32_t stride;
@@ -477,7 +482,8 @@ brw_bo_alloc_tiled_2d(struct brw_bufmgr *bufmgr, const char *name,
    if (tiling == I915_TILING_NONE)
       stride = 0;
 
-   return bo_alloc_internal(bufmgr, name, size, flags, tiling, stride);
+   return bo_alloc_internal(bufmgr, name, size, flags,
+                            memzone, tiling, stride);
 }
 
 /**
@@ -537,6 +543,7 @@ brw_bo_gem_create_from_name(struct brw_bufmgr *bufmgr,
    bo->global_name = handle;
    bo->reusable = false;
    bo->external = true;
+   bo->kflags = bufmgr->initial_kflags;
 
    _mesa_hash_table_insert(bufmgr->handle_table, &bo->gem_handle, bo);
    _mesa_hash_table_insert(bufmgr->name_table, &bo->global_name, bo);
@@ -641,7 +648,6 @@ bo_unreference_final(struct brw_bo *bo, time_t time)
       bo->free_time = time;
 
       bo->name = NULL;
-      bo->kflags = 0;
 
       list_addtail(&bo->head, &bucket->head);
    } else {
@@ -1157,6 +1163,7 @@ brw_bo_gem_create_from_prime_internal(struct brw_bufmgr *bufmgr, int prime_fd,
    bo->name = "prime";
    bo->reusable = false;
    bo->external = true;
+   bo->kflags = bufmgr->initial_kflags;
 
    if (tiling_mode < 0) {
       struct drm_i915_gem_get_tiling get_tiling = { .handle = bo->gem_handle };
@@ -1438,8 +1445,12 @@ brw_bufmgr_init(struct gen_device_info *devinfo, int fd)
 
    bufmgr->has_llc = devinfo->has_llc;
    bufmgr->has_mmap_wc = gem_param(fd, I915_PARAM_MMAP_VERSION) > 0;
-   bufmgr->supports_48b_addresses = devinfo->gen >= 8 &&
-      gtt_size > (4ULL << 30 /* GiB */);
+
+   const uint64_t _4GB = 4ull << 30;
+
+   if (devinfo->gen >= 8 && gtt_size > _4GB) {
+      bufmgr->initial_kflags |= EXEC_OBJECT_SUPPORTS_48B_ADDRESS;
+   }
 
    init_cache_buckets(bufmgr);
 

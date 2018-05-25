@@ -87,14 +87,12 @@ files_i965 = files(
   'gen4_blorp_exec.h',
   'gen6_clip_state.c',
   'gen6_constant_state.c',
-  'gen6_depth_state.c',
   'gen6_multisample_state.c',
   'gen6_queryobj.c',
   'gen6_sampler_state.c',
   'gen6_sol.c',
   'gen6_urb.c',
   'gen7_l3_state.c',
-  'gen7_misc_state.c',
   'gen7_sol_state.c',
   'gen7_urb.c',
   'gen8_depth_state.c',
@@ -131,10 +129,13 @@ files_i965 = files(
   'intel_tex_image.c',
   'intel_tex_obj.h',
   'intel_tex_validate.c',
-  'intel_tiled_memcpy.c',
-  'intel_tiled_memcpy.h',
   'intel_upload.c',
   'libdrm_macros.h',
+)
+
+files_intel_tiled_memcpy = files(
+  'intel_tiled_memcpy.c',
+  'intel_tiled_memcpy.h',
 )
 
 i965_gen_libs = []
@@ -178,6 +179,15 @@ i965_oa_sources = custom_target(
   ],
 )
 
+intel_tiled_memcpy = static_library(
+  'intel_tiled_memcpy',
+  [files_intel_tiled_memcpy],
+  include_directories : [
+    inc_common, inc_intel, inc_dri_common, inc_drm_uapi,
+  ],
+  c_args : [c_vis_args, no_override_init_args, '-msse2', sse41_args],
+)
+
 libi965 = static_library(
   'i965',
   [files_i965, i965_oa_sources, ir_expression_operation_h,
@@ -189,7 +199,7 @@ libi965 = static_library(
   cpp_args : [cpp_vis_args, '-msse2'],
   link_with : [
     i965_gen_libs, libintel_common, libintel_dev, libisl, libintel_compiler,
-    libblorp,
+    libblorp, intel_tiled_memcpy,
   ],
   dependencies : [dep_libdrm, dep_valgrind, idep_nir_headers],
 )

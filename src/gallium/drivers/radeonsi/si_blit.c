@@ -75,10 +75,20 @@ void si_blitter_begin(struct si_context *sctx, enum si_blitter_op op)
 
 	if (op & SI_DISABLE_RENDER_COND)
 		sctx->render_cond_force_off = true;
+
+	if (sctx->screen->dpbb_allowed) {
+		sctx->dpbb_force_off = true;
+		si_mark_atom_dirty(sctx, &sctx->atoms.s.dpbb_state);
+	}
 }
 
 void si_blitter_end(struct si_context *sctx)
 {
+	if (sctx->screen->dpbb_allowed) {
+		sctx->dpbb_force_off = false;
+		si_mark_atom_dirty(sctx, &sctx->atoms.s.dpbb_state);
+	}
+
 	sctx->render_cond_force_off = false;
 
 	/* Restore shader pointers because the VS blit shader changed all
@@ -470,7 +480,7 @@ static void si_blit_decompress_color(struct si_context *sctx,
 			if (!vi_dcc_enabled(rtex, i))
 				level_mask &= ~(1 << i);
 		}
-	} else if (rtex->fmask.size) {
+	} else if (rtex->surface.fmask_size) {
 		custom_blend = sctx->custom_blend_fmask_decompress;
 	} else {
 		custom_blend = sctx->custom_blend_eliminate_fastclear;
@@ -528,7 +538,7 @@ si_decompress_color_texture(struct si_context *sctx, struct r600_texture *tex,
 			    unsigned first_level, unsigned last_level)
 {
 	/* CMASK or DCC can be discarded and we can still end up here. */
-	if (!tex->cmask.size && !tex->fmask.size && !tex->dcc_offset)
+	if (!tex->cmask.size && !tex->surface.fmask_size && !tex->dcc_offset)
 		return;
 
 	si_blit_decompress_color(sctx, tex, first_level, last_level, 0,
@@ -849,7 +859,7 @@ static void si_decompress_subresource(struct pipe_context *ctx,
 		si_decompress_depth(sctx, rtex, planes,
 				    level, level,
 				    first_layer, last_layer);
-	} else if (rtex->fmask.size || rtex->cmask.size || rtex->dcc_offset) {
+	} else if (rtex->surface.fmask_size || rtex->cmask.size || rtex->dcc_offset) {
 		/* If we've rendered into the framebuffer and it's a blitting
 		 * source, make sure the decompression pass is invoked
 		 * by dirtying the framebuffer.

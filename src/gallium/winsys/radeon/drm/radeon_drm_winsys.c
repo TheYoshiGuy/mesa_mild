@@ -528,6 +528,29 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
 				      ws->accel_working2 < 3);
     ws->info.tcc_cache_line_size = 64; /* TC L2 line size on GCN */
     ws->info.ib_start_alignment = 4096;
+    ws->info.kernel_flushes_hdp_before_ib = ws->info.drm_minor >= 40;
+    /* HTILE is broken with 1D tiling on old kernels and CIK. */
+    ws->info.htile_cmask_support_1d_tiling = ws->info.chip_class != CIK ||
+                                             ws->info.drm_minor >= 38;
+    ws->info.si_TA_CS_BC_BASE_ADDR_allowed = ws->info.drm_minor >= 48;
+    ws->info.has_bo_metadata = false;
+    ws->info.has_gpu_reset_status_query = false;
+    ws->info.has_gpu_reset_counter_query = ws->info.drm_minor >= 43;
+    ws->info.has_eqaa_surface_allocator = false;
+    ws->info.has_format_bc1_through_bc7 = ws->info.drm_minor >= 31;
+    ws->info.kernel_flushes_tc_l2_after_ib = true;
+    /* Old kernels disallowed register writes via COPY_DATA
+     * that are used for indirect compute dispatches. */
+    ws->info.has_indirect_compute_dispatch = ws->info.chip_class == CIK ||
+                                             (ws->info.chip_class == SI &&
+                                              ws->info.drm_minor >= 45);
+    /* SI doesn't support unaligned loads. */
+    ws->info.has_unaligned_shader_loads = ws->info.chip_class == CIK &&
+                                          ws->info.drm_minor >= 50;
+    ws->info.has_sparse_vm_mappings = false;
+    /* 2D tiling on CIK is supported since DRM 2.35.0 */
+    ws->info.has_2d_tiling = ws->info.chip_class <= SI || ws->info.drm_minor >= 35;
+    ws->info.has_read_registers_query = ws->info.drm_minor >= 42;
 
     ws->check_vm = strstr(debug_get_option("R600_DEBUG", ""), "check_vm") != NULL;
 
@@ -719,8 +742,13 @@ static bool radeon_winsys_unref(struct radeon_winsys *ws)
     mtx_lock(&fd_tab_mutex);
 
     destroy = pipe_reference(&rws->reference, NULL);
-    if (destroy && fd_tab)
+    if (destroy && fd_tab) {
         util_hash_table_remove(fd_tab, intptr_to_pointer(rws->fd));
+        if (util_hash_table_count(fd_tab) == 0) {
+           util_hash_table_destroy(fd_tab);
+           fd_tab = NULL;
+        }
+    }
 
     mtx_unlock(&fd_tab_mutex);
     return destroy;

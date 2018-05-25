@@ -83,16 +83,6 @@ const char *si_get_family_name(const struct si_screen *sscreen)
 	}
 }
 
-static bool si_have_tgsi_compute(struct si_screen *sscreen)
-{
-	/* Old kernels disallowed some register writes for SI
-	 * that are used for indirect dispatches. */
-	return (sscreen->info.chip_class >= CIK ||
-		sscreen->info.drm_major == 3 ||
-		(sscreen->info.drm_major == 2 &&
-		 sscreen->info.drm_minor >= 45));
-}
-
 static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 {
 	struct si_screen *sscreen = (struct si_screen *)pscreen;
@@ -161,6 +151,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL:
 	case PIPE_CAP_INVALIDATE_BUFFER:
 	case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
+	case PIPE_CAP_QUERY_BUFFER_OBJECT:
 	case PIPE_CAP_QUERY_MEMORY_INFO:
 	case PIPE_CAP_TGSI_PACK_HALF_FLOAT:
 	case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
@@ -192,27 +183,20 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
 	case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:
 	case PIPE_CAP_SIGNED_VERTEX_BUFFER_OFFSET:
+	case PIPE_CAP_TGSI_BALLOT:
 	case PIPE_CAP_TGSI_VOTE:
 	case PIPE_CAP_TGSI_FS_FBFETCH:
 		return 1;
-
-	case PIPE_CAP_TGSI_BALLOT:
-		return HAVE_LLVM >= 0x0500;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
 		return !SI_BIG_ENDIAN && sscreen->info.has_userptr;
 
 	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
-		return (sscreen->info.drm_major == 2 &&
-			sscreen->info.drm_minor >= 43) ||
-		       sscreen->info.drm_major == 3;
+		return sscreen->info.has_gpu_reset_status_query ||
+		       sscreen->info.has_gpu_reset_counter_query;
 
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
-		/* 2D tiling on CIK is supported since DRM 2.35.0 */
-		return sscreen->info.chip_class < CIK ||
-		       (sscreen->info.drm_major == 2 &&
-			sscreen->info.drm_minor >= 35) ||
-		       sscreen->info.drm_major == 3;
+		return sscreen->info.has_2d_tiling;
 
         case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
                 return SI_MAP_BUFFER_ALIGNMENT;
@@ -226,7 +210,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return 4;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
-		if (si_have_tgsi_compute(sscreen))
+		if (sscreen->info.has_indirect_compute_dispatch)
 			return 450;
 		return 420;
 
@@ -236,24 +220,11 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
 	case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
 	case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
-		/* SI doesn't support unaligned loads.
-		 * CIK needs DRM 2.50.0 on radeon. */
-		return sscreen->info.chip_class == SI ||
-		       (sscreen->info.drm_major == 2 &&
-			sscreen->info.drm_minor < 50);
+		return !sscreen->info.has_unaligned_shader_loads;
 
 	case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
-		/* TODO: GFX9 hangs. */
-		if (sscreen->info.chip_class >= GFX9)
-			return 0;
-		/* Disable on SI due to VM faults in CP DMA. Enable once these
-		 * faults are mitigated in software.
-		 */
-		if (sscreen->info.chip_class >= CIK &&
-		    sscreen->info.drm_major == 3 &&
-		    sscreen->info.drm_minor >= 13)
-			return RADEON_SPARSE_PAGE_SIZE;
-		return 0;
+		return sscreen->info.has_sparse_vm_mappings ?
+				RADEON_SPARSE_PAGE_SIZE : 0;
 
 	case PIPE_CAP_PACKED_UNIFORMS:
 		if (sscreen->debug_flags & DBG(NIR))
@@ -293,9 +264,6 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_NATIVE_FENCE_FD:
 		return sscreen->info.has_fence_to_handle;
-
-	case PIPE_CAP_QUERY_BUFFER_OBJECT:
-		return si_have_tgsi_compute(sscreen);
 
 	case PIPE_CAP_DRAW_PARAMETERS:
 	case PIPE_CAP_MULTI_DRAW_INDIRECT:
@@ -409,7 +377,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 		case PIPE_SHADER_CAP_SUPPORTED_IRS: {
 			int ir = 1 << PIPE_SHADER_IR_NATIVE;
 
-			if (si_have_tgsi_compute(sscreen))
+			if (sscreen->info.has_indirect_compute_dispatch)
 				ir |= 1 << PIPE_SHADER_IR_TGSI;
 
 			return ir;
@@ -492,6 +460,15 @@ static int si_get_shader_param(struct pipe_screen* pscreen,
 
 		if (shader == PIPE_SHADER_VERTEX &&
 		    !sscreen->llvm_has_working_vgpr_indexing)
+			return 0;
+
+		/* Doing indirect indexing on GFX9 with LLVM 6.0 hangs.
+		 * This means we don't support INTERP instructions with
+		 * indirect indexing on inputs.
+		 */
+		if (shader == PIPE_SHADER_FRAGMENT &&
+		    !sscreen->llvm_has_working_vgpr_indexing &&
+		    HAVE_LLVM < 0x0700)
 			return 0;
 
 		/* TCS and TES load inputs directly from LDS or offchip

@@ -148,6 +148,12 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Const.GLSLVersion = 330;
    else
       ctx->Const.GLSLVersion = 120;
+
+   if (devinfo->gen >= 6)
+      ctx->Const.GLSLVersionCompat = 130;
+   else
+      ctx->Const.GLSLVersionCompat = 120;
+
    _mesa_override_glsl_version(&ctx->Const);
 
    ctx->Extensions.EXT_shader_integer_mix = ctx->Const.GLSLVersion >= 130;
@@ -275,9 +281,10 @@ intelInitExtensions(struct gl_context *ctx)
    if (devinfo->gen >= 8 || devinfo->is_baytrail) {
       /* For now, we only enable OES_copy_image on platforms that support
        * ETC2 natively in hardware.  We would need more hacks to support it
-       * elsewhere.
+       * elsewhere. Same with OES_texture_view.
        */
       ctx->Extensions.OES_copy_image = true;
+      ctx->Extensions.OES_texture_view = true;
    }
 
    if (devinfo->gen >= 8) {

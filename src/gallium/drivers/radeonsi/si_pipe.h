@@ -230,17 +230,6 @@ struct r600_transfer {
 	unsigned			offset;
 };
 
-struct r600_fmask_info {
-	uint64_t offset;
-	uint64_t size;
-	unsigned alignment;
-	unsigned pitch_in_pixels;
-	unsigned bank_height;
-	unsigned slice_tile_max;
-	unsigned tile_mode_index;
-	unsigned tile_swizzle;
-};
-
 struct r600_cmask_info {
 	uint64_t offset;
 	uint64_t size;
@@ -257,7 +246,7 @@ struct r600_texture {
 	struct r600_texture		*flushed_depth_texture;
 
 	/* Colorbuffer compression and fast clear. */
-	struct r600_fmask_info		fmask;
+	uint64_t			fmask_offset;
 	struct r600_cmask_info		cmask;
 	struct r600_resource		*cmask_buffer;
 	uint64_t			dcc_offset; /* 0 = disabled */
@@ -265,6 +254,7 @@ struct r600_texture {
 	unsigned			color_clear_value[2];
 	unsigned			last_msaa_resolve_target_micro_mode;
 	unsigned			num_level0_transfers;
+	unsigned			num_color_samples;
 
 	/* Depth buffer compression and fast clear. */
 	uint64_t			htile_offset;
@@ -426,6 +416,9 @@ struct si_screen {
 	unsigned			tess_offchip_ring_size;
 	unsigned			tess_factor_ring_size;
 	unsigned			vgt_hs_offchip_param;
+	unsigned			eqaa_force_coverage_samples;
+	unsigned			eqaa_force_z_samples;
+	unsigned			eqaa_force_color_samples;
 	bool				has_clear_state;
 	bool				has_distributed_tess;
 	bool				has_draw_indirect_multi;
@@ -601,6 +594,7 @@ struct si_framebuffer {
 	unsigned			spi_shader_col_format_blend_alpha;
 	ubyte				nr_samples:5; /* at most 16xAA */
 	ubyte				log_samples:3; /* at most 4 = 16xAA */
+	ubyte				nr_color_samples; /* at most 8xAA */
 	ubyte				compressed_cb_mask;
 	ubyte				uncompressed_cb_mask;
 	ubyte				color_is_int8;
@@ -933,7 +927,7 @@ struct si_context {
 	/* Other state */
 	bool need_check_render_feedback;
 	bool			decompression_enabled;
-
+	bool			dpbb_force_off;
 	bool			vs_writes_viewport_index;
 	bool			vs_disables_clipping_viewport;
 
@@ -1230,10 +1224,6 @@ bool si_prepare_for_dma_blit(struct si_context *sctx,
 			     struct r600_texture *rsrc,
 			     unsigned src_level,
 			     const struct pipe_box *src_box);
-void si_texture_get_fmask_info(struct si_screen *sscreen,
-			       struct r600_texture *rtex,
-			       unsigned nr_samples,
-			       struct r600_fmask_info *out);
 void si_texture_get_cmask_info(struct si_screen *sscreen,
 			       struct r600_texture *rtex,
 			       struct r600_cmask_info *out);
@@ -1488,9 +1478,9 @@ vi_tc_compat_htile_enabled(struct r600_texture *tex, unsigned level)
 static inline unsigned si_get_ps_iter_samples(struct si_context *sctx)
 {
 	if (sctx->ps_uses_fbfetch)
-		return sctx->framebuffer.nr_samples;
+		return sctx->framebuffer.nr_color_samples;
 
-	return sctx->ps_iter_samples;
+	return MIN2(sctx->ps_iter_samples, sctx->framebuffer.nr_color_samples);
 }
 
 static inline unsigned si_get_total_colormask(struct si_context *sctx)

@@ -159,6 +159,9 @@ _mesa_free_shader_state(struct gl_context *ctx)
 {
    for (int i = 0; i < MESA_SHADER_STAGES; i++) {
       _mesa_reference_program(ctx, &ctx->Shader.CurrentProgram[i], NULL);
+      _mesa_reference_shader_program(ctx,
+                                     &ctx->Shader.ReferencedPrograms[i],
+                                     NULL);
    }
    _mesa_reference_shader_program(ctx, &ctx->Shader.ActiveProgram, NULL);
 
@@ -837,7 +840,7 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
       *params = shProg->BinaryRetreivableHint;
       return;
    case GL_PROGRAM_BINARY_LENGTH:
-      if (ctx->Const.NumProgramBinaryFormats == 0) {
+      if (ctx->Const.NumProgramBinaryFormats == 0 || !shProg->data->LinkStatus) {
          *params = 0;
       } else {
          _mesa_get_program_binary_length(ctx, shProg, params);

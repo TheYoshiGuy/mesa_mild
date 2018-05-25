@@ -925,15 +925,6 @@ brwCreateContext(gl_api api,
    brw->gs.base.stage = MESA_SHADER_GEOMETRY;
    brw->wm.base.stage = MESA_SHADER_FRAGMENT;
    brw->cs.base.stage = MESA_SHADER_COMPUTE;
-   if (devinfo->gen >= 8) {
-      brw->vtbl.emit_depth_stencil_hiz = gen8_emit_depth_stencil_hiz;
-   } else if (devinfo->gen >= 7) {
-      brw->vtbl.emit_depth_stencil_hiz = gen7_emit_depth_stencil_hiz;
-   } else if (devinfo->gen >= 6) {
-      brw->vtbl.emit_depth_stencil_hiz = gen6_emit_depth_stencil_hiz;
-   } else {
-      brw->vtbl.emit_depth_stencil_hiz = brw_emit_depth_stencil_hiz;
-   }
 
    brw_init_driver_functions(brw, &functions);
 
@@ -1110,7 +1101,6 @@ intelDestroyContext(__DRIcontext * driContextPriv)
    struct brw_context *brw =
       (struct brw_context *) driContextPriv->driverPrivate;
    struct gl_context *ctx = &brw->ctx;
-   const struct gen_device_info *devinfo = &brw->screen->devinfo;
 
    _mesa_meta_free(&brw->ctx);
 
@@ -1122,8 +1112,7 @@ intelDestroyContext(__DRIcontext * driContextPriv)
       brw_destroy_shader_time(brw);
    }
 
-   if (devinfo->gen >= 6)
-      blorp_finish(&brw->blorp);
+   blorp_finish(&brw->blorp);
 
    brw_destroy_state(brw);
    brw_draw_destroy(brw);

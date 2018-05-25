@@ -164,7 +164,7 @@ static void si_destroy_compiler(struct si_compiler *compiler)
 		LLVMDisposeMessage((char*)compiler->data_layout);
 	if (compiler->passmgr)
 		LLVMDisposePassManager(compiler->passmgr);
-#if HAVE_LLVM < 0x0500 || HAVE_LLVM >= 0x0700
+#if HAVE_LLVM >= 0x0700
 	/* This crashes on LLVM 5.0 and 6.0 and Ubuntu 18.04, so leak it there. */
 	if (compiler->target_library_info)
 		gallivm_dispose_target_library_info(compiler->target_library_info);
@@ -286,25 +286,25 @@ static void si_destroy_context(struct pipe_context *context)
 	FREE(sctx);
 }
 
-static enum pipe_reset_status
-si_amdgpu_get_reset_status(struct pipe_context *ctx)
-{
-	struct si_context *sctx = (struct si_context *)ctx;
-
-	return sctx->ws->ctx_query_reset_status(sctx->ctx);
-}
-
 static enum pipe_reset_status si_get_reset_status(struct pipe_context *ctx)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	unsigned latest = sctx->ws->query_value(sctx->ws,
-						  RADEON_GPU_RESET_COUNTER);
 
-	if (sctx->gpu_reset_counter == latest)
-		return PIPE_NO_RESET;
+	if (sctx->screen->info.has_gpu_reset_status_query)
+		return sctx->ws->ctx_query_reset_status(sctx->ctx);
 
-	sctx->gpu_reset_counter = latest;
-	return PIPE_UNKNOWN_CONTEXT_RESET;
+	if (sctx->screen->info.has_gpu_reset_counter_query) {
+		unsigned latest = sctx->ws->query_value(sctx->ws,
+							RADEON_GPU_RESET_COUNTER);
+
+		if (sctx->gpu_reset_counter == latest)
+			return PIPE_NO_RESET;
+
+		sctx->gpu_reset_counter = latest;
+		return PIPE_UNKNOWN_CONTEXT_RESET;
+	}
+
+	return PIPE_NO_RESET;
 }
 
 static void si_set_device_reset_callback(struct pipe_context *ctx,
@@ -411,13 +411,12 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	sctx->family = sscreen->info.family;
 	sctx->chip_class = sscreen->info.chip_class;
 
-	if (sscreen->info.drm_major == 2 && sscreen->info.drm_minor >= 43) {
-		sctx->b.get_device_reset_status = si_get_reset_status;
+	if (sscreen->info.has_gpu_reset_counter_query) {
 		sctx->gpu_reset_counter =
-				sctx->ws->query_value(sctx->ws,
-							RADEON_GPU_RESET_COUNTER);
+			sctx->ws->query_value(sctx->ws, RADEON_GPU_RESET_COUNTER);
 	}
 
+	sctx->b.get_device_reset_status = si_get_reset_status;
 	sctx->b.set_device_reset_callback = si_set_device_reset_callback;
 
 	si_init_context_texture_functions(sctx);
@@ -467,9 +466,6 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 						       (void*)si_flush_dma_cs,
 						       sctx);
 	}
-
-	if (sscreen->info.drm_major == 3)
-		sctx->b.get_device_reset_status = si_amdgpu_get_reset_status;
 
 	si_init_buffer_functions(sctx);
 	si_init_clear_functions(sctx);
@@ -1071,6 +1067,31 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws,
 
 	if (debug_get_bool_option("RADEON_DUMP_SHADERS", false))
 		sscreen->debug_flags |= DBG_ALL_SHADERS;
+
+	/* Syntax:
+	 *     EQAA=s,z,c
+	 * Example:
+	 *     EQAA=8,4,2
+
+	 * That means 8 coverage samples, 4 Z/S samples, and 2 color samples.
+	 * Constraints:
+	 *     s >= z >= c (ignoring this only wastes memory)
+	 *     s = [2..16]
+	 *     z = [2..8]
+	 *     c = [2..8]
+	 *
+	 * Only MSAA color and depth buffers are overriden.
+	 */
+	if (sscreen->info.has_eqaa_surface_allocator) {
+		const char *eqaa = debug_get_option("EQAA", NULL);
+		unsigned s,z,f;
+
+		if (eqaa && sscanf(eqaa, "%u,%u,%u", &s, &z, &f) == 3 && s && z && f) {
+			sscreen->eqaa_force_coverage_samples = s;
+			sscreen->eqaa_force_z_samples = z;
+			sscreen->eqaa_force_color_samples = f;
+		}
+	}
 
 	for (i = 0; i < num_comp_hi_threads; i++)
 		si_init_compiler(sscreen, &sscreen->compiler[i]);

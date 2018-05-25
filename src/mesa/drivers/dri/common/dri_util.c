@@ -389,14 +389,6 @@ driCreateContextAttribs(__DRIscreen *screen, int api,
         screen->max_gl_compat_version < 31)
        mesa_api = API_OPENGL_CORE;
 
-    if (mesa_api == API_OPENGL_COMPAT
-        && ((ctx_config.major_version > 3)
-            || (ctx_config.major_version == 3 &&
-                ctx_config.minor_version >= 2))) {
-       *error = __DRI_CTX_ERROR_BAD_API;
-       return NULL;
-    }
-
     /* The latest version of EGL_KHR_create_context spec says:
      *
      *     "If the EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR flag bit is set in
@@ -886,6 +878,10 @@ driGLFormatToImageFormat(mesa_format format)
       return __DRI_IMAGE_FORMAT_ARGB2101010;
    case MESA_FORMAT_B10G10R10X2_UNORM:
       return __DRI_IMAGE_FORMAT_XRGB2101010;
+   case MESA_FORMAT_R10G10B10A2_UNORM:
+      return __DRI_IMAGE_FORMAT_ABGR2101010;
+   case MESA_FORMAT_R10G10B10X2_UNORM:
+      return __DRI_IMAGE_FORMAT_XBGR2101010;
    case MESA_FORMAT_B8G8R8A8_UNORM:
       return __DRI_IMAGE_FORMAT_ARGB8888;
    case MESA_FORMAT_R8G8B8A8_UNORM:
@@ -923,6 +919,10 @@ driImageFormatToGLFormat(uint32_t image_format)
       return MESA_FORMAT_B10G10R10A2_UNORM;
    case __DRI_IMAGE_FORMAT_XRGB2101010:
       return MESA_FORMAT_B10G10R10X2_UNORM;
+   case __DRI_IMAGE_FORMAT_ABGR2101010:
+      return MESA_FORMAT_R10G10B10A2_UNORM;
+   case __DRI_IMAGE_FORMAT_XBGR2101010:
+      return MESA_FORMAT_R10G10B10X2_UNORM;
    case __DRI_IMAGE_FORMAT_ARGB8888:
       return MESA_FORMAT_B8G8R8A8_UNORM;
    case __DRI_IMAGE_FORMAT_ABGR8888:

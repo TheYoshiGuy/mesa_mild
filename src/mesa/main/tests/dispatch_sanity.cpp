@@ -1437,7 +1437,6 @@ const struct function gl_compatibility_functions_possible[] = {
    { "glGetProgramLocalParameterfvARB", 10, -1 },
    { "glGetProgramivARB", 10, -1 },
    { "glGetProgramStringARB", 10, -1 },
-   { "glPolygonOffsetEXT", 10, -1 },
    { "glColorPointerEXT", 10, -1 },
    { "glEdgeFlagPointerEXT", 10, -1 },
    { "glIndexPointerEXT", 10, -1 },
@@ -2748,6 +2747,9 @@ const struct function gles31_functions_possible[] = {
 
    /* GL_OES_texture_storage_multisample_2d_array */
    { "glTexStorage3DMultisampleOES", 31, -1 },
+
+   /* GL_OES_texture_view */
+   { "glTextureViewOES", 31, -1 },
 
    /* GL_EXT_buffer_storage */
    { "glBufferStorageEXT", 31, -1 },

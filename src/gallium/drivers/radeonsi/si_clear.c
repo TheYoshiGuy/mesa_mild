@@ -65,7 +65,7 @@ static void si_alloc_separate_cmask(struct si_screen *sscreen,
 	p_atomic_inc(&sscreen->compressed_colortex_counter);
 }
 
-static void si_set_clear_color(struct r600_texture *rtex,
+static bool si_set_clear_color(struct r600_texture *rtex,
 			       enum pipe_format surface_format,
 			       const union pipe_color_union *color)
 {
@@ -90,7 +90,11 @@ static void si_set_clear_color(struct r600_texture *rtex,
 		util_pack_color(color->f, surface_format, &uc);
 	}
 
+	if (memcmp(rtex->color_clear_value, &uc, 2 * sizeof(uint32_t)) == 0)
+		return false;
+
 	memcpy(rtex->color_clear_value, &uc, 2 * sizeof(uint32_t));
+	return true;
 }
 
 /** Linearize and convert luminace/intensity to red. */
@@ -243,7 +247,7 @@ void vi_dcc_clear_level(struct si_context *sctx,
 		assert(rtex->buffer.b.b.last_level == 0);
 		/* 4x and 8x MSAA needs a sophisticated compute shader for
 		 * the clear. See AMDVLK. */
-		assert(rtex->buffer.b.b.nr_samples <= 2);
+		assert(rtex->num_color_samples <= 2);
 		clear_size = rtex->surface.dcc_size;
 	} else {
 		unsigned num_layers = util_num_layers(&rtex->buffer.b.b, level);
@@ -254,7 +258,7 @@ void vi_dcc_clear_level(struct si_context *sctx,
 		 * dcc_fast_clear_size bytes for each layer. A compute shader
 		 * would be more efficient than separate per-layer clear operations.
 		 */
-		assert(rtex->buffer.b.b.nr_samples <= 2 || num_layers == 1);
+		assert(rtex->num_color_samples <= 2 || num_layers == 1);
 
 		dcc_offset += rtex->surface.u.legacy.level[level].dcc_offset;
 		clear_size = rtex->surface.u.legacy.level[level].dcc_fast_clear_size *
@@ -433,13 +437,10 @@ static void si_do_fast_color_clear(struct si_context *sctx,
 		    !(tex->buffer.external_usage & PIPE_HANDLE_USAGE_EXPLICIT_FLUSH))
 			continue;
 
-		/* fast color clear with 1D tiling doesn't work on old kernels and CIK */
-		if (sctx->chip_class == CIK &&
+		if (sctx->chip_class <= VI &&
 		    tex->surface.u.legacy.level[0].mode == RADEON_SURF_MODE_1D &&
-		    sctx->screen->info.drm_major == 2 &&
-		    sctx->screen->info.drm_minor < 38) {
+		    !sctx->screen->info.htile_cmask_support_1d_tiling)
 			continue;
-		}
 
 		/* Fast clear is the most appropriate place to enable DCC for
 		 * displayable surfaces.
@@ -545,10 +546,10 @@ static void si_do_fast_color_clear(struct si_context *sctx,
 		/* We can change the micro tile mode before a full clear. */
 		si_set_optimal_micro_tile_mode(sctx->screen, tex);
 
-		si_set_clear_color(tex, fb->cbufs[i]->format, color);
-
-		sctx->framebuffer.dirty_cbufs |= 1 << i;
-		si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer);
+		if (si_set_clear_color(tex, fb->cbufs[i]->format, color)) {
+			sctx->framebuffer.dirty_cbufs |= 1 << i;
+			si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer);
+		}
 		*buffers &= ~clear_bit;
 	}
 }
@@ -577,7 +578,7 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 				continue;
 
 			tex = (struct r600_texture *)fb->cbufs[i]->texture;
-			if (tex->fmask.size == 0)
+			if (tex->surface.fmask_size == 0)
 				tex->dirty_level_mask &= ~(1 << fb->cbufs[i]->u.tex.level);
 		}
 	}
@@ -596,9 +597,12 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 				sctx->db_depth_disable_expclear = true;
 			}
 
-			zstex->depth_clear_value = depth;
-			sctx->framebuffer.dirty_zsbuf = true;
-			si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer); /* updates DB_DEPTH_CLEAR */
+			if (zstex->depth_clear_value != (float)depth) {
+				/* Update DB_DEPTH_CLEAR. */
+				zstex->depth_clear_value = depth;
+				sctx->framebuffer.dirty_zsbuf = true;
+				si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer);
+			}
 			sctx->db_depth_clear = true;
 			si_mark_atom_dirty(sctx, &sctx->atoms.s.db_render_state);
 		}
@@ -614,9 +618,12 @@ static void si_clear(struct pipe_context *ctx, unsigned buffers,
 				sctx->db_stencil_disable_expclear = true;
 			}
 
-			zstex->stencil_clear_value = stencil;
-			sctx->framebuffer.dirty_zsbuf = true;
-			si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer); /* updates DB_STENCIL_CLEAR */
+			if (zstex->stencil_clear_value != (uint8_t)stencil) {
+				/* Update DB_STENCIL_CLEAR. */
+				zstex->stencil_clear_value = stencil;
+				sctx->framebuffer.dirty_zsbuf = true;
+				si_mark_atom_dirty(sctx, &sctx->atoms.s.framebuffer);
+			}
 			sctx->db_stencil_clear = true;
 			si_mark_atom_dirty(sctx, &sctx->atoms.s.db_render_state);
 		}

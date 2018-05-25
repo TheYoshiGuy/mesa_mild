@@ -220,6 +220,7 @@ static unsigned si_texture_get_offset(struct si_screen *sscreen,
 static int si_init_surface(struct si_screen *sscreen,
 			   struct radeon_surf *surface,
 			   const struct pipe_resource *ptex,
+			   unsigned num_color_samples,
 			   enum radeon_surf_mode array_mode,
 			   unsigned pitch_in_bytes_override,
 			   unsigned offset,
@@ -274,13 +275,13 @@ static int si_init_surface(struct si_screen *sscreen,
 
 	/* VI: DCC clear for 4x and 8x MSAA array textures unimplemented. */
 	if (sscreen->info.chip_class == VI &&
-	    ptex->nr_samples >= 4 &&
+	    num_color_samples >= 4 &&
 	    ptex->array_size > 1)
 		flags |= RADEON_SURF_DISABLE_DCC;
 
 	/* GFX9: DCC clear for 4x and 8x MSAA textures unimplemented. */
 	if (sscreen->info.chip_class >= GFX9 &&
-	    ptex->nr_samples >= 4)
+	    num_color_samples >= 4)
 		flags |= RADEON_SURF_DISABLE_DCC;
 
 	if (ptex->bind & PIPE_BIND_SCANOUT || is_scanout) {
@@ -301,8 +302,8 @@ static int si_init_surface(struct si_screen *sscreen,
 	if (!(ptex->flags & SI_RESOURCE_FLAG_FORCE_TILING))
 		flags |= RADEON_SURF_OPTIMIZE_FOR_SPACE;
 
-	r = sscreen->ws->surface_init(sscreen->ws, ptex, flags, bpe,
-				      array_mode, surface);
+	r = sscreen->ws->surface_init(sscreen->ws, ptex, num_color_samples,
+				      flags, bpe, array_mode, surface);
 	if (r) {
 		return r;
 	}
@@ -564,7 +565,7 @@ static void si_reallocate_texture_inplace(struct si_context *sctx,
 	rtex->can_sample_z = new_tex->can_sample_z;
 	rtex->can_sample_s = new_tex->can_sample_s;
 	rtex->surface = new_tex->surface;
-	rtex->fmask = new_tex->fmask;
+	rtex->fmask_offset = new_tex->fmask_offset;
 	rtex->cmask = new_tex->cmask;
 	rtex->cb_color_info = new_tex->cb_color_info;
 	rtex->last_msaa_resolve_target_micro_mode = new_tex->last_msaa_resolve_target_micro_mode;
@@ -578,7 +579,7 @@ static void si_reallocate_texture_inplace(struct si_context *sctx,
 	if (new_bind_flag == PIPE_BIND_LINEAR) {
 		assert(!rtex->htile_offset);
 		assert(!rtex->cmask.size);
-		assert(!rtex->fmask.size);
+		assert(!rtex->surface.fmask_size);
 		assert(!rtex->dcc_offset);
 		assert(!rtex->is_depth);
 	}
@@ -607,12 +608,11 @@ static void si_query_opaque_metadata(struct si_screen *sscreen,
 	uint32_t desc[8], i;
 	bool is_array = util_texture_is_array(res->target);
 
-	/* DRM 2.x.x doesn't support this. */
-	if (sscreen->info.drm_major != 3)
+	if (!sscreen->info.has_bo_metadata)
 		return;
 
 	assert(rtex->dcc_separate_buffer == NULL);
-	assert(rtex->fmask.size == 0);
+	assert(rtex->surface.fmask_size == 0);
 
 	/* Metadata image format format version 1:
 	 * [0] = 1 (metadata format identifier)
@@ -845,72 +845,6 @@ static void si_texture_destroy(struct pipe_screen *screen,
 
 static const struct u_resource_vtbl si_texture_vtbl;
 
-/* The number of samples can be specified independently of the texture. */
-void si_texture_get_fmask_info(struct si_screen *sscreen,
-			       struct r600_texture *rtex,
-			       unsigned nr_samples,
-			       struct r600_fmask_info *out)
-{
-	/* FMASK is allocated like an ordinary texture. */
-	struct pipe_resource templ = rtex->buffer.b.b;
-	struct radeon_surf fmask = {};
-	unsigned flags, bpe;
-
-	memset(out, 0, sizeof(*out));
-
-	if (sscreen->info.chip_class >= GFX9) {
-		out->alignment = rtex->surface.u.gfx9.fmask_alignment;
-		out->size = rtex->surface.u.gfx9.fmask_size;
-		out->tile_swizzle = rtex->surface.u.gfx9.fmask_tile_swizzle;
-		return;
-	}
-
-	templ.nr_samples = 1;
-	flags = rtex->surface.flags | RADEON_SURF_FMASK;
-
-	switch (nr_samples) {
-	case 2:
-	case 4:
-		bpe = 1;
-		break;
-	case 8:
-		bpe = 4;
-		break;
-	default:
-		PRINT_ERR("Invalid sample count for FMASK allocation.\n");
-		return;
-	}
-
-	if (sscreen->ws->surface_init(sscreen->ws, &templ, flags, bpe,
-				      RADEON_SURF_MODE_2D, &fmask)) {
-		PRINT_ERR("Got error in surface_init while allocating FMASK.\n");
-		return;
-	}
-
-	assert(fmask.u.legacy.level[0].mode == RADEON_SURF_MODE_2D);
-
-	out->slice_tile_max = (fmask.u.legacy.level[0].nblk_x * fmask.u.legacy.level[0].nblk_y) / 64;
-	if (out->slice_tile_max)
-		out->slice_tile_max -= 1;
-
-	out->tile_mode_index = fmask.u.legacy.tiling_index[0];
-	out->pitch_in_pixels = fmask.u.legacy.level[0].nblk_x;
-	out->bank_height = fmask.u.legacy.bankh;
-	out->tile_swizzle = fmask.tile_swizzle;
-	out->alignment = MAX2(256, fmask.surf_alignment);
-	out->size = fmask.surf_size;
-}
-
-static void si_texture_allocate_fmask(struct si_screen *sscreen,
-				      struct r600_texture *rtex)
-{
-	si_texture_get_fmask_info(sscreen, rtex,
-				    rtex->buffer.b.b.nr_samples, &rtex->fmask);
-
-	rtex->fmask.offset = align64(rtex->size, rtex->fmask.alignment);
-	rtex->size = rtex->fmask.offset + rtex->fmask.size;
-}
-
 void si_texture_get_cmask_info(struct si_screen *sscreen,
 			       struct r600_texture *rtex,
 			       struct r600_cmask_info *out)
@@ -987,10 +921,8 @@ static void si_texture_get_htile_size(struct si_screen *sscreen,
 
 	rtex->surface.htile_size = 0;
 
-	/* HTILE is broken with 1D tiling on old kernels and CIK. */
-	if (sscreen->info.chip_class >= CIK &&
-	    rtex->surface.u.legacy.level[0].mode == RADEON_SURF_MODE_1D &&
-	    sscreen->info.drm_major == 2 && sscreen->info.drm_minor < 38)
+	if (rtex->surface.u.legacy.level[0].mode == RADEON_SURF_MODE_1D &&
+	    !sscreen->info.htile_cmask_support_1d_tiling)
 		return;
 
 	/* Overalign HTILE on P2 configs to work around GPU hangs in
@@ -1083,12 +1015,12 @@ void si_print_texture_info(struct si_screen *sscreen,
 			rtex->surface.u.gfx9.surf.epitch,
 			rtex->surface.u.gfx9.surf_pitch);
 
-		if (rtex->fmask.size) {
+		if (rtex->surface.fmask_size) {
 			u_log_printf(log, "  FMASK: offset=%"PRIu64", size=%"PRIu64", "
 				"alignment=%u, swmode=%u, epitch=%u\n",
-				rtex->fmask.offset,
-				rtex->surface.u.gfx9.fmask_size,
-				rtex->surface.u.gfx9.fmask_alignment,
+				rtex->fmask_offset,
+				rtex->surface.fmask_size,
+				rtex->surface.fmask_alignment,
 				rtex->surface.u.gfx9.fmask.swizzle_mode,
 				rtex->surface.u.gfx9.fmask.epitch);
 		}
@@ -1138,12 +1070,14 @@ void si_print_texture_info(struct si_screen *sscreen,
 		rtex->surface.u.legacy.tile_split, rtex->surface.u.legacy.pipe_config,
 		(rtex->surface.flags & RADEON_SURF_SCANOUT) != 0);
 
-	if (rtex->fmask.size)
+	if (rtex->surface.fmask_size)
 		u_log_printf(log, "  FMask: offset=%"PRIu64", size=%"PRIu64", alignment=%u, pitch_in_pixels=%u, "
 			"bankh=%u, slice_tile_max=%u, tile_mode_index=%u\n",
-			rtex->fmask.offset, rtex->fmask.size, rtex->fmask.alignment,
-			rtex->fmask.pitch_in_pixels, rtex->fmask.bank_height,
-			rtex->fmask.slice_tile_max, rtex->fmask.tile_mode_index);
+			rtex->fmask_offset, rtex->surface.fmask_size, rtex->surface.fmask_alignment,
+			rtex->surface.u.legacy.fmask.pitch_in_pixels,
+			rtex->surface.u.legacy.fmask.bankh,
+			rtex->surface.u.legacy.fmask.slice_tile_max,
+			rtex->surface.u.legacy.fmask.tiling_index);
 
 	if (rtex->cmask.size)
 		u_log_printf(log, "  CMask: offset=%"PRIu64", size=%"PRIu64", alignment=%u, "
@@ -1209,6 +1143,7 @@ void si_print_texture_info(struct si_screen *sscreen,
 static struct r600_texture *
 si_texture_create_object(struct pipe_screen *screen,
 			 const struct pipe_resource *base,
+			 unsigned num_color_samples,
 			 struct pb_buffer *buf,
 			 struct radeon_surf *surface)
 {
@@ -1232,6 +1167,7 @@ si_texture_create_object(struct pipe_screen *screen,
 
 	rtex->surface = *surface;
 	rtex->size = rtex->surface.surf_size;
+	rtex->num_color_samples = num_color_samples;
 
 	rtex->tc_compatible_htile = rtex->surface.htile_size != 0 &&
 				    (rtex->surface.flags &
@@ -1282,11 +1218,15 @@ si_texture_create_object(struct pipe_screen *screen,
 		if (base->nr_samples > 1 &&
 		    !buf &&
 		    !(sscreen->debug_flags & DBG(NO_FMASK))) {
-			si_texture_allocate_fmask(sscreen, rtex);
+			/* Allocate FMASK. */
+			rtex->fmask_offset = align64(rtex->size,
+						     rtex->surface.fmask_alignment);
+			rtex->size = rtex->fmask_offset + rtex->surface.fmask_size;
+
 			si_texture_allocate_cmask(sscreen, rtex);
 			rtex->cmask_buffer = &rtex->buffer;
 
-			if (!rtex->fmask.size || !rtex->cmask.size) {
+			if (!rtex->surface.fmask_size || !rtex->cmask.size) {
 				FREE(rtex);
 				return NULL;
 			}
@@ -1444,10 +1384,37 @@ si_choose_tiling(struct si_screen *sscreen,
 	return RADEON_SURF_MODE_2D;
 }
 
+static unsigned si_get_num_color_samples(struct si_screen *sscreen,
+					 const struct pipe_resource *templ,
+					 bool imported)
+{
+	if (!imported && templ->nr_samples >= 2 &&
+	    sscreen->eqaa_force_color_samples)
+		return sscreen->eqaa_force_color_samples;
+
+	return CLAMP(templ->nr_samples, 1, 8);
+}
+
 struct pipe_resource *si_texture_create(struct pipe_screen *screen,
 					const struct pipe_resource *templ)
 {
 	struct si_screen *sscreen = (struct si_screen*)screen;
+	bool is_zs = util_format_is_depth_or_stencil(templ->format);
+
+	if (templ->nr_samples >= 2) {
+		/* This is hackish (overwriting the const pipe_resource template),
+		 * but should be harmless and state trackers can also see
+		 * the overriden number of samples in the created pipe_resource.
+		 */
+		if (is_zs && sscreen->eqaa_force_z_samples) {
+			((struct pipe_resource*)templ)->nr_samples =
+				sscreen->eqaa_force_z_samples;
+		} else if (!is_zs && sscreen->eqaa_force_color_samples) {
+			((struct pipe_resource*)templ)->nr_samples =
+				sscreen->eqaa_force_coverage_samples;
+		}
+	}
+
 	struct radeon_surf surface = {0};
 	bool is_flushed_depth = templ->flags & SI_RESOURCE_FLAG_FLUSHED_DEPTH;
 	bool tc_compatible_htile =
@@ -1463,11 +1430,11 @@ struct pipe_resource *si_texture_create(struct pipe_screen *screen,
 		!(sscreen->debug_flags & DBG(NO_HYPERZ)) &&
 		!is_flushed_depth &&
 		templ->nr_samples <= 1 && /* TC-compat HTILE is less efficient with MSAA */
-		util_format_is_depth_or_stencil(templ->format);
-
+		is_zs;
+	unsigned num_color_samples = si_get_num_color_samples(sscreen, templ, false);
 	int r;
 
-	r = si_init_surface(sscreen, &surface, templ,
+	r = si_init_surface(sscreen, &surface, templ, num_color_samples,
 			    si_choose_tiling(sscreen, templ, tc_compatible_htile),
 			    0, 0, false, false, is_flushed_depth,
 			    tc_compatible_htile);
@@ -1476,7 +1443,8 @@ struct pipe_resource *si_texture_create(struct pipe_screen *screen,
 	}
 
 	return (struct pipe_resource *)
-	       si_texture_create_object(screen, templ, NULL, &surface);
+	       si_texture_create_object(screen, templ, num_color_samples,
+					NULL, &surface);
 }
 
 static struct pipe_resource *si_texture_from_handle(struct pipe_screen *screen,
@@ -1507,13 +1475,17 @@ static struct pipe_resource *si_texture_from_handle(struct pipe_screen *screen,
 	si_surface_import_metadata(sscreen, &surface, &metadata,
 				     &array_mode, &is_scanout);
 
-	r = si_init_surface(sscreen, &surface, templ, array_mode, stride,
-			      offset, true, is_scanout, false, false);
+	unsigned num_color_samples = si_get_num_color_samples(sscreen, templ, true);
+
+	r = si_init_surface(sscreen, &surface, templ, num_color_samples,
+			    array_mode, stride, offset, true, is_scanout,
+			    false, false);
 	if (r) {
 		return NULL;
 	}
 
-	rtex = si_texture_create_object(screen, templ, buf, &surface);
+	rtex = si_texture_create_object(screen, templ, num_color_samples,
+					buf, &surface);
 	if (!rtex)
 		return NULL;
 
@@ -2435,17 +2407,18 @@ si_texture_from_memobj(struct pipe_screen *screen,
 		 */
 		array_mode = RADEON_SURF_MODE_LINEAR_ALIGNED;
 		is_scanout = false;
-
 	}
 
-	r = si_init_surface(sscreen, &surface, templ,
-			      array_mode, memobj->stride,
-			      offset, true, is_scanout,
-			      false, false);
+	unsigned num_color_samples = si_get_num_color_samples(sscreen, templ, true);
+
+	r = si_init_surface(sscreen, &surface, templ, num_color_samples,
+			    array_mode, memobj->stride, offset, true,
+			    is_scanout, false, false);
 	if (r)
 		return NULL;
 
-	rtex = si_texture_create_object(screen, templ, memobj->buf, &surface);
+	rtex = si_texture_create_object(screen, templ, num_color_samples,
+					memobj->buf, &surface);
 	if (!rtex)
 		return NULL;
 

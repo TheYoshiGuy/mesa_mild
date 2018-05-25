@@ -732,10 +732,10 @@ static const struct gen_device_info gen_device_info_glk = {
    .l3_banks = 2,
 };
 
-/*TODO: Initialize l3_banks when we know the number. */
 static const struct gen_device_info gen_device_info_glk_2x6 = {
    GEN9_LP_FEATURES_2X6,
    .is_geminilake = true,
+   .l3_banks = 2,
 };
 
 static const struct gen_device_info gen_device_info_cfl_gt1 = {
@@ -1034,6 +1034,7 @@ gen_device_info_update_from_topology(struct gen_device_info *devinfo,
       }
       n_subslices += devinfo->num_subslices[s];
    }
+   assert(n_subslices > 0);
 
    uint32_t eu_mask_len =
       topology->eu_stride * topology->max_subslices * topology->max_slices;
@@ -1044,11 +1045,7 @@ gen_device_info_update_from_topology(struct gen_device_info *devinfo,
    for (int b = 0; b < eu_mask_len; b++)
       n_eus += __builtin_popcount(devinfo->eu_masks[b]);
 
-   /* We expect the total number of EUs to be uniformly distributed throughout
-    * the subslices.
-    */
-   assert(n_subslices && (n_eus % n_subslices) == 0);
-   devinfo->num_eu_per_subslice = n_eus / n_subslices;
+   devinfo->num_eu_per_subslice = DIV_ROUND_UP(n_eus, n_subslices);
 }
 
 bool

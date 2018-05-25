@@ -243,8 +243,14 @@ struct brw_blorp_blit_prog_key
    /* Actual MSAA layout used by the source image. */
    enum isl_msaa_layout src_layout;
 
-   /* Number of bits per channel in the source image. */
-   uint8_t src_bpc;
+   /* The swizzle to apply to the source in the shader */
+   struct isl_swizzle src_swizzle;
+
+   /* The format of the source if format-specific workarounds are needed
+    * and 0 (ISL_FORMAT_R32G32B32A32_FLOAT) if the destination is natively
+    * renderable.
+    */
+   enum isl_format src_format;
 
    /* True if the source requires normalized coordinates */
    bool src_coords_normalized;
@@ -263,8 +269,17 @@ struct brw_blorp_blit_prog_key
    /* Actual MSAA layout used by the destination image. */
    enum isl_msaa_layout dst_layout;
 
-   /* Number of bits per channel in the destination image. */
-   uint8_t dst_bpc;
+   /* The swizzle to apply to the destination in the shader */
+   struct isl_swizzle dst_swizzle;
+
+   /* The format of the destination if format-specific workarounds are needed
+    * and 0 (ISL_FORMAT_R32G32B32A32_FLOAT) if the destination is natively
+    * renderable.
+    */
+   enum isl_format dst_format;
+
+   /* Whether or not the format workarounds are a bitcast operation */
+   bool format_bit_cast;
 
    /* Type of the data to be read from the texture (one of
     * nir_type_(int|uint|float)).

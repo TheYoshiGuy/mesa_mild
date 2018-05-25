@@ -29,6 +29,9 @@
 
 #include <vector>
 
+///////////////////////////////////////////////////////////////////////////////
+// NOTE:  This enum MUST be kept in sync with gCoreBuckets in rdtsc_core.cpp
+///////////////////////////////////////////////////////////////////////////////
 enum CORE_BUCKETS
 {
     APIClearRenderTarget,
@@ -59,6 +62,7 @@ enum CORE_BUCKETS
     FEClipPoints,
     FEClipLines,
     FEClipTriangles,
+    FEClipRectangles,
     FECullZeroAreaAndBackface,
     FECullBetweenCenters,
     FEEarlyRastEnter,

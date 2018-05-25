@@ -116,13 +116,13 @@ static const struct drm_driver_descriptor driver_descriptors[] = {
         .configuration = pipe_default_configuration_query,
     },
     {
-        .driver_name = "vc4",
-        .create_screen = pipe_vc4_create_screen,
+        .driver_name = "v3d",
+        .create_screen = pipe_v3d_create_screen,
         .configuration = pipe_default_configuration_query,
     },
     {
-        .driver_name = "vc5",
-        .create_screen = pipe_vc5_create_screen,
+        .driver_name = "vc4",
+        .create_screen = pipe_vc4_create_screen,
         .configuration = pipe_default_configuration_query,
     },
     {
@@ -207,6 +207,7 @@ pipe_loader_drm_probe_fd(struct pipe_loader_device **dev, int fd)
    if (ddev->lib)
       util_dl_close(ddev->lib);
 #endif
+   FREE(ddev->base.driver_name);
    FREE(ddev);
    return false;
 }

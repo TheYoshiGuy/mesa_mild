@@ -220,7 +220,7 @@ def num_from_str(num_str):
     if num_str.lower().startswith('0x'):
         return int(num_str, base=16)
     else:
-        assert(not num_str.startswith('0') and 'octals numbers not allowed')
+        assert not num_str.startswith('0'), 'octals numbers not allowed'
         return int(num_str)
 
 class Field(object):
@@ -234,6 +234,13 @@ class Field(object):
         self.start = int(attrs["start"])
         self.end = int(attrs["end"])
         self.type = attrs["type"]
+
+        assert self.start <= self.end, \
+               'field {} has end ({}) < start ({})'.format(self.name, self.end,
+                                                           self.start)
+        if self.type == 'bool':
+            assert self.end == self.start, \
+                   'bool field ({}) is too wide'.format(self.name)
 
         if "prefix" in attrs:
             self.prefix = attrs["prefix"]
