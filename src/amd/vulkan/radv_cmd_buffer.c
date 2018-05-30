@@ -595,6 +595,48 @@ radv_emit_userdata_address(struct radv_cmd_buffer *cmd_buffer,
 }
 
 static void
+radv_emit_descriptor_pointers(struct radv_cmd_buffer *cmd_buffer,
+			      struct radv_pipeline *pipeline,
+			      struct radv_descriptor_state *descriptors_state,
+			      gl_shader_stage stage)
+{
+	struct radv_device *device = cmd_buffer->device;
+	struct radeon_winsys_cs *cs = cmd_buffer->cs;
+	uint32_t sh_base = pipeline->user_data_0[stage];
+	struct radv_userdata_locations *locs =
+		&pipeline->shaders[stage]->info.user_sgprs_locs;
+	unsigned mask;
+
+	mask = descriptors_state->dirty & descriptors_state->valid;
+
+	for (int i = 0; i < MAX_SETS; i++) {
+		struct radv_userdata_info *loc = &locs->descriptor_sets[i];
+		if (loc->sgpr_idx != -1 && !loc->indirect)
+			continue;
+		mask &= ~(1 << i);
+	}
+
+	while (mask) {
+		int start, count;
+
+		u_bit_scan_consecutive_range(&mask, &start, &count);
+
+		struct radv_userdata_info *loc = &locs->descriptor_sets[start];
+		unsigned sh_offset = sh_base + loc->sgpr_idx * 4;
+
+		radv_emit_shader_pointer_head(cs, sh_offset, count,
+					      HAVE_32BIT_POINTERS);
+		for (int i = 0; i < count; i++) {
+			struct radv_descriptor_set *set =
+				descriptors_state->sets[start + i];
+
+			radv_emit_shader_pointer_body(device, cs, set->va,
+						      HAVE_32BIT_POINTERS);
+		}
+	}
+}
+
+static void
 radv_update_multisample_state(struct radv_cmd_buffer *cmd_buffer,
 			      struct radv_pipeline *pipeline)
 {
@@ -869,14 +911,6 @@ radv_emit_scissor(struct radv_cmd_buffer *cmd_buffer)
 {
 	uint32_t count = cmd_buffer->state.dynamic.scissor.count;
 
-	/* Vega10/Raven scissor bug workaround. This must be done before VPORT
-	 * scissor registers are changed. There is also a more efficient but
-	 * more involved alternative workaround.
-	 */
-	if (cmd_buffer->device->physical_device->has_scissor_bug) {
-		cmd_buffer->state.flush_bits |= RADV_CMD_FLAG_PS_PARTIAL_FLUSH;
-		si_emit_cache_flush(cmd_buffer);
-	}
 	si_write_scissors(cmd_buffer->cs, 0, count,
 			  cmd_buffer->state.dynamic.scissor.scissors,
 			  cmd_buffer->state.dynamic.viewport.viewports,
@@ -1403,7 +1437,8 @@ radv_cmd_buffer_flush_dynamic_state(struct radv_cmd_buffer *cmd_buffer)
 	if (states & (RADV_CMD_DIRTY_DYNAMIC_VIEWPORT))
 		radv_emit_viewport(cmd_buffer);
 
-	if (states & (RADV_CMD_DIRTY_DYNAMIC_SCISSOR | RADV_CMD_DIRTY_DYNAMIC_VIEWPORT))
+	if (states & (RADV_CMD_DIRTY_DYNAMIC_SCISSOR | RADV_CMD_DIRTY_DYNAMIC_VIEWPORT) &&
+	    !cmd_buffer->device->physical_device->has_scissor_bug)
 		radv_emit_scissor(cmd_buffer);
 
 	if (states & RADV_CMD_DIRTY_DYNAMIC_LINE_WIDTH)
@@ -1427,47 +1462,6 @@ radv_cmd_buffer_flush_dynamic_state(struct radv_cmd_buffer *cmd_buffer)
 		radv_emit_discard_rectangle(cmd_buffer);
 
 	cmd_buffer->state.dirty &= ~states;
-}
-
-static void
-emit_stage_descriptor_set_userdata(struct radv_cmd_buffer *cmd_buffer,
-				   struct radv_pipeline *pipeline,
-				   int idx,
-				   uint64_t va,
-				   gl_shader_stage stage)
-{
-	struct radv_userdata_info *desc_set_loc = &pipeline->shaders[stage]->info.user_sgprs_locs.descriptor_sets[idx];
-	uint32_t base_reg = pipeline->user_data_0[stage];
-
-	if (desc_set_loc->sgpr_idx == -1 || desc_set_loc->indirect)
-		return;
-
-	assert(!desc_set_loc->indirect);
-	assert(desc_set_loc->num_sgprs == (HAVE_32BIT_POINTERS ? 1 : 2));
-
-	radv_emit_shader_pointer(cmd_buffer->device, cmd_buffer->cs,
-				 base_reg + desc_set_loc->sgpr_idx * 4, va, false);
-}
-
-static void
-radv_emit_descriptor_set_userdata(struct radv_cmd_buffer *cmd_buffer,
-				  VkShaderStageFlags stages,
-				  struct radv_descriptor_set *set,
-				  unsigned idx)
-{
-	if (cmd_buffer->state.pipeline) {
-		radv_foreach_stage(stage, stages) {
-			if (cmd_buffer->state.pipeline->shaders[stage])
-				emit_stage_descriptor_set_userdata(cmd_buffer, cmd_buffer->state.pipeline,
-								   idx, set->va,
-								   stage);
-		}
-	}
-
-	if (cmd_buffer->state.compute_pipeline && (stages & VK_SHADER_STAGE_COMPUTE_BIT))
-		emit_stage_descriptor_set_userdata(cmd_buffer, cmd_buffer->state.compute_pipeline,
-						   idx, set->va,
-						   MESA_SHADER_COMPUTE);
 }
 
 static void
@@ -1551,7 +1545,6 @@ radv_flush_descriptors(struct radv_cmd_buffer *cmd_buffer,
 					 VK_PIPELINE_BIND_POINT_GRAPHICS;
 	struct radv_descriptor_state *descriptors_state =
 		radv_get_descriptors_state(cmd_buffer, bind_point);
-	unsigned i;
 
 	if (!descriptors_state->dirty)
 		return;
@@ -1568,13 +1561,25 @@ radv_flush_descriptors(struct radv_cmd_buffer *cmd_buffer,
 	                                                   cmd_buffer->cs,
 	                                                   MAX_SETS * MESA_SHADER_STAGES * 4);
 
-	for_each_bit(i, descriptors_state->dirty) {
-		struct radv_descriptor_set *set = descriptors_state->sets[i];
-		if (!(descriptors_state->valid & (1u << i)))
-			continue;
+	if (cmd_buffer->state.pipeline) {
+		radv_foreach_stage(stage, stages) {
+			if (!cmd_buffer->state.pipeline->shaders[stage])
+				continue;
 
-		radv_emit_descriptor_set_userdata(cmd_buffer, stages, set, i);
+			radv_emit_descriptor_pointers(cmd_buffer,
+						      cmd_buffer->state.pipeline,
+						      descriptors_state, stage);
+		}
 	}
+
+	if (cmd_buffer->state.compute_pipeline &&
+	    (stages & VK_SHADER_STAGE_COMPUTE_BIT)) {
+		radv_emit_descriptor_pointers(cmd_buffer,
+					      cmd_buffer->state.compute_pipeline,
+					      descriptors_state,
+					      MESA_SHADER_COMPUTE);
+	}
+
 	descriptors_state->dirty = 0;
 	descriptors_state->push_dirty = false;
 
@@ -2522,18 +2527,6 @@ void radv_CmdSetViewport(
 	assert(firstViewport < MAX_VIEWPORTS);
 	assert(total_count >= 1 && total_count <= MAX_VIEWPORTS);
 
-	if (cmd_buffer->device->physical_device->has_scissor_bug) {
-		/* Try to skip unnecessary PS partial flushes when the viewports
-		 * don't change.
-		 */
-		if (!(state->dirty & (RADV_CMD_DIRTY_DYNAMIC_VIEWPORT |
-				      RADV_CMD_DIRTY_DYNAMIC_SCISSOR)) &&
-		    !memcmp(state->dynamic.viewport.viewports + firstViewport,
-			    pViewports, viewportCount * sizeof(*pViewports))) {
-			return;
-		}
-	}
-
 	memcpy(state->dynamic.viewport.viewports + firstViewport, pViewports,
 	       viewportCount * sizeof(*pViewports));
 
@@ -2552,18 +2545,6 @@ void radv_CmdSetScissor(
 
 	assert(firstScissor < MAX_SCISSORS);
 	assert(total_count >= 1 && total_count <= MAX_SCISSORS);
-
-	if (cmd_buffer->device->physical_device->has_scissor_bug) {
-		/* Try to skip unnecessary PS partial flushes when the scissors
-		 * don't change.
-		 */
-		if (!(state->dirty & (RADV_CMD_DIRTY_DYNAMIC_VIEWPORT |
-				      RADV_CMD_DIRTY_DYNAMIC_SCISSOR)) &&
-		    !memcmp(state->dynamic.scissor.scissors + firstScissor,
-			    pScissors, scissorCount * sizeof(*pScissors))) {
-			return;
-		}
-	}
 
 	memcpy(state->dynamic.scissor.scissors + firstScissor, pScissors,
 	       scissorCount * sizeof(*pScissors));
@@ -3144,10 +3125,52 @@ radv_emit_draw_packets(struct radv_cmd_buffer *cmd_buffer,
 	}
 }
 
+/*
+ * Vega and raven have a bug which triggers if there are multiple context
+ * register contexts active at the same time with different scissor values.
+ *
+ * There are two possible workarounds:
+ * 1) Wait for PS_PARTIAL_FLUSH every time the scissor is changed. That way
+ *    there is only ever 1 active set of scissor values at the same time.
+ *
+ * 2) Whenever the hardware switches contexts we have to set the scissor
+ *    registers again even if it is a noop. That way the new context gets
+ *    the correct scissor values.
+ *
+ * This implements option 2. radv_need_late_scissor_emission needs to
+ * return true on affected HW if radv_emit_all_graphics_states sets
+ * any context registers.
+ */
+static bool radv_need_late_scissor_emission(struct radv_cmd_buffer *cmd_buffer,
+                                            bool indexed_draw)
+{
+	struct radv_cmd_state *state = &cmd_buffer->state;
+
+	if (!cmd_buffer->device->physical_device->has_scissor_bug)
+		return false;
+
+	/* Assume all state changes except  these two can imply context rolls. */
+	if (cmd_buffer->state.dirty & ~(RADV_CMD_DIRTY_INDEX_BUFFER |
+	                                RADV_CMD_DIRTY_VERTEX_BUFFER |
+	                                RADV_CMD_DIRTY_PIPELINE))
+		return true;
+
+	if (cmd_buffer->state.emitted_pipeline != cmd_buffer->state.pipeline)
+		return true;
+
+	if (indexed_draw && state->pipeline->graphics.prim_restart_enable &&
+	    (state->index_type ? 0xffffffffu : 0xffffu) != state->last_primitive_reset_index)
+		return true;
+
+	return false;
+}
+
 static void
 radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer,
 			      const struct radv_draw_info *info)
 {
+	bool late_scissor_emission = radv_need_late_scissor_emission(cmd_buffer, info->indexed);
+
 	if ((cmd_buffer->state.dirty & RADV_CMD_DIRTY_FRAMEBUFFER) ||
 	    cmd_buffer->state.emitted_pipeline != cmd_buffer->state.pipeline)
 		radv_emit_rbplus_state(cmd_buffer);
@@ -3177,6 +3200,9 @@ radv_emit_all_graphics_states(struct radv_cmd_buffer *cmd_buffer,
 	radv_emit_draw_registers(cmd_buffer, info->indexed,
 				 info->instance_count > 1, info->indirect,
 				 info->indirect ? 0 : info->count);
+
+	if (late_scissor_emission)
+		radv_emit_scissor(cmd_buffer);
 }
 
 static void
@@ -3360,6 +3386,55 @@ void radv_CmdDrawIndirectCountAMD(
 }
 
 void radv_CmdDrawIndexedIndirectCountAMD(
+	VkCommandBuffer                             commandBuffer,
+	VkBuffer                                    _buffer,
+	VkDeviceSize                                offset,
+	VkBuffer                                    _countBuffer,
+	VkDeviceSize                                countBufferOffset,
+	uint32_t                                    maxDrawCount,
+	uint32_t                                    stride)
+{
+	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
+	RADV_FROM_HANDLE(radv_buffer, buffer, _buffer);
+	RADV_FROM_HANDLE(radv_buffer, count_buffer, _countBuffer);
+	struct radv_draw_info info = {};
+
+	info.indexed = true;
+	info.count = maxDrawCount;
+	info.indirect = buffer;
+	info.indirect_offset = offset;
+	info.count_buffer = count_buffer;
+	info.count_buffer_offset = countBufferOffset;
+	info.stride = stride;
+
+	radv_draw(cmd_buffer, &info);
+}
+
+void radv_CmdDrawIndirectCountKHR(
+	VkCommandBuffer                             commandBuffer,
+	VkBuffer                                    _buffer,
+	VkDeviceSize                                offset,
+	VkBuffer                                    _countBuffer,
+	VkDeviceSize                                countBufferOffset,
+	uint32_t                                    maxDrawCount,
+	uint32_t                                    stride)
+{
+	RADV_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
+	RADV_FROM_HANDLE(radv_buffer, buffer, _buffer);
+	RADV_FROM_HANDLE(radv_buffer, count_buffer, _countBuffer);
+	struct radv_draw_info info = {};
+
+	info.count = maxDrawCount;
+	info.indirect = buffer;
+	info.indirect_offset = offset;
+	info.count_buffer = count_buffer;
+	info.count_buffer_offset = countBufferOffset;
+	info.stride = stride;
+
+	radv_draw(cmd_buffer, &info);
+}
+
+void radv_CmdDrawIndexedIndirectCountKHR(
 	VkCommandBuffer                             commandBuffer,
 	VkBuffer                                    _buffer,
 	VkDeviceSize                                offset,

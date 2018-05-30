@@ -154,6 +154,7 @@ etna_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
       return 4; /* XXX could easily be supported */
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
+   case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
       return 120;
 
    case PIPE_CAP_NPOT_TEXTURES:
@@ -855,9 +856,9 @@ etna_screen_bo_from_handle(struct pipe_screen *pscreen,
    struct etna_screen *screen = etna_screen(pscreen);
    struct etna_bo *bo;
 
-   if (whandle->type == DRM_API_HANDLE_TYPE_SHARED) {
+   if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
       bo = etna_bo_from_name(screen->dev, whandle->handle);
-   } else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+   } else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
       bo = etna_bo_from_dmabuf(screen->dev, whandle->handle);
    } else {
       DBG("Attempt to import unsupported handle type %d", whandle->type);

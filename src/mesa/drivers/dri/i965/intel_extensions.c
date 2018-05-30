@@ -196,7 +196,8 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_texture_multisample = true;
       ctx->Extensions.ARB_uniform_buffer_object = true;
 
-      ctx->Extensions.AMD_vertex_shader_layer = true;
+      if (ctx->API != API_OPENGL_COMPAT)
+         ctx->Extensions.AMD_vertex_shader_layer = true;
       ctx->Extensions.EXT_framebuffer_multisample = true;
       ctx->Extensions.EXT_framebuffer_multisample_blit_scaled = true;
       ctx->Extensions.EXT_transform_feedback = true;
@@ -224,8 +225,10 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_conservative_depth = true;
       ctx->Extensions.ARB_derivative_control = true;
       ctx->Extensions.ARB_framebuffer_no_attachments = true;
-      ctx->Extensions.ARB_gpu_shader5 = true;
-      ctx->Extensions.ARB_gpu_shader_fp64 = devinfo->has_64bit_types;
+      if (ctx->API != API_OPENGL_COMPAT) {
+         ctx->Extensions.ARB_gpu_shader5 = true;
+         ctx->Extensions.ARB_gpu_shader_fp64 = devinfo->has_64bit_types;
+      }
       ctx->Extensions.ARB_shader_atomic_counters = true;
       ctx->Extensions.ARB_shader_atomic_counter_ops = true;
       ctx->Extensions.ARB_shader_clock = true;
@@ -233,7 +236,8 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_shader_image_size = true;
       ctx->Extensions.ARB_shader_precision = true;
       ctx->Extensions.ARB_shader_texture_image_samples = true;
-      ctx->Extensions.ARB_tessellation_shader = true;
+      if (ctx->API != API_OPENGL_COMPAT)
+         ctx->Extensions.ARB_tessellation_shader = true;
       ctx->Extensions.ARB_texture_compression_bptc = true;
       ctx->Extensions.ARB_texture_view = true;
       ctx->Extensions.ARB_shader_storage_buffer_object = true;

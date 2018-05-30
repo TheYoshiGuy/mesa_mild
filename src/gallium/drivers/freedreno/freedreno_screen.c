@@ -261,6 +261,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return 64;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
+	case PIPE_CAP_GLSL_FEATURE_LEVEL_COMPATIBILITY:
 		if (glsl120)
 			return 120;
 		return is_ir3(screen) ? 140 : 120;
@@ -729,12 +730,12 @@ fd_screen_bo_get_handle(struct pipe_screen *pscreen,
 {
 	whandle->stride = stride;
 
-	if (whandle->type == DRM_API_HANDLE_TYPE_SHARED) {
+	if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
 		return fd_bo_get_name(bo, &whandle->handle) == 0;
-	} else if (whandle->type == DRM_API_HANDLE_TYPE_KMS) {
+	} else if (whandle->type == WINSYS_HANDLE_TYPE_KMS) {
 		whandle->handle = fd_bo_handle(bo);
 		return TRUE;
-	} else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+	} else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
 		whandle->handle = fd_bo_dmabuf(bo);
 		return TRUE;
 	} else {
@@ -749,11 +750,11 @@ fd_screen_bo_from_handle(struct pipe_screen *pscreen,
 	struct fd_screen *screen = fd_screen(pscreen);
 	struct fd_bo *bo;
 
-	if (whandle->type == DRM_API_HANDLE_TYPE_SHARED) {
+	if (whandle->type == WINSYS_HANDLE_TYPE_SHARED) {
 		bo = fd_bo_from_name(screen->dev, whandle->handle);
-	} else if (whandle->type == DRM_API_HANDLE_TYPE_KMS) {
+	} else if (whandle->type == WINSYS_HANDLE_TYPE_KMS) {
 		bo = fd_bo_from_handle(screen->dev, whandle->handle, 0);
-	} else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+	} else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
 		bo = fd_bo_from_dmabuf(screen->dev, whandle->handle);
 	} else {
 		DBG("Attempt to import unsupported handle type %d", whandle->type);
