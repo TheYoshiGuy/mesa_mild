@@ -46,6 +46,36 @@ extern "C" {
 
 #define BRW_EU_MAX_INSN_STACK 5
 
+struct brw_insn_state {
+   /* One of BRW_EXECUTE_* */
+   unsigned exec_size:3;
+
+   /* Group in units of channels */
+   unsigned group:5;
+
+   /* Compression control on gen4-5 */
+   bool compressed:1;
+
+   /* One of BRW_MASK_* */
+   unsigned mask_control:1;
+
+   bool saturate:1;
+
+   /* One of BRW_ALIGN_* */
+   unsigned access_mode:1;
+
+   /* One of BRW_PREDICATE_* */
+   enum brw_predicate predicate:4;
+
+   bool pred_inv:1;
+
+   /* Flag subreg.  Bottom bit is subreg, top bit is reg */
+   unsigned flag_subreg:2;
+
+   bool acc_wr_control:1;
+};
+
+
 /* A helper for accessing the last instruction emitted.  This makes it easy
  * to set various bits on an instruction without having to create temporary
  * variable and assign the emitted instruction to those.
@@ -62,8 +92,8 @@ struct brw_codegen {
 
    /* Allow clients to push/pop instruction state:
     */
-   brw_inst stack[BRW_EU_MAX_INSN_STACK];
-   brw_inst *current;
+   struct brw_insn_state stack[BRW_EU_MAX_INSN_STACK];
+   struct brw_insn_state *current;
 
    /** Whether or not the user wants automatic exec sizes
     *
@@ -106,6 +136,9 @@ struct brw_codegen {
 
 void brw_pop_insn_state( struct brw_codegen *p );
 void brw_push_insn_state( struct brw_codegen *p );
+unsigned brw_get_default_exec_size(struct brw_codegen *p);
+unsigned brw_get_default_group(struct brw_codegen *p);
+unsigned brw_get_default_access_mode(struct brw_codegen *p);
 void brw_set_default_exec_size(struct brw_codegen *p, unsigned value);
 void brw_set_default_mask_control( struct brw_codegen *p, unsigned value );
 void brw_set_default_saturate( struct brw_codegen *p, bool enable );
@@ -509,7 +542,8 @@ brw_byte_scattered_write(struct brw_codegen *p,
 
 void
 brw_memory_fence(struct brw_codegen *p,
-                 struct brw_reg dst);
+                 struct brw_reg dst,
+                 enum opcode send_op);
 
 void
 brw_pixel_interpolator_query(struct brw_codegen *p,

@@ -83,6 +83,7 @@ enum virgl_formats {
    VIRGL_FORMAT_L8A8_SRGB               = 96,
    VIRGL_FORMAT_B8G8R8A8_SRGB           = 100,
    VIRGL_FORMAT_B8G8R8X8_SRGB           = 101,
+   VIRGL_FORMAT_R8G8B8A8_SRGB           = 104,
 
    /* compressed formats */
    VIRGL_FORMAT_DXT1_RGB                = 105,
@@ -196,6 +197,10 @@ enum virgl_formats {
    VIRGL_FORMAT_MAX,
 };
 
+/* These are used by the capability_bits field in virgl_caps_v2. */
+#define VIRGL_CAP_NONE 0
+#define VIRGL_CAP_TGSI_INVARIANT       (1 << 0)
+
 #define VIRGL_BIND_DEPTH_STENCIL (1 << 0)
 #define VIRGL_BIND_RENDER_TARGET (1 << 1)
 #define VIRGL_BIND_SAMPLER_VIEW  (1 << 3)
@@ -237,6 +242,11 @@ struct virgl_caps_bool_set1 {
         unsigned has_indirect_draw:1;
         unsigned has_sample_shading:1;
         unsigned has_cull:1;
+        unsigned conditional_render_inverted:1;
+        unsigned derivative_control:1;
+        unsigned polygon_offset_clamp:1;
+        unsigned transform_feedback_overflow_query:1;
+        /* DO NOT ADD ANYMORE MEMBERS - need to add another 32-bit to v2 caps */
 };
 
 /* endless expansion capabilites - current gallium has 252 formats */
@@ -286,6 +296,8 @@ struct virgl_caps_v2 {
         int32_t max_texture_gather_offset;
         uint32_t texture_buffer_offset_alignment;
         uint32_t uniform_buffer_offset_alignment;
+        uint32_t shader_buffer_offset_alignment;
+        uint32_t capability_bits;
 };
 
 union virgl_caps {

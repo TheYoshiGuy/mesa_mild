@@ -21,35 +21,33 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef GEN_GEM_H
-#define GEN_GEM_H
+#ifndef _UTIL_VMA_H
+#define _UTIL_VMA_H
 
-static inline uint64_t
-gen_canonical_address(uint64_t v)
-{
-   /* From the Broadwell PRM Vol. 2a, MI_LOAD_REGISTER_MEM::MemoryAddress:
-    *
-    *    "This field specifies the address of the memory location where the
-    *    register value specified in the DWord above will read from. The
-    *    address specifies the DWord location of the data. Range =
-    *    GraphicsVirtualAddress[63:2] for a DWord register GraphicsAddress
-    *    [63:48] are ignored by the HW and assumed to be in correct
-    *    canonical form [63:48] == [47]."
-    */
-   const int shift = 63 - 47;
-   return (int64_t)(v << shift) >> shift;
-}
+#include <stdint.h>
 
-/**
- * This returns a 48-bit address with the high 16 bits zeroed.
- *
- * It's the opposite of gen_canonicalize_address.
- */
-static inline uint64_t
-gen_48b_address(uint64_t v)
-{
-   const int shift = 63 - 47;
-   return (uint64_t)(v << shift) >> shift;
-}
+#include "list.h"
 
-#endif /* GEN_GEM_H */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+struct util_vma_heap {
+   struct list_head holes;
+};
+
+void util_vma_heap_init(struct util_vma_heap *heap,
+                        uint64_t start, uint64_t size);
+void util_vma_heap_finish(struct util_vma_heap *heap);
+
+uint64_t util_vma_heap_alloc(struct util_vma_heap *heap,
+                             uint64_t size, uint64_t alignment);
+
+void util_vma_heap_free(struct util_vma_heap *heap,
+                        uint64_t offset, uint64_t size);
+
+#ifdef __cplusplus
+} /* extern C */
+#endif
+
+#endif /* _UTIL_DEBUG_H */

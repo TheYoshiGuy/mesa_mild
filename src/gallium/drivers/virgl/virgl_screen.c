@@ -88,9 +88,10 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_INDEP_BLEND_FUNC:
       return vscreen->caps.caps.v1.bset.indep_blend_func;
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
-   case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
    case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
    case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
+      return 1;
+   case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
       return vscreen->caps.caps.v1.bset.fragment_coord_conventions;
    case PIPE_CAP_DEPTH_CLIP_DISABLE:
       return vscreen->caps.caps.v1.bset.depth_clip_disable;
@@ -202,6 +203,16 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return vscreen->caps.caps.v1.bset.has_cull;
    case PIPE_CAP_MAX_VERTEX_STREAMS:
       return vscreen->caps.caps.v1.glsl_level >= 400 ? 4 : 1;
+   case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
+      return vscreen->caps.caps.v1.bset.conditional_render_inverted;
+   case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
+      return vscreen->caps.caps.v1.bset.derivative_control;
+   case PIPE_CAP_POLYGON_OFFSET_CLAMP:
+      return vscreen->caps.caps.v1.bset.polygon_offset_clamp;
+   case PIPE_CAP_QUERY_SO_OVERFLOW:
+      return vscreen->caps.caps.v1.bset.transform_feedback_overflow_query;
+   case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
+      return vscreen->caps.caps.v2.shader_buffer_offset_alignment;
    case PIPE_CAP_TEXTURE_GATHER_SM5:
    case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
    case PIPE_CAP_FAKE_SW_MSAA:
@@ -209,13 +220,10 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
    case PIPE_CAP_MULTI_DRAW_INDIRECT:
    case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
-   case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
-   case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
    case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
    case PIPE_CAP_SAMPLER_VIEW_TARGET:
    case PIPE_CAP_CLIP_HALFZ:
    case PIPE_CAP_VERTEXID_NOBASE:
-   case PIPE_CAP_POLYGON_OFFSET_CLAMP:
    case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
    case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
    case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
@@ -230,7 +238,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_PACK_HALF_FLOAT:
    case PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL:
    case PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL:
-   case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
    case PIPE_CAP_INVALIDATE_BUFFER:
    case PIPE_CAP_GENERATE_MIPMAP:
    case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
@@ -268,7 +275,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_POST_DEPTH_COVERAGE:
    case PIPE_CAP_BINDLESS_TEXTURE:
    case PIPE_CAP_NIR_SAMPLERS_AS_DEREF:
-   case PIPE_CAP_QUERY_SO_OVERFLOW:
    case PIPE_CAP_MEMOBJ:
    case PIPE_CAP_LOAD_CONSTBUF:
    case PIPE_CAP_TGSI_ANY_REG_AS_ADDRESS:

@@ -232,6 +232,10 @@ recreate_growing_buffer(struct brw_context *brw,
    struct intel_batchbuffer *batch = &brw->batch;
    struct brw_bufmgr *bufmgr = screen->bufmgr;
 
+   /* We can't grow buffers when using softpin, so just overallocate them. */
+   if (brw_using_softpin(bufmgr))
+      size *= 2;
+
    grow->bo = brw_bo_alloc(bufmgr, name, size, memzone);
    grow->bo->kflags |= can_do_exec_capture(screen) ? EXEC_OBJECT_CAPTURE : 0;
    grow->partial_bo = NULL;
@@ -381,6 +385,13 @@ grow_buffer(struct brw_context *brw,
    struct intel_batchbuffer *batch = &brw->batch;
    struct brw_bufmgr *bufmgr = brw->bufmgr;
    struct brw_bo *bo = grow->bo;
+
+   /* We can't grow buffers that are softpinned, as the growing mechanism
+    * involves putting a larger buffer at the same gtt_offset...and we've
+    * only allocated the smaller amount of VMA.  Without relocations, this
+    * simply won't work.  This should never happen, however.
+    */
+   assert(!(bo->kflags & EXEC_OBJECT_PINNED));
 
    perf_debug("Growing %s - ran out of space\n", bo->name);
 
@@ -709,6 +720,7 @@ execbuffer(int fd,
 
       /* Update brw_bo::gtt_offset */
       if (batch->validation_list[i].offset != bo->gtt_offset) {
+         assert(!(bo->kflags & EXEC_OBJECT_PINNED));
          DBG("BO %d migrated: 0x%" PRIx64 " -> 0x%llx\n",
              bo->gem_handle, bo->gtt_offset,
              batch->validation_list[i].offset);
@@ -780,11 +792,16 @@ submit_batch(struct brw_context *brw, int in_fence_fd, int *out_fence_fd)
       } else {
          /* Move the batch to the end of the validation list */
          struct drm_i915_gem_exec_object2 tmp;
+         struct brw_bo *tmp_bo;
          const unsigned index = batch->exec_count - 1;
 
          tmp = *entry;
          *entry = batch->validation_list[index];
          batch->validation_list[index] = tmp;
+
+         tmp_bo = batch->exec_bos[0];
+         batch->exec_bos[0] = batch->exec_bos[index];
+         batch->exec_bos[index] = tmp_bo;
       }
 
       ret = execbuffer(dri_screen->fd, batch, brw->hw_ctx,
@@ -903,15 +920,20 @@ emit_reloc(struct intel_batchbuffer *batch,
 {
    assert(target != NULL);
 
+   if (target->kflags & EXEC_OBJECT_PINNED) {
+      brw_use_pinned_bo(batch, target, reloc_flags & RELOC_WRITE);
+      return target->gtt_offset + target_offset;
+   }
+
+   unsigned int index = add_exec_bo(batch, target);
+   struct drm_i915_gem_exec_object2 *entry = &batch->validation_list[index];
+
    if (rlist->reloc_count == rlist->reloc_array_size) {
       rlist->reloc_array_size *= 2;
       rlist->relocs = realloc(rlist->relocs,
                               rlist->reloc_array_size *
                               sizeof(struct drm_i915_gem_relocation_entry));
    }
-
-   unsigned int index = add_exec_bo(batch, target);
-   struct drm_i915_gem_exec_object2 *entry = &batch->validation_list[index];
 
    if (reloc_flags & RELOC_32BIT) {
       /* Restrict this buffer to the low 32 bits of the address space.
@@ -944,6 +966,21 @@ emit_reloc(struct intel_batchbuffer *batch,
     * processing in the kernel
     */
    return entry->offset + target_offset;
+}
+
+void
+brw_use_pinned_bo(struct intel_batchbuffer *batch, struct brw_bo *bo,
+                  unsigned writable_flag)
+{
+   assert(bo->kflags & EXEC_OBJECT_PINNED);
+   assert((writable_flag & ~EXEC_OBJECT_WRITE) == 0);
+
+   unsigned int index = add_exec_bo(batch, bo);
+   struct drm_i915_gem_exec_object2 *entry = &batch->validation_list[index];
+   assert(entry->offset == bo->gtt_offset);
+
+   if (writable_flag)
+      entry->flags |= EXEC_OBJECT_WRITE;
 }
 
 uint64_t

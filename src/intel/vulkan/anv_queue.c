@@ -49,8 +49,11 @@ anv_device_execbuf(struct anv_device *device,
 
    struct drm_i915_gem_exec_object2 *objects =
       (void *)(uintptr_t)execbuf->buffers_ptr;
-   for (uint32_t k = 0; k < execbuf->buffer_count; k++)
+   for (uint32_t k = 0; k < execbuf->buffer_count; k++) {
+      if (execbuf_bos[k]->flags & EXEC_OBJECT_PINNED)
+         assert(execbuf_bos[k]->offset == objects[k].offset);
       execbuf_bos[k]->offset = objects[k].offset;
+   }
 
    return VK_SUCCESS;
 }
@@ -81,7 +84,7 @@ anv_device_submit_simple_batch(struct anv_device *device,
    exec2_objects[0].relocs_ptr = 0;
    exec2_objects[0].alignment = 0;
    exec2_objects[0].offset = bo.offset;
-   exec2_objects[0].flags = 0;
+   exec2_objects[0].flags = bo.flags;
    exec2_objects[0].rsvd1 = 0;
    exec2_objects[0].rsvd2 = 0;
 
@@ -877,7 +880,8 @@ VkResult anv_CreateSemaphore(
       } else {
          semaphore->permanent.type = ANV_SEMAPHORE_TYPE_BO;
          VkResult result = anv_bo_cache_alloc(device, &device->bo_cache,
-                                              4096, &semaphore->permanent.bo);
+                                              4096, 0,
+                                              &semaphore->permanent.bo);
          if (result != VK_SUCCESS) {
             vk_free2(&device->alloc, pAllocator, semaphore);
             return result;
@@ -1023,7 +1027,7 @@ VkResult anv_ImportSemaphoreFdKHR(
          new_impl.type = ANV_SEMAPHORE_TYPE_BO;
 
          VkResult result = anv_bo_cache_import(device, &device->bo_cache,
-                                               fd, &new_impl.bo);
+                                               fd, 0, &new_impl.bo);
          if (result != VK_SUCCESS)
             return result;
 
