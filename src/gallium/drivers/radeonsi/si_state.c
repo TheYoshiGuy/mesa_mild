@@ -87,7 +87,8 @@ static void si_emit_cb_render_state(struct si_context *sctx)
 	    (sctx->ps_shader.cso->info.colors_written & 0x3) != 0x3)
 		cb_target_mask = 0;
 
-	radeon_set_context_reg(cs, R_028238_CB_TARGET_MASK, cb_target_mask);
+	radeon_opt_set_context_reg(sctx, R_028238_CB_TARGET_MASK,
+				   SI_TRACKED_CB_TARGET_MASK, cb_target_mask);
 
 	/* GFX9: Flush DFSM when CB_TARGET_MASK changes.
 	 * I think we don't have to do anything between IBs.
@@ -111,10 +112,12 @@ static void si_emit_cb_render_state(struct si_context *sctx)
 				  blend->blend_enable_4bit & cb_target_mask &&
 				  sctx->framebuffer.nr_samples >= 2;
 
-		radeon_set_context_reg(cs, R_028424_CB_DCC_CONTROL,
-				       S_028424_OVERWRITE_COMBINER_MRT_SHARING_DISABLE(1) |
-				       S_028424_OVERWRITE_COMBINER_WATERMARK(4) |
-				       S_028424_OVERWRITE_COMBINER_DISABLE(oc_disable));
+		radeon_opt_set_context_reg(
+				sctx, R_028424_CB_DCC_CONTROL,
+				SI_TRACKED_CB_DCC_CONTROL,
+				S_028424_OVERWRITE_COMBINER_MRT_SHARING_DISABLE(1) |
+				S_028424_OVERWRITE_COMBINER_WATERMARK(4) |
+				S_028424_OVERWRITE_COMBINER_DISABLE(oc_disable));
 	}
 
 	/* RB+ register settings. */
@@ -242,10 +245,11 @@ static void si_emit_cb_render_state(struct si_context *sctx)
 			}
 		}
 
-		radeon_set_context_reg_seq(cs, R_028754_SX_PS_DOWNCONVERT, 3);
-		radeon_emit(cs, sx_ps_downconvert);	/* R_028754_SX_PS_DOWNCONVERT */
-		radeon_emit(cs, sx_blend_opt_epsilon);	/* R_028758_SX_BLEND_OPT_EPSILON */
-		radeon_emit(cs, sx_blend_opt_control);	/* R_02875C_SX_BLEND_OPT_CONTROL */
+		/* SX_PS_DOWNCONVERT, SX_BLEND_OPT_EPSILON, SX_BLEND_OPT_CONTROL */
+		radeon_opt_set_context_reg3(sctx, R_028754_SX_PS_DOWNCONVERT,
+					    SI_TRACKED_SX_PS_DOWNCONVERT,
+					    sx_ps_downconvert, sx_blend_opt_epsilon,
+					    sx_blend_opt_control);
 	}
 }
 
@@ -741,7 +745,6 @@ static void si_emit_clip_state(struct si_context *sctx)
 
 static void si_emit_clip_regs(struct si_context *sctx)
 {
-	struct radeon_winsys_cs *cs = sctx->gfx_cs;
 	struct si_shader *vs = si_get_vs_state(sctx);
 	struct si_shader_selector *vs_sel = vs->selector;
 	struct tgsi_shader_info *info = &vs_sel->info;
@@ -769,12 +772,14 @@ static void si_emit_clip_regs(struct si_context *sctx)
 	clipdist_mask &= rs->clip_plane_enable;
 	culldist_mask |= clipdist_mask;
 
-	radeon_set_context_reg(cs, R_02881C_PA_CL_VS_OUT_CNTL,
+	radeon_opt_set_context_reg(sctx, R_02881C_PA_CL_VS_OUT_CNTL,
+		SI_TRACKED_PA_CL_VS_OUT_CNTL,
 		vs_sel->pa_cl_vs_out_cntl |
 		S_02881C_VS_OUT_CCDIST0_VEC_ENA((total_mask & 0x0F) != 0) |
 		S_02881C_VS_OUT_CCDIST1_VEC_ENA((total_mask & 0xF0) != 0) |
 		clipdist_mask | (culldist_mask << 8));
-	radeon_set_context_reg(cs, R_028810_PA_CL_CLIP_CNTL,
+	radeon_opt_set_context_reg(sctx, R_028810_PA_CL_CLIP_CNTL,
+		SI_TRACKED_PA_CL_CLIP_CNTL,
 		rs->pa_cl_clip_cntl |
 		ucp_mask |
 		S_028810_CLIP_DISABLE(window_space));
@@ -1343,28 +1348,25 @@ void si_save_qbo_state(struct si_context *sctx, struct si_qbo_state *st)
 
 static void si_emit_db_render_state(struct si_context *sctx)
 {
-	struct radeon_winsys_cs *cs = sctx->gfx_cs;
 	struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
-	unsigned db_shader_control;
-
-	radeon_set_context_reg_seq(cs, R_028000_DB_RENDER_CONTROL, 2);
+	unsigned db_shader_control, db_render_control, db_count_control;
 
 	/* DB_RENDER_CONTROL */
 	if (sctx->dbcb_depth_copy_enabled ||
 	    sctx->dbcb_stencil_copy_enabled) {
-		radeon_emit(cs,
-			    S_028000_DEPTH_COPY(sctx->dbcb_depth_copy_enabled) |
-			    S_028000_STENCIL_COPY(sctx->dbcb_stencil_copy_enabled) |
-			    S_028000_COPY_CENTROID(1) |
-			    S_028000_COPY_SAMPLE(sctx->dbcb_copy_sample));
+		db_render_control =
+			S_028000_DEPTH_COPY(sctx->dbcb_depth_copy_enabled) |
+			S_028000_STENCIL_COPY(sctx->dbcb_stencil_copy_enabled) |
+			S_028000_COPY_CENTROID(1) |
+			S_028000_COPY_SAMPLE(sctx->dbcb_copy_sample);
 	} else if (sctx->db_flush_depth_inplace || sctx->db_flush_stencil_inplace) {
-		radeon_emit(cs,
-			    S_028000_DEPTH_COMPRESS_DISABLE(sctx->db_flush_depth_inplace) |
-			    S_028000_STENCIL_COMPRESS_DISABLE(sctx->db_flush_stencil_inplace));
+		db_render_control =
+			S_028000_DEPTH_COMPRESS_DISABLE(sctx->db_flush_depth_inplace) |
+			S_028000_STENCIL_COMPRESS_DISABLE(sctx->db_flush_stencil_inplace);
 	} else {
-		radeon_emit(cs,
-			    S_028000_DEPTH_CLEAR_ENABLE(sctx->db_depth_clear) |
-			    S_028000_STENCIL_CLEAR_ENABLE(sctx->db_stencil_clear));
+		db_render_control =
+			S_028000_DEPTH_CLEAR_ENABLE(sctx->db_depth_clear) |
+			S_028000_STENCIL_CLEAR_ENABLE(sctx->db_stencil_clear);
 	}
 
 	/* DB_COUNT_CONTROL (occlusion queries) */
@@ -1373,28 +1375,33 @@ static void si_emit_db_render_state(struct si_context *sctx)
 		bool perfect = sctx->num_perfect_occlusion_queries > 0;
 
 		if (sctx->chip_class >= CIK) {
-			radeon_emit(cs,
-				    S_028004_PERFECT_ZPASS_COUNTS(perfect) |
-				    S_028004_SAMPLE_RATE(sctx->framebuffer.log_samples) |
-				    S_028004_ZPASS_ENABLE(1) |
-				    S_028004_SLICE_EVEN_ENABLE(1) |
-				    S_028004_SLICE_ODD_ENABLE(1));
+			db_count_control =
+				S_028004_PERFECT_ZPASS_COUNTS(perfect) |
+				S_028004_SAMPLE_RATE(sctx->framebuffer.log_samples) |
+				S_028004_ZPASS_ENABLE(1) |
+				S_028004_SLICE_EVEN_ENABLE(1) |
+				S_028004_SLICE_ODD_ENABLE(1);
 		} else {
-			radeon_emit(cs,
-				    S_028004_PERFECT_ZPASS_COUNTS(perfect) |
-				    S_028004_SAMPLE_RATE(sctx->framebuffer.log_samples));
+			db_count_control =
+				S_028004_PERFECT_ZPASS_COUNTS(perfect) |
+				S_028004_SAMPLE_RATE(sctx->framebuffer.log_samples);
 		}
 	} else {
 		/* Disable occlusion queries. */
 		if (sctx->chip_class >= CIK) {
-			radeon_emit(cs, 0);
+			db_count_control = 0;
 		} else {
-			radeon_emit(cs, S_028004_ZPASS_INCREMENT_DISABLE(1));
+			db_count_control = S_028004_ZPASS_INCREMENT_DISABLE(1);
 		}
 	}
 
+	radeon_opt_set_context_reg2(sctx, R_028000_DB_RENDER_CONTROL,
+				    SI_TRACKED_DB_RENDER_CONTROL, db_render_control,
+				    db_count_control);
+
 	/* DB_RENDER_OVERRIDE2 */
-	radeon_set_context_reg(cs, R_028010_DB_RENDER_OVERRIDE2,
+	radeon_opt_set_context_reg(sctx,  R_028010_DB_RENDER_OVERRIDE2,
+		SI_TRACKED_DB_RENDER_OVERRIDE2,
 		S_028010_DISABLE_ZMASK_EXPCLEAR_OPTIMIZATION(sctx->db_depth_disable_expclear) |
 		S_028010_DISABLE_SMEM_EXPCLEAR_OPTIMIZATION(sctx->db_stencil_disable_expclear) |
 		S_028010_DECOMPRESS_Z_ON_FLUSH(sctx->framebuffer.nr_samples >= 4));
@@ -1415,8 +1422,8 @@ static void si_emit_db_render_state(struct si_context *sctx)
 	    !sctx->screen->rbplus_allowed)
 		db_shader_control |= S_02880C_DUAL_QUAD_DISABLE(1);
 
-	radeon_set_context_reg(cs, R_02880C_DB_SHADER_CONTROL,
-			       db_shader_control);
+	radeon_opt_set_context_reg(sctx, R_02880C_DB_SHADER_CONTROL,
+				   SI_TRACKED_DB_SHADER_CONTROL, db_shader_control);
 }
 
 /*
@@ -3244,8 +3251,10 @@ static void si_emit_msaa_sample_locs(struct si_context *sctx)
 		    rs && !rs->multisample_enable)
 			small_prim_filter_cntl &= C_028830_SMALL_PRIM_FILTER_ENABLE;
 
-		radeon_set_context_reg(cs, R_028830_PA_SU_SMALL_PRIM_FILTER_CNTL,
-				       small_prim_filter_cntl);
+		radeon_opt_set_context_reg(sctx,
+					   R_028830_PA_SU_SMALL_PRIM_FILTER_CNTL,
+					   SI_TRACKED_PA_SU_SMALL_PRIM_FILTER_CNTL,
+					   small_prim_filter_cntl);
 	}
 }
 
@@ -3407,6 +3416,7 @@ static void si_emit_msaa_config(struct si_context *sctx)
 	 *       endcaps.
 	 */
 	unsigned sc_line_cntl = S_028BDC_DX10_DIAMOND_TEST_ENA(1);
+	unsigned sc_aa_config = 0;
 
 	if (coverage_samples > 1) {
 		/* distance from the pixel center, indexed by log2(nr_samples) */
@@ -3422,39 +3432,32 @@ static void si_emit_msaa_config(struct si_context *sctx)
 		unsigned ps_iter_samples = si_get_ps_iter_samples(sctx);
 		unsigned log_ps_iter_samples = util_logbase2(ps_iter_samples);
 
-		radeon_set_context_reg_seq(cs, R_028BDC_PA_SC_LINE_CNTL, 2);
-		radeon_emit(cs, sc_line_cntl |
-			    S_028BDC_EXPAND_LINE_WIDTH(1)); /* R_028BDC_PA_SC_LINE_CNTL */
-		radeon_emit(cs, S_028BE0_MSAA_NUM_SAMPLES(log_samples) |
-			    S_028BE0_MAX_SAMPLE_DIST(max_dist[log_samples]) |
-			    S_028BE0_MSAA_EXPOSED_SAMPLES(log_samples)); /* R_028BE0_PA_SC_AA_CONFIG */
+		sc_line_cntl |= S_028BDC_EXPAND_LINE_WIDTH(1);
+		sc_aa_config = S_028BE0_MSAA_NUM_SAMPLES(log_samples) |
+			       S_028BE0_MAX_SAMPLE_DIST(max_dist[log_samples]) |
+			       S_028BE0_MSAA_EXPOSED_SAMPLES(log_samples);
 
 		if (sctx->framebuffer.nr_samples > 1) {
-			radeon_set_context_reg(cs, R_028804_DB_EQAA,
-					       db_eqaa |
-					       S_028804_MAX_ANCHOR_SAMPLES(log_z_samples) |
-					       S_028804_PS_ITER_SAMPLES(log_ps_iter_samples) |
-					       S_028804_MASK_EXPORT_NUM_SAMPLES(log_samples) |
-					       S_028804_ALPHA_TO_MASK_NUM_SAMPLES(log_samples));
-			radeon_set_context_reg(cs, R_028A4C_PA_SC_MODE_CNTL_1,
-					       S_028A4C_PS_ITER_SAMPLE(ps_iter_samples > 1) |
-					       sc_mode_cntl_1);
+			db_eqaa |= S_028804_MAX_ANCHOR_SAMPLES(log_z_samples) |
+				   S_028804_PS_ITER_SAMPLES(log_ps_iter_samples) |
+				   S_028804_MASK_EXPORT_NUM_SAMPLES(log_samples) |
+				   S_028804_ALPHA_TO_MASK_NUM_SAMPLES(log_samples);
+			sc_mode_cntl_1 |= S_028A4C_PS_ITER_SAMPLE(ps_iter_samples > 1);
 		} else if (sctx->smoothing_enabled) {
-			radeon_set_context_reg(cs, R_028804_DB_EQAA,
-					       db_eqaa |
-					       S_028804_OVERRASTERIZATION_AMOUNT(log_samples));
-			radeon_set_context_reg(cs, R_028A4C_PA_SC_MODE_CNTL_1,
-					       sc_mode_cntl_1);
+			db_eqaa |= S_028804_OVERRASTERIZATION_AMOUNT(log_samples);
 		}
-	} else {
-		radeon_set_context_reg_seq(cs, R_028BDC_PA_SC_LINE_CNTL, 2);
-		radeon_emit(cs, sc_line_cntl); /* R_028BDC_PA_SC_LINE_CNTL */
-		radeon_emit(cs, 0); /* R_028BE0_PA_SC_AA_CONFIG */
-
-		radeon_set_context_reg(cs, R_028804_DB_EQAA, db_eqaa);
-		radeon_set_context_reg(cs, R_028A4C_PA_SC_MODE_CNTL_1,
-				       sc_mode_cntl_1);
 	}
+
+	/* R_028BDC_PA_SC_LINE_CNTL, R_028BE0_PA_SC_AA_CONFIG */
+	radeon_opt_set_context_reg2(sctx, R_028BDC_PA_SC_LINE_CNTL,
+				    SI_TRACKED_PA_SC_LINE_CNTL, sc_line_cntl,
+				    sc_aa_config);
+	/* R_028804_DB_EQAA */
+	radeon_opt_set_context_reg(sctx, R_028804_DB_EQAA, SI_TRACKED_DB_EQAA,
+				   db_eqaa);
+	/* R_028A4C_PA_SC_MODE_CNTL_1 */
+	radeon_opt_set_context_reg(sctx, R_028A4C_PA_SC_MODE_CNTL_1,
+				   SI_TRACKED_PA_SC_MODE_CNTL_1, sc_mode_cntl_1);
 
 	/* GFX9: Flush DFSM when the AA mode changes. */
 	if (sctx->screen->dfsm_allowed) {

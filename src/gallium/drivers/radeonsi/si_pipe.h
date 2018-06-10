@@ -409,7 +409,7 @@ struct si_screen {
 
 	struct radeon_info		info;
 	uint64_t			debug_flags;
-	char				renderer_string[100];
+	char				renderer_string[183];
 
 	unsigned			gs_table_depth;
 	unsigned			tess_offchip_block_dw_size;
@@ -1033,6 +1033,8 @@ struct si_context {
 
 	void (*dma_clear_buffer)(struct si_context *sctx, struct pipe_resource *dst,
 				 uint64_t offset, uint64_t size, unsigned value);
+
+	struct si_tracked_regs			tracked_regs;
 };
 
 /* cik_sdma.c */

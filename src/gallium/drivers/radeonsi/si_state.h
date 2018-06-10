@@ -206,6 +206,43 @@ struct si_shader_data {
 	uint32_t		sh_base[SI_NUM_SHADERS];
 };
 
+/* The list of registers whose emitted values are remembered by si_context. */
+enum si_tracked_reg {
+	SI_TRACKED_DB_RENDER_CONTROL, /* 2 consecutive registers */
+	SI_TRACKED_DB_COUNT_CONTROL,
+
+	SI_TRACKED_DB_RENDER_OVERRIDE2,
+	SI_TRACKED_DB_SHADER_CONTROL,
+
+	SI_TRACKED_CB_TARGET_MASK,
+	SI_TRACKED_CB_DCC_CONTROL,
+
+	SI_TRACKED_SX_PS_DOWNCONVERT, /* 3 consecutive registers */
+	SI_TRACKED_SX_BLEND_OPT_EPSILON,
+	SI_TRACKED_SX_BLEND_OPT_CONTROL,
+
+	SI_TRACKED_PA_SC_LINE_CNTL, /* 2 consecutive registers */
+	SI_TRACKED_PA_SC_AA_CONFIG,
+
+	SI_TRACKED_DB_EQAA,
+	SI_TRACKED_PA_SC_MODE_CNTL_1,
+
+	SI_TRACKED_PA_SU_SMALL_PRIM_FILTER_CNTL,
+
+	SI_TRACKED_PA_CL_VS_OUT_CNTL,
+	SI_TRACKED_PA_CL_CLIP_CNTL,
+
+	SI_TRACKED_PA_SC_BINNER_CNTL_0,
+	SI_TRACKED_DB_DFSM_CONTROL,
+
+	SI_NUM_TRACKED_REGS,
+};
+
+struct si_tracked_regs {
+	uint32_t		reg_saved;
+	uint32_t		reg_value[SI_NUM_TRACKED_REGS];
+};
+
 /* Private read-write buffer slots. */
 enum {
 	SI_ES_RING_ESGS,

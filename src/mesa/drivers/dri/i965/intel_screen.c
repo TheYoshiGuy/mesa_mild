@@ -342,6 +342,10 @@ modifier_is_supported(const struct gen_device_info *devinfo,
       }
 
       mesa_format format = driImageFormatToGLFormat(dri_format);
+      /* Whether or not we support compression is based on the RGBA non-sRGB
+       * version of the format.
+       */
+      format = _mesa_format_fallback_rgbx_to_rgba(format);
       format = _mesa_get_srgb_format_linear(format);
       if (!isl_format_supports_ccs_e(devinfo,
                                      brw_isl_format_for_mesa_format(format)))
@@ -1096,6 +1100,11 @@ intel_create_image_from_fds_common(__DRIscreen *dri_screen,
       image->strides[index] = strides[index];
 
       mesa_format format = driImageFormatToGLFormat(f->planes[i].dri_format);
+      /* The images we will create are actually based on the RGBA non-sRGB
+       * version of the format.
+       */
+      format = _mesa_format_fallback_rgbx_to_rgba(format);
+      format = _mesa_get_srgb_format_linear(format);
 
       ok = isl_surf_init(&screen->isl_dev, &surf,
                          .dim = ISL_SURF_DIM_2D,
@@ -1263,26 +1272,52 @@ intel_create_image_from_dma_bufs(__DRIscreen *dri_screen,
                                             loaderPrivate);
 }
 
+static bool
+intel_image_format_is_supported(const struct gen_device_info *devinfo,
+                                const struct intel_image_format *fmt)
+{
+   if (fmt->fourcc == __DRI_IMAGE_FOURCC_SARGB8888 ||
+       fmt->fourcc == __DRI_IMAGE_FOURCC_SABGR8888)
+      return false;
+
+#ifndef NDEBUG
+   if (fmt->nplanes == 1) {
+      mesa_format format = driImageFormatToGLFormat(fmt->planes[0].dri_format);
+      /* The images we will create are actually based on the RGBA non-sRGB
+       * version of the format.
+       */
+      format = _mesa_format_fallback_rgbx_to_rgba(format);
+      format = _mesa_get_srgb_format_linear(format);
+      enum isl_format isl_format = brw_isl_format_for_mesa_format(format);
+      assert(isl_format_supports_rendering(devinfo, isl_format));
+   }
+#endif
+
+   return true;
+}
+
 static GLboolean
-intel_query_dma_buf_formats(__DRIscreen *screen, int max,
+intel_query_dma_buf_formats(__DRIscreen *_screen, int max,
                             int *formats, int *count)
 {
-   int i, j = 0;
+   struct intel_screen *screen = _screen->driverPrivate;
+   int num_formats = 0, i;
 
-   if (max == 0) {
-      /* Note, sRGB formats not included. */
-      *count = ARRAY_SIZE(intel_image_formats) - 2;
-      return true;
+   for (i = 0; i < ARRAY_SIZE(intel_image_formats); i++) {
+      if (!intel_image_format_is_supported(&screen->devinfo,
+                                           &intel_image_formats[i]))
+         continue;
+
+      num_formats++;
+      if (max == 0)
+         continue;
+
+      formats[num_formats - 1] = intel_image_formats[i].fourcc;
+      if (num_formats >= max)
+         break;
    }
 
-   for (i = 0; i < (ARRAY_SIZE(intel_image_formats)) && j < max; i++) {
-     if (intel_image_formats[i].fourcc == __DRI_IMAGE_FOURCC_SARGB8888 ||
-         intel_image_formats[i].fourcc == __DRI_IMAGE_FOURCC_SABGR8888)
-       continue;
-     formats[j++] = intel_image_formats[i].fourcc;
-   }
-
-   *count = j;
+   *count = num_formats;
    return true;
 }
 
@@ -1298,6 +1333,9 @@ intel_query_dma_buf_modifiers(__DRIscreen *_screen, int fourcc, int max,
 
    f = intel_image_format_lookup(fourcc);
    if (f == NULL)
+      return false;
+
+   if (!intel_image_format_is_supported(&screen->devinfo, f))
       return false;
 
    for (i = 0; i < ARRAY_SIZE(supported_modifiers); i++) {
