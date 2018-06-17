@@ -178,7 +178,7 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                          v3d->prog.fs->prog_data.fs->discard);
 
                 shader.fragment_shader_uses_real_pixel_centre_w_in_addition_to_centroid_w2 =
-                        v3d->prog.fs->prog_data.fs->uses_centroid_and_center_w;
+                        v3d->prog.fs->prog_data.fs->uses_center_w;
 
                 shader.number_of_varyings_in_fragment_shader =
                         v3d->prog.fs->prog_data.base->num_inputs;
@@ -278,6 +278,7 @@ v3d_emit_gl_shader_state(struct v3d_context *v3d,
                         attr.maximum_index = 0xffffff;
 #endif
                 }
+                STATIC_ASSERT(sizeof(vtx->attrs) >= VC5_MAX_ATTRIBUTES * size);
         }
 
         if (vtx->num_elements == 0) {
@@ -370,7 +371,8 @@ v3d_update_job_ez(struct v3d_context *v3d, struct v3d_job *job)
                 job->ez_state = VC5_EZ_DISABLED;
         }
 
-        if (job->first_ez_state == VC5_EZ_UNDECIDED)
+        if (job->first_ez_state == VC5_EZ_UNDECIDED &&
+            (job->ez_state != VC5_EZ_DISABLED || job->draw_calls_queued == 0))
                 job->first_ez_state = job->ez_state;
 }
 

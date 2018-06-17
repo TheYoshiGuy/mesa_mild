@@ -810,6 +810,14 @@ vec4_visitor::opt_algebraic()
          }
          break;
 
+      case BRW_OPCODE_OR:
+         if (inst->src[1].is_zero()) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[1] = src_reg();
+            progress = true;
+         }
+         break;
+
       case VEC4_OPCODE_UNPACK_UNIFORM:
          if (inst->src[0].file != UNIFORM) {
             inst->opcode = BRW_OPCODE_MOV;
@@ -1284,6 +1292,15 @@ vec4_visitor::opt_register_coalesce()
                   }
                }
             }
+
+            /* VS_OPCODE_UNPACK_FLAGS_SIMD4X2 generates a bunch of mov(1)
+             * instructions, and this optimization pass is not capable of
+             * handling that.  Bail on these instructions and hope that some
+             * later optimization pass can do the right thing after they are
+             * expanded.
+             */
+            if (scan_inst->opcode == VS_OPCODE_UNPACK_FLAGS_SIMD4X2)
+               break;
 
             /* This doesn't handle saturation on the instruction we
              * want to coalesce away if the register types do not match.

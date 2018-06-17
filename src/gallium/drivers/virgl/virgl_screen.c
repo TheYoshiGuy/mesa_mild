@@ -213,6 +213,10 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return vscreen->caps.caps.v1.bset.transform_feedback_overflow_query;
    case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
       return vscreen->caps.caps.v2.shader_buffer_offset_alignment;
+   case PIPE_CAP_DOUBLES:
+      return vscreen->caps.caps.v1.bset.has_fp64;
+   case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
+      return vscreen->caps.caps.v2.max_shader_patch_varyings;
    case PIPE_CAP_TEXTURE_GATHER_SM5:
    case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
    case PIPE_CAP_FAKE_SW_MSAA:
@@ -227,7 +231,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
    case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
    case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
-   case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
    case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
    case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
    case PIPE_CAP_DEPTH_BOUNDS_TEST:
@@ -268,7 +271,6 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_POLYGON_MODE_FILL_RECTANGLE:
    case PIPE_CAP_SPARSE_BUFFER_PAGE_SIZE:
    case PIPE_CAP_TGSI_BALLOT:
-   case PIPE_CAP_DOUBLES:
    case PIPE_CAP_TGSI_TES_LAYER_VIEWPORT:
    case PIPE_CAP_CAN_BIND_CONST_BUFFER_AS_VERTEX:
    case PIPE_CAP_ALLOW_MAPPED_BUFFERS_DURING_EXECUTION:
@@ -291,6 +293,7 @@ virgl_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_POINTS_LINES:
    case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
    case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
+   case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
       return 0;
    case PIPE_CAP_VENDOR_ID:
       return 0x1af4;
@@ -315,11 +318,18 @@ virgl_get_shader_param(struct pipe_screen *screen,
                        enum pipe_shader_cap param)
 {
    struct virgl_screen *vscreen = virgl_screen(screen);
+
+   if ((shader == PIPE_SHADER_TESS_CTRL || shader == PIPE_SHADER_TESS_EVAL) &&
+       !vscreen->caps.caps.v1.bset.has_tessellation_shaders)
+      return 0;
+
    switch(shader)
    {
    case PIPE_SHADER_FRAGMENT:
    case PIPE_SHADER_VERTEX:
    case PIPE_SHADER_GEOMETRY:
+   case PIPE_SHADER_TESS_CTRL:
+   case PIPE_SHADER_TESS_EVAL:
       switch (param) {
       case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
       case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:

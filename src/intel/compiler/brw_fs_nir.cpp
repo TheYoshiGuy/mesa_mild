@@ -2305,11 +2305,11 @@ fs_visitor::emit_gs_input_load(const fs_reg &dst,
       }
 
       if (type_sz(dst.type) == 8) {
-         shuffle_32bit_load_result_to_64bit_data(
-            bld, tmp_dst, retype(tmp_dst, BRW_REGISTER_TYPE_F), num_components);
-
-         for (unsigned c = 0; c < num_components; c++)
-            bld.MOV(offset(dst, bld, iter * 2 + c), offset(tmp_dst, bld, c));
+         shuffle_from_32bit_read(bld,
+                                 offset(dst, bld, iter * 2),
+                                 retype(tmp_dst, BRW_REGISTER_TYPE_D),
+                                 0,
+                                 num_components);
       }
 
       if (num_iterations > 1) {
@@ -2372,10 +2372,8 @@ do_untyped_vector_read(const fs_builder &bld,
                               1 /* dims */,
                               num_components_32bit,
                               BRW_PREDICATE_NONE);
-         shuffle_32bit_load_result_to_16bit_data(bld,
-               retype(dest, BRW_REGISTER_TYPE_W),
-               retype(read_result, BRW_REGISTER_TYPE_D),
-               first_component, num_components);
+         shuffle_from_32bit_read(bld, dest, read_result, first_component,
+                                 num_components);
       } else {
          fs_reg read_offset = bld.vgrf(BRW_REGISTER_TYPE_UD);
          for (unsigned i = 0; i < num_components; i++) {
@@ -2436,16 +2434,8 @@ do_untyped_vector_read(const fs_builder &bld,
                                                 BRW_PREDICATE_NONE);
 
          /* Shuffle the 32-bit load result into valid 64-bit data */
-         const fs_reg packed_result = bld.vgrf(dest.type, iter_components);
-         shuffle_32bit_load_result_to_64bit_data(
-            bld, packed_result, read_result, iter_components);
-
-         /* Move each component to its destination */
-         read_result = retype(read_result, BRW_REGISTER_TYPE_DF);
-         for (int c = 0; c < iter_components; c++) {
-            bld.MOV(offset(dest, bld, it * 2 + c),
-                    offset(packed_result, bld, c));
-         }
+         shuffle_from_32bit_read(bld, offset(dest, bld, it * 2),
+                                 read_result, 0, iter_components);
 
          bld.ADD(read_offset, read_offset, brw_imm_ud(16));
       }
@@ -2493,16 +2483,11 @@ fs_visitor::nir_emit_vs_intrinsic(const fs_builder &bld,
       if (type_sz(dest.type) == 8)
          first_component /= 2;
 
-      for (unsigned j = 0; j < num_components; j++) {
-         bld.MOV(offset(dest, bld, j), offset(src, bld, j + first_component));
-      }
-
-      if (type_sz(dest.type) == 8) {
-         shuffle_32bit_load_result_to_64bit_data(bld,
-                                                 dest,
-                                                 retype(dest, BRW_REGISTER_TYPE_F),
-                                                 instr->num_components);
-      }
+      /* For 16-bit support maybe a temporary will be needed to copy from
+       * the ATTR file.
+       */
+      shuffle_from_32bit_read(bld, dest, retype(src, BRW_REGISTER_TYPE_D),
+                              first_component, num_components);
       break;
    }
 
@@ -2680,13 +2665,10 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
           * or SSBOs.
           */
          if (type_sz(dst.type) == 8) {
-            shuffle_32bit_load_result_to_64bit_data(
-               bld, dst, retype(dst, BRW_REGISTER_TYPE_F), num_components);
-
-            for (unsigned c = 0; c < num_components; c++) {
-               bld.MOV(offset(orig_dst, bld, iter * 2 + c),
-                       offset(dst, bld, c));
-            }
+            shuffle_from_32bit_read(bld,
+                                    offset(orig_dst, bld, iter * 2),
+                                    retype(dst, BRW_REGISTER_TYPE_D),
+                                    0, num_components);
          }
 
          /* Copy the temporary to the destination to deal with writemasking.
@@ -2860,8 +2842,7 @@ fs_visitor::nir_emit_tcs_intrinsic(const fs_builder &bld,
                 * for that.
                 */
                unsigned channel = iter * 2 + i;
-               fs_reg dest = shuffle_64bit_data_for_32bit_write(bld,
-                  offset(value, bld, channel), 1);
+               fs_reg dest = shuffle_for_32bit_write(bld, value, channel, 1);
 
                srcs[header_regs + (i + first_component) * 2] = dest;
                srcs[header_regs + (i + first_component) * 2 + 1] =
@@ -3029,13 +3010,10 @@ fs_visitor::nir_emit_tes_intrinsic(const fs_builder &bld,
              * or SSBOs.
              */
             if (type_sz(dest.type) == 8) {
-               shuffle_32bit_load_result_to_64bit_data(
-                  bld, dest, retype(dest, BRW_REGISTER_TYPE_F), num_components);
-
-               for (unsigned c = 0; c < num_components; c++) {
-                  bld.MOV(offset(orig_dest, bld, iter * 2 + c),
-                          offset(dest, bld, c));
-               }
+               shuffle_from_32bit_read(bld,
+                                       offset(orig_dest, bld, iter * 2),
+                                       retype(dest, BRW_REGISTER_TYPE_D),
+                                       0, num_components);
             }
 
             /* If we are loading double data and we need a second read message
@@ -3374,6 +3352,7 @@ fs_visitor::nir_emit_fs_intrinsic(const fs_builder &bld,
       unsigned base = nir_intrinsic_base(instr);
       unsigned comp = nir_intrinsic_component(instr);
       unsigned num_components = instr->num_components;
+      fs_reg orig_dest = dest;
       enum brw_reg_type type = dest.type;
 
       /* Special case fields in the VUE header */
@@ -3389,6 +3368,7 @@ fs_visitor::nir_emit_fs_intrinsic(const fs_builder &bld,
           */
          type = BRW_REGISTER_TYPE_F;
          num_components *= 2;
+         dest = bld.vgrf(type, num_components);
       }
 
       for (unsigned int i = 0; i < num_components; i++) {
@@ -3397,10 +3377,8 @@ fs_visitor::nir_emit_fs_intrinsic(const fs_builder &bld,
       }
 
       if (nir_dest_bit_size(instr->dest) == 64) {
-         shuffle_32bit_load_result_to_64bit_data(bld,
-                                                 dest,
-                                                 retype(dest, type),
-                                                 instr->num_components);
+         shuffle_from_32bit_read(bld, orig_dest, dest, 0,
+                                 instr->num_components);
       }
       break;
    }
@@ -3718,8 +3696,8 @@ fs_visitor::nir_emit_cs_intrinsic(const fs_builder &bld,
       unsigned type_size = 4;
       if (nir_src_bit_size(instr->src[0]) == 64) {
          type_size = 8;
-         val_reg = shuffle_64bit_data_for_32bit_write(bld,
-            val_reg, instr->num_components);
+         val_reg = shuffle_for_32bit_write(bld, val_reg, 0,
+                                           instr->num_components);
       }
 
       unsigned type_slots = type_size / 4;
@@ -4260,8 +4238,8 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
              * iteration handle the rest.
              */
             num_components = MIN2(2, num_components);
-            write_src = shuffle_64bit_data_for_32bit_write(bld, write_src,
-                                                           num_components);
+            write_src = shuffle_for_32bit_write(bld, write_src, 0,
+                                                num_components);
          } else if (type_size < 4) {
             assert(type_size == 2);
             /* For 16-bit types we pack two consecutive values into a 32-bit
@@ -4299,11 +4277,8 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
              * aligned. Shuffling only one component would be the same as
              * striding it.
              */
-            fs_reg tmp = bld.vgrf(BRW_REGISTER_TYPE_D,
-                                  DIV_ROUND_UP(num_components, 2));
-            shuffle_16bit_data_for_32bit_write(bld, tmp, write_src,
-                                               num_components);
-            write_src = tmp;
+            write_src = shuffle_for_32bit_write(bld, write_src, 0,
+                                                num_components);
          }
 
          fs_reg offset_reg;
@@ -4360,7 +4335,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
       unsigned num_components = instr->num_components;
       unsigned first_component = nir_intrinsic_component(instr);
       if (nir_src_bit_size(instr->src[0]) == 64) {
-         src = shuffle_64bit_data_for_32bit_write(bld, src, num_components);
+         src = shuffle_for_32bit_write(bld, src, 0, num_components);
          num_components *= 2;
       }
 
@@ -5215,151 +5190,148 @@ fs_visitor::nir_emit_jump(const fs_builder &bld, nir_jump_instr *instr)
    }
 }
 
-/**
- * This helper takes the result of a load operation that reads 32-bit elements
- * in this format:
+/*
+ * This helper takes a source register and un/shuffles it into the destination
+ * register.
  *
- * x x x x x x x x
- * y y y y y y y y
- * z z z z z z z z
- * w w w w w w w w
+ * If source type size is smaller than destination type size the operation
+ * needed is a component shuffle. The opposite case would be an unshuffle. If
+ * source/destination type size is equal a shuffle is done that would be
+ * equivalent to a simple MOV.
  *
- * and shuffles the data to get this:
+ * For example, if source is a 16-bit type and destination is 32-bit. A 3
+ * components .xyz 16-bit vector on SIMD8 would be.
  *
- * x y x y x y x y
- * x y x y x y x y
- * z w z w z w z w
- * z w z w z w z w
+ *    |x1|x2|x3|x4|x5|x6|x7|x8|y1|y2|y3|y4|y5|y6|y7|y8|
+ *    |z1|z2|z3|z4|z5|z6|z7|z8|  |  |  |  |  |  |  |  |
  *
- * Which is exactly what we want if the load is reading 64-bit components
- * like doubles, where x represents the low 32-bit of the x double component
- * and y represents the high 32-bit of the x double component (likewise with
- * z and w for double component y). The parameter @components represents
- * the number of 64-bit components present in @src. This would typically be
- * 2 at most, since we can only fit 2 double elements in the result of a
- * vec4 load.
+ * This helper will return the following 2 32-bit components with the 16-bit
+ * values shuffled:
  *
- * Notice that @dst and @src can be the same register.
+ *    |x1 y1|x2 y2|x3 y3|x4 y4|x5 y5|x6 y6|x7 y7|x8 y8|
+ *    |z1   |z2   |z3   |z4   |z5   |z6   |z7   |z8   |
+ *
+ * For unshuffle, the example would be the opposite, a 64-bit type source
+ * and a 32-bit destination. A 2 component .xy 64-bit vector on SIMD8
+ * would be:
+ *
+ *    | x1l   x1h | x2l   x2h | x3l   x3h | x4l   x4h |
+ *    | x5l   x5h | x6l   x6h | x7l   x7h | x8l   x8h |
+ *    | y1l   y1h | y2l   y2h | y3l   y3h | y4l   y4h |
+ *    | y5l   y5h | y6l   y6h | y7l   y7h | y8l   y8h |
+ *
+ * The returned result would be the following 4 32-bit components unshuffled:
+ *
+ *    | x1l | x2l | x3l | x4l | x5l | x6l | x7l | x8l |
+ *    | x1h | x2h | x3h | x4h | x5h | x6h | x7h | x8h |
+ *    | y1l | y2l | y3l | y4l | y5l | y6l | y7l | y8l |
+ *    | y1h | y2h | y3h | y4h | y5h | y6h | y7h | y8h |
+ *
+ * - Source and destination register must not be overlapped.
+ * - components units are measured in terms of the smaller type between
+ *   source and destination because we are un/shuffling the smaller
+ *   components from/into the bigger ones.
+ * - first_component parameter allows skipping source components.
  */
 void
-shuffle_32bit_load_result_to_64bit_data(const fs_builder &bld,
-                                        const fs_reg &dst,
-                                        const fs_reg &src,
-                                        uint32_t components)
+shuffle_src_to_dst(const fs_builder &bld,
+                   const fs_reg &dst,
+                   const fs_reg &src,
+                   uint32_t first_component,
+                   uint32_t components)
 {
-   assert(type_sz(src.type) == 4);
-   assert(type_sz(dst.type) == 8);
+   if (type_sz(src.type) == type_sz(dst.type)) {
+      assert(!regions_overlap(dst,
+         type_sz(dst.type) * bld.dispatch_width() * components,
+         offset(src, bld, first_component),
+         type_sz(src.type) * bld.dispatch_width() * components));
+      for (unsigned i = 0; i < components; i++) {
+         bld.MOV(retype(offset(dst, bld, i), src.type),
+                 offset(src, bld, i + first_component));
+      }
+   } else if (type_sz(src.type) < type_sz(dst.type)) {
+      /* Source is shuffled into destination */
+      unsigned size_ratio = type_sz(dst.type) / type_sz(src.type);
+      assert(!regions_overlap(dst,
+         type_sz(dst.type) * bld.dispatch_width() *
+         DIV_ROUND_UP(components, size_ratio),
+         offset(src, bld, first_component),
+         type_sz(src.type) * bld.dispatch_width() * components));
 
-   /* A temporary that we will use to shuffle the 32-bit data of each
-    * component in the vector into valid 64-bit data. We can't write directly
-    * to dst because dst can be (and would usually be) the same as src
-    * and in that case the first MOV in the loop below would overwrite the
-    * data read in the second MOV.
-    */
-   fs_reg tmp = bld.vgrf(dst.type);
+      brw_reg_type shuffle_type =
+         brw_reg_type_from_bit_size(8 * type_sz(src.type),
+                                    BRW_REGISTER_TYPE_D);
+      for (unsigned i = 0; i < components; i++) {
+         fs_reg shuffle_component_i =
+            subscript(offset(dst, bld, i / size_ratio),
+                      shuffle_type, i % size_ratio);
+         bld.MOV(shuffle_component_i,
+                 retype(offset(src, bld, i + first_component), shuffle_type));
+      }
+   } else {
+      /* Source is unshuffled into destination */
+      unsigned size_ratio = type_sz(src.type) / type_sz(dst.type);
+      assert(!regions_overlap(dst,
+         type_sz(dst.type) * bld.dispatch_width() * components,
+         offset(src, bld, first_component / size_ratio),
+         type_sz(src.type) * bld.dispatch_width() *
+         DIV_ROUND_UP(components + (first_component % size_ratio),
+                      size_ratio)));
 
-   for (unsigned i = 0; i < components; i++) {
-      const fs_reg component_i = offset(src, bld, 2 * i);
-
-      bld.MOV(subscript(tmp, src.type, 0), component_i);
-      bld.MOV(subscript(tmp, src.type, 1), offset(component_i, bld, 1));
-
-      bld.MOV(offset(dst, bld, i), tmp);
-   }
-}
-
-void
-shuffle_32bit_load_result_to_16bit_data(const fs_builder &bld,
-                                        const fs_reg &dst,
-                                        const fs_reg &src,
-                                        uint32_t first_component,
-                                        uint32_t components)
-{
-   assert(type_sz(src.type) == 4);
-   assert(type_sz(dst.type) == 2);
-
-   /* A temporary is used to un-shuffle the 32-bit data of each component in
-    * into a valid 16-bit vector. We can't write directly to dst because it
-    * can be the same register as src and in that case the first MOV in the
-    * loop below would overwrite the data read in the second MOV.
-    */
-   fs_reg tmp = retype(bld.vgrf(src.type), dst.type);
-
-   for (unsigned i = 0; i < components; i++) {
-      const fs_reg component_i =
-         subscript(offset(src, bld, (first_component + i) / 2), dst.type,
-                   (first_component + i) % 2);
-
-      bld.MOV(offset(tmp, bld, i % 2), component_i);
-
-      if (i % 2) {
-         bld.MOV(offset(dst, bld, i -1), offset(tmp, bld, 0));
-         bld.MOV(offset(dst, bld, i), offset(tmp, bld, 1));
+      brw_reg_type shuffle_type =
+         brw_reg_type_from_bit_size(8 * type_sz(dst.type),
+                                    BRW_REGISTER_TYPE_D);
+      for (unsigned i = 0; i < components; i++) {
+         fs_reg shuffle_component_i =
+            subscript(offset(src, bld, (first_component + i) / size_ratio),
+                      shuffle_type, (first_component + i) % size_ratio);
+         bld.MOV(retype(offset(dst, bld, i), shuffle_type),
+                 shuffle_component_i);
       }
    }
-   if (components % 2) {
-      bld.MOV(offset(dst, bld, components - 1), tmp);
-   }
 }
 
-/**
- * This helper does the inverse operation of
- * SHUFFLE_32BIT_LOAD_RESULT_TO_64BIT_DATA.
- *
- * We need to do this when we are going to use untyped write messsages that
- * operate with 32-bit components in order to arrange our 64-bit data to be
- * in the expected layout.
- *
- * Notice that callers of this function, unlike in the case of the inverse
- * operation, would typically need to call this with dst and src being
- * different registers, since they would otherwise corrupt the original
- * 64-bit data they are about to write. Because of this the function checks
- * that the src and dst regions involved in the operation do not overlap.
- */
-fs_reg
-shuffle_64bit_data_for_32bit_write(const fs_builder &bld,
-                                   const fs_reg &src,
-                                   uint32_t components)
+void
+shuffle_from_32bit_read(const fs_builder &bld,
+                        const fs_reg &dst,
+                        const fs_reg &src,
+                        uint32_t first_component,
+                        uint32_t components)
 {
-   assert(type_sz(src.type) == 8);
+   assert(type_sz(src.type) == 4);
 
-   fs_reg dst = bld.vgrf(BRW_REGISTER_TYPE_D, 2 * components);
-
-   for (unsigned i = 0; i < components; i++) {
-      const fs_reg component_i = offset(src, bld, i);
-      bld.MOV(offset(dst, bld, 2 * i), subscript(component_i, dst.type, 0));
-      bld.MOV(offset(dst, bld, 2 * i + 1), subscript(component_i, dst.type, 1));
+   /* This function takes components in units of the destination type while
+    * shuffle_src_to_dst takes components in units of the smallest type
+    */
+   if (type_sz(dst.type) > 4) {
+      assert(type_sz(dst.type) == 8);
+      first_component *= 2;
+      components *= 2;
    }
+
+   shuffle_src_to_dst(bld, dst, src, first_component, components);
+}
+
+fs_reg
+shuffle_for_32bit_write(const fs_builder &bld,
+                        const fs_reg &src,
+                        uint32_t first_component,
+                        uint32_t components)
+{
+   fs_reg dst = bld.vgrf(BRW_REGISTER_TYPE_D,
+                         DIV_ROUND_UP (components * type_sz(src.type), 4));
+   /* This function takes components in units of the source type while
+    * shuffle_src_to_dst takes components in units of the smallest type
+    */
+   if (type_sz(src.type) > 4) {
+      assert(type_sz(src.type) == 8);
+      first_component *= 2;
+      components *= 2;
+   }
+
+   shuffle_src_to_dst(bld, dst, src, first_component, components);
 
    return dst;
-}
-
-void
-shuffle_16bit_data_for_32bit_write(const fs_builder &bld,
-                                   const fs_reg &dst,
-                                   const fs_reg &src,
-                                   uint32_t components)
-{
-   assert(type_sz(src.type) == 2);
-   assert(type_sz(dst.type) == 4);
-
-   /* A temporary is used to shuffle the 16-bit data of each component in the
-    * 32-bit data vector. We can't write directly to dst because it can be the
-    * same register as src and in that case the first MOV in the loop below
-    * would overwrite the data read in the second MOV.
-    */
-   fs_reg tmp = bld.vgrf(dst.type);
-
-   for (unsigned i = 0; i < components; i++) {
-      const fs_reg component_i = offset(src, bld, i);
-      bld.MOV(subscript(tmp, src.type, i % 2), component_i);
-      if (i % 2) {
-         bld.MOV(offset(dst, bld, i / 2), tmp);
-      }
-   }
-   if (components % 2) {
-      bld.MOV(offset(dst, bld, components / 2), tmp);
-   }
 }
 
 fs_reg

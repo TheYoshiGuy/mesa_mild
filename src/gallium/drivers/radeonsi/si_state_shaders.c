@@ -605,6 +605,30 @@ static void si_shader_es(struct si_screen *sscreen, struct si_shader *shader)
 	polaris_set_vgt_vertex_reuse(sscreen, shader->selector, shader, pm4);
 }
 
+static unsigned si_conv_prim_to_gs_out(unsigned mode)
+{
+	static const int prim_conv[] = {
+		[PIPE_PRIM_POINTS]			= V_028A6C_OUTPRIM_TYPE_POINTLIST,
+		[PIPE_PRIM_LINES]			= V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		[PIPE_PRIM_LINE_LOOP]			= V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		[PIPE_PRIM_LINE_STRIP]			= V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		[PIPE_PRIM_TRIANGLES]			= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_TRIANGLE_STRIP]		= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_TRIANGLE_FAN]		= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_QUADS]			= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_QUAD_STRIP]			= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_POLYGON]			= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_LINES_ADJACENCY]		= V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		[PIPE_PRIM_LINE_STRIP_ADJACENCY]	= V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		[PIPE_PRIM_TRIANGLES_ADJACENCY]		= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY]	= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_PATCHES]			= V_028A6C_OUTPRIM_TYPE_POINTLIST,
+	};
+	assert(mode < ARRAY_SIZE(prim_conv));
+
+	return prim_conv[mode];
+}
+
 struct gfx9_gs_info {
 	unsigned es_verts_per_subgroup;
 	unsigned gs_prims_per_subgroup;
@@ -735,6 +759,8 @@ static void si_shader_gs(struct si_screen *sscreen, struct si_shader *shader)
 	if (max_stream >= 2)
 		offset += num_components[2] * sel->gs_max_out_vertices;
 	si_pm4_set_reg(pm4, R_028A68_VGT_GSVS_RING_OFFSET_3, offset);
+	si_pm4_set_reg(pm4, R_028A6C_VGT_GS_OUT_PRIM_TYPE,
+		       si_conv_prim_to_gs_out(sel->gs_output_prim));
 	if (max_stream >= 3)
 		offset += num_components[3] * sel->gs_max_out_vertices;
 	si_pm4_set_reg(pm4, R_028AB0_VGT_GSVS_RING_ITEMSIZE, offset);
@@ -1392,67 +1418,63 @@ static inline void si_shader_selector_key(struct pipe_context *ctx,
 			key->part.ps.epilog.color_is_int10 &= sel->info.colors_written;
 		}
 
-		if (rs) {
-			bool is_poly = (sctx->current_rast_prim >= PIPE_PRIM_TRIANGLES &&
-					sctx->current_rast_prim <= PIPE_PRIM_POLYGON) ||
-				       sctx->current_rast_prim >= PIPE_PRIM_TRIANGLES_ADJACENCY;
-			bool is_line = !is_poly && sctx->current_rast_prim != PIPE_PRIM_POINTS;
+		bool is_poly = !util_prim_is_points_or_lines(sctx->current_rast_prim);
+		bool is_line = util_prim_is_lines(sctx->current_rast_prim);
 
-			key->part.ps.prolog.color_two_side = rs->two_side && sel->info.colors_read;
-			key->part.ps.prolog.flatshade_colors = rs->flatshade && sel->info.colors_read;
+		key->part.ps.prolog.color_two_side = rs->two_side && sel->info.colors_read;
+		key->part.ps.prolog.flatshade_colors = rs->flatshade && sel->info.colors_read;
 
-			if (sctx->queued.named.blend) {
-				key->part.ps.epilog.alpha_to_one = sctx->queued.named.blend->alpha_to_one &&
-							      rs->multisample_enable;
-			}
+		if (sctx->queued.named.blend) {
+			key->part.ps.epilog.alpha_to_one = sctx->queued.named.blend->alpha_to_one &&
+							   rs->multisample_enable;
+		}
 
-			key->part.ps.prolog.poly_stipple = rs->poly_stipple_enable && is_poly;
-			key->part.ps.epilog.poly_line_smoothing = ((is_poly && rs->poly_smooth) ||
-							      (is_line && rs->line_smooth)) &&
-							     sctx->framebuffer.nr_samples <= 1;
-			key->part.ps.epilog.clamp_color = rs->clamp_fragment_color;
+		key->part.ps.prolog.poly_stipple = rs->poly_stipple_enable && is_poly;
+		key->part.ps.epilog.poly_line_smoothing = ((is_poly && rs->poly_smooth) ||
+							   (is_line && rs->line_smooth)) &&
+							  sctx->framebuffer.nr_samples <= 1;
+		key->part.ps.epilog.clamp_color = rs->clamp_fragment_color;
 
-			if (sctx->ps_iter_samples > 1 &&
-			    sel->info.reads_samplemask) {
-				key->part.ps.prolog.samplemask_log_ps_iter =
-					util_logbase2(sctx->ps_iter_samples);
-			}
+		if (sctx->ps_iter_samples > 1 &&
+		    sel->info.reads_samplemask) {
+			key->part.ps.prolog.samplemask_log_ps_iter =
+				util_logbase2(sctx->ps_iter_samples);
+		}
 
-			if (rs->force_persample_interp &&
-			    rs->multisample_enable &&
-			    sctx->framebuffer.nr_samples > 1 &&
-			    sctx->ps_iter_samples > 1) {
-				key->part.ps.prolog.force_persp_sample_interp =
-					sel->info.uses_persp_center ||
-					sel->info.uses_persp_centroid;
+		if (rs->force_persample_interp &&
+		    rs->multisample_enable &&
+		    sctx->framebuffer.nr_samples > 1 &&
+		    sctx->ps_iter_samples > 1) {
+			key->part.ps.prolog.force_persp_sample_interp =
+				sel->info.uses_persp_center ||
+				sel->info.uses_persp_centroid;
 
-				key->part.ps.prolog.force_linear_sample_interp =
-					sel->info.uses_linear_center ||
-					sel->info.uses_linear_centroid;
-			} else if (rs->multisample_enable &&
-				   sctx->framebuffer.nr_samples > 1) {
-				key->part.ps.prolog.bc_optimize_for_persp =
-					sel->info.uses_persp_center &&
-					sel->info.uses_persp_centroid;
-				key->part.ps.prolog.bc_optimize_for_linear =
-					sel->info.uses_linear_center &&
-					sel->info.uses_linear_centroid;
-			} else {
-				/* Make sure SPI doesn't compute more than 1 pair
-				 * of (i,j), which is the optimization here. */
-				key->part.ps.prolog.force_persp_center_interp =
-					sel->info.uses_persp_center +
-					sel->info.uses_persp_centroid +
-					sel->info.uses_persp_sample > 1;
+			key->part.ps.prolog.force_linear_sample_interp =
+				sel->info.uses_linear_center ||
+				sel->info.uses_linear_centroid;
+		} else if (rs->multisample_enable &&
+			   sctx->framebuffer.nr_samples > 1) {
+			key->part.ps.prolog.bc_optimize_for_persp =
+				sel->info.uses_persp_center &&
+				sel->info.uses_persp_centroid;
+			key->part.ps.prolog.bc_optimize_for_linear =
+				sel->info.uses_linear_center &&
+				sel->info.uses_linear_centroid;
+		} else {
+			/* Make sure SPI doesn't compute more than 1 pair
+			 * of (i,j), which is the optimization here. */
+			key->part.ps.prolog.force_persp_center_interp =
+				sel->info.uses_persp_center +
+				sel->info.uses_persp_centroid +
+				sel->info.uses_persp_sample > 1;
 
-				key->part.ps.prolog.force_linear_center_interp =
-					sel->info.uses_linear_center +
-					sel->info.uses_linear_centroid +
-					sel->info.uses_linear_sample > 1;
+			key->part.ps.prolog.force_linear_center_interp =
+				sel->info.uses_linear_center +
+				sel->info.uses_linear_centroid +
+				sel->info.uses_linear_sample > 1;
 
-				if (sel->info.opcode_count[TGSI_OPCODE_INTERP_SAMPLE])
-					key->mono.u.ps.interpolate_at_sample_force_center = 1;
-			}
+			if (sel->info.opcode_count[TGSI_OPCODE_INTERP_SAMPLE])
+				key->mono.u.ps.interpolate_at_sample_force_center = 1;
 		}
 
 		key->part.ps.epilog.alpha_func = si_get_alpha_test_func(sctx);
@@ -2106,7 +2128,6 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
 				sel->outputs_written_before_ps |=
 					1ull << si_shader_io_get_unique_index(name, index, true);
 				break;
-			case TGSI_SEMANTIC_CLIPVERTEX: /* ignore these */
 			case TGSI_SEMANTIC_EDGEFLAG:
 				break;
 			}

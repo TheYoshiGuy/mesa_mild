@@ -37,7 +37,7 @@ struct si_bin_size_map {
 	unsigned bin_size_y;
 };
 
-typedef struct si_bin_size_map si_bin_size_subtable[3][9];
+typedef struct si_bin_size_map si_bin_size_subtable[3][10];
 
 /* Find the bin size where sum is >= table[i].start and < table[i + 1].start. */
 static struct uvec2 si_find_bin_size(struct si_screen *sscreen,
@@ -54,7 +54,7 @@ static struct uvec2 si_find_bin_size(struct si_screen *sscreen,
 	const struct si_bin_size_map *subtable =
 		&table[log_num_rb_per_se][log_num_se][0];
 
-	for (i = 0; subtable[i].start != UINT_MAX; i++) {
+	for (i = 0; subtable[i].bin_size_x != 0; i++) {
 		if (sum >= subtable[i].start && sum < subtable[i + 1].start)
 			break;
 	}
@@ -66,7 +66,7 @@ static struct uvec2 si_find_bin_size(struct si_screen *sscreen,
 static struct uvec2 si_get_color_bin_size(struct si_context *sctx,
 					  unsigned cb_target_enabled_4bit)
 {
-	unsigned nr_samples = sctx->framebuffer.nr_samples;
+	unsigned num_fragments = sctx->framebuffer.nr_color_samples;
 	unsigned sum = 0;
 
 	/* Compute the sum of all Bpp. */
@@ -80,9 +80,9 @@ static struct uvec2 si_get_color_bin_size(struct si_context *sctx,
 	}
 
 	/* Multiply the sum by some function of the number of samples. */
-	if (nr_samples >= 2) {
+	if (num_fragments >= 2) {
 		if (si_get_ps_iter_samples(sctx) >= 2)
-			sum *= nr_samples;
+			sum *= num_fragments;
 		else
 			sum *= 2;
 	}
@@ -97,7 +97,6 @@ static struct uvec2 si_get_color_bin_size(struct si_context *sctx,
 				{        2,   32,  128 },
 				{        3,   16,  128 },
 				{       17,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 			{
 				/* Two shader engines */
@@ -106,7 +105,6 @@ static struct uvec2 si_get_color_bin_size(struct si_context *sctx,
 				{        3,   32,  128 },
 				{        5,   16,  128 },
 				{       17,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 			{
 				/* Four shader engines */
@@ -114,7 +112,6 @@ static struct uvec2 si_get_color_bin_size(struct si_context *sctx,
 				{        3,   64,  128 },
 				{        5,   16,  128 },
 				{       17,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 		},
 		{
@@ -124,9 +121,8 @@ static struct uvec2 si_get_color_bin_size(struct si_context *sctx,
 				{        0,  128,  128 },
 				{        2,   64,  128 },
 				{        3,   32,  128 },
-				{        5,   16,  128 },
+				{        9,   16,  128 },
 				{       33,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 			{
 				/* Two shader engines */
@@ -135,7 +131,6 @@ static struct uvec2 si_get_color_bin_size(struct si_context *sctx,
 				{        5,   32,  128 },
 				{        9,   16,  128 },
 				{       33,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 			{
 				/* Four shader engines */
@@ -145,7 +140,6 @@ static struct uvec2 si_get_color_bin_size(struct si_context *sctx,
 				{        5,   64,  128 },
 				{        9,   16,  128 },
 				{       33,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 		},
 		{
@@ -157,8 +151,7 @@ static struct uvec2 si_get_color_bin_size(struct si_context *sctx,
 				{        3,   64,  128 },
 				{        5,   32,  128 },
 				{        9,   16,  128 },
-				{       33,    0,    0 },
-				{ UINT_MAX,    0,    0 },
+				{       17,    0,    0 },
 			},
 			{
 				/* Two shader engines */
@@ -169,18 +162,16 @@ static struct uvec2 si_get_color_bin_size(struct si_context *sctx,
 				{        9,   32,  128 },
 				{       17,   16,  128 },
 				{       33,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 			{
 				/* Four shader engines */
 				{        0,  256,  512 },
-				{        2,  256,  256 },
-				{        3,  128,  256 },
-				{        5,  128,  128 },
-				{        9,   64,  128 },
-				{       17,   16,  128 },
+				{        2,  128,  512 },
+				{        3,   64,  512 },
+				{        5,   32,  512 },
+				{        9,   32,  256 },
+				{       17,   32,  128 },
 				{       33,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 		},
 	};
@@ -205,80 +196,74 @@ static struct uvec2 si_get_depth_bin_size(struct si_context *sctx)
 	unsigned stencil_coeff = rtex->surface.has_stencil &&
 				 dsa->stencil_enabled ? 1 : 0;
 	unsigned sum = 4 * (depth_coeff + stencil_coeff) *
-		       sctx->framebuffer.nr_samples;
+		       rtex->buffer.b.b.nr_samples;
 
 	static const si_bin_size_subtable table[] = {
 		{
 			// One RB / SE
 			{
 				// One shader engine
-				{        0,  128,  256 },
-				{        2,  128,  128 },
+				{        0,   64,  512 },
+				{        2,   64,  256 },
 				{        4,   64,  128 },
 				{        7,   32,  128 },
 				{       13,   16,  128 },
 				{       49,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 			{
 				// Two shader engines
-				{        0,  256,  256 },
-				{        2,  128,  256 },
-				{        4,  128,  128 },
+				{        0,  128,  512 },
+				{        2,   64,  512 },
+				{        4,   64,  256 },
 				{        7,   64,  128 },
 				{       13,   32,  128 },
 				{       25,   16,  128 },
 				{       49,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 			{
 				// Four shader engines
 				{        0,  256,  512 },
-				{        2,  256,  256 },
-				{        4,  128,  256 },
-				{        7,  128,  128 },
+				{        2,  128,  512 },
+				{        4,   64,  512 },
+				{        7,   64,  256 },
 				{       13,   64,  128 },
 				{       25,   16,  128 },
 				{       49,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 		},
 		{
 			// Two RB / SE
 			{
 				// One shader engine
-				{        0,  256,  256 },
-				{        2,  128,  256 },
-				{        4,  128,  128 },
+				{        0,  128,  512 },
+				{        2,   64,  512 },
+				{        4,   64,  256 },
 				{        7,   64,  128 },
 				{       13,   32,  128 },
 				{       25,   16,  128 },
 				{       97,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 			{
 				// Two shader engines
 				{        0,  256,  512 },
-				{        2,  256,  256 },
-				{        4,  128,  256 },
-				{        7,  128,  128 },
+				{        2,  128,  512 },
+				{        4,   64,  512 },
+				{        7,   64,  256 },
 				{       13,   64,  128 },
 				{       25,   32,  128 },
 				{       49,   16,  128 },
 				{       97,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 			{
 				// Four shader engines
 				{        0,  512,  512 },
 				{        2,  256,  512 },
-				{        4,  256,  256 },
-				{        7,  128,  256 },
-				{       13,  128,  128 },
+				{        4,  128,  512 },
+				{        7,   64,  512 },
+				{       13,   64,  256 },
 				{       25,   64,  128 },
 				{       49,   16,  128 },
 				{       97,    0,    0 },
-				{ UINT_MAX,    0,    0 },
 			},
 		},
 		{
@@ -286,36 +271,36 @@ static struct uvec2 si_get_depth_bin_size(struct si_context *sctx)
 			{
 				// One shader engine
 				{        0,  256,  512 },
-				{        2,  256,  256 },
-				{        4,  128,  256 },
-				{        7,  128,  128 },
+				{        2,  128,  512 },
+				{        4,   64,  512 },
+				{        7,   64,  256 },
 				{       13,   64,  128 },
 				{       25,   32,  128 },
 				{       49,   16,  128 },
-				{ UINT_MAX,    0,    0 },
+				{      193,    0,    0 },
 			},
 			{
 				// Two shader engines
 				{        0,  512,  512 },
 				{        2,  256,  512 },
-				{        4,  256,  256 },
-				{        7,  128,  256 },
-				{       13,  128,  128 },
+				{        4,  128,  512 },
+				{        7,   64,  512 },
+				{       13,   64,  256 },
 				{       25,   64,  128 },
 				{       49,   32,  128 },
 				{       97,   16,  128 },
-				{ UINT_MAX,    0,    0 },
+				{      193,    0,    0 },
 			},
 			{
 				// Four shader engines
 				{        0,  512,  512 },
 				{        4,  256,  512 },
-				{        7,  256,  256 },
-				{       13,  128,  256 },
-				{       25,  128,  128 },
-				{       49,   64,  128 },
+				{        7,  128,  512 },
+				{       13,   64,  512 },
+				{       25,   32,  512 },
+				{       49,   32,  256 },
 				{       97,   16,  128 },
-				{ UINT_MAX,    0,    0 },
+				{      193,    0,    0 },
 			},
 		},
 	};
@@ -331,7 +316,8 @@ static void si_emit_dpbb_disable(struct si_context *sctx)
 		S_028C44_DISABLE_START_OF_PRIM(1));
 	radeon_opt_set_context_reg(sctx, R_028060_DB_DFSM_CONTROL,
 				   SI_TRACKED_DB_DFSM_CONTROL,
-				   S_028060_PUNCHOUT_MODE(V_028060_FORCE_OFF));
+				   S_028060_PUNCHOUT_MODE(V_028060_FORCE_OFF) |
+				   S_028060_POPS_DRAIN_PS_ON_OVERLAP(1));
 }
 
 void si_emit_dpbb_state(struct si_context *sctx)
@@ -353,18 +339,14 @@ void si_emit_dpbb_state(struct si_context *sctx)
 			   G_02880C_COVERAGE_TO_MASK_ENABLE(db_shader_control) ||
 			   blend->alpha_to_coverage;
 
-	/* This is ported from Vulkan, but it doesn't make much sense to me.
-	 * Maybe it's for RE-Z? But Vulkan doesn't use RE-Z. TODO: Clarify this.
-	 */
-	bool ps_can_reject_z_trivially =
+	bool db_can_reject_z_trivially =
 		!G_02880C_Z_EXPORT_ENABLE(db_shader_control) ||
-		G_02880C_CONSERVATIVE_Z_EXPORT(db_shader_control);
+		G_02880C_CONSERVATIVE_Z_EXPORT(db_shader_control) ||
+		G_02880C_DEPTH_BEFORE_SHADER(db_shader_control);
 
-	/* Disable binning if PS can kill trivially with DB writes.
-	 * Ported from Vulkan. (heuristic?)
-	 */
+	/* Disable DPBB when it's believed to be inefficient. */
 	if (ps_can_kill &&
-	    ps_can_reject_z_trivially &&
+	    db_can_reject_z_trivially &&
 	    sctx->framebuffer.state.zsbuf &&
 	    dsa->db_can_write) {
 		si_emit_dpbb_disable(sctx);
@@ -393,8 +375,13 @@ void si_emit_dpbb_state(struct si_context *sctx)
 	/* Enable DFSM if it's preferred. */
 	unsigned punchout_mode = V_028060_FORCE_OFF;
 	bool disable_start_of_prim = true;
+	bool zs_eqaa_dfsm_bug = sctx->chip_class == GFX9 &&
+				sctx->framebuffer.state.zsbuf &&
+				sctx->framebuffer.nr_samples !=
+				MAX2(1, sctx->framebuffer.state.zsbuf->texture->nr_samples);
 
 	if (sscreen->dfsm_allowed &&
+	    !zs_eqaa_dfsm_bug &&
 	    cb_target_enabled_4bit &&
 	    !G_02880C_KILL_ENABLE(db_shader_control) &&
 	    /* These two also imply that DFSM is disabled when PS writes to memory. */
@@ -446,5 +433,6 @@ void si_emit_dpbb_state(struct si_context *sctx)
 		S_028C44_OPTIMAL_BIN_SELECTION(1));
 	radeon_opt_set_context_reg(sctx, R_028060_DB_DFSM_CONTROL,
 				   SI_TRACKED_DB_DFSM_CONTROL,
-				   S_028060_PUNCHOUT_MODE(punchout_mode));
+				   S_028060_PUNCHOUT_MODE(punchout_mode) |
+				   S_028060_POPS_DRAIN_PS_ON_OVERLAP(1));
 }

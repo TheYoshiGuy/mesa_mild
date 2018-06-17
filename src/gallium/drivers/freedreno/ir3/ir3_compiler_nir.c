@@ -71,6 +71,9 @@ struct ir3_context {
 	/* For vertex shaders, keep track of the system values sources */
 	struct ir3_instruction *vertex_id, *basevertex, *instance_id;
 
+	/* For fragment shaders: */
+	struct ir3_instruction *samp_id, *samp_mask_in;
+
 	/* Compute shader inputs: */
 	struct ir3_instruction *local_invocation_id, *work_group_id;
 
@@ -492,7 +495,10 @@ put_dst(struct ir3_context *ctx, nir_dest *dst)
 
 	if (bit_size < 32) {
 		for (unsigned i = 0; i < ctx->last_dst_n; i++) {
-			ctx->last_dst[i]->regs[0]->flags |= IR3_REG_HALF;
+			struct ir3_instruction *dst = ctx->last_dst[i];
+			dst->regs[0]->flags |= IR3_REG_HALF;
+			if (ctx->last_dst[i]->opc == OPC_META_FO)
+				dst->regs[1]->instr->regs[0]->flags |= IR3_REG_HALF;
 		}
 	}
 
@@ -913,11 +919,138 @@ ir3_n2b(struct ir3_block *block, struct ir3_instruction *instr)
  * alu/sfu instructions:
  */
 
+static struct ir3_instruction *
+create_cov(struct ir3_context *ctx, struct ir3_instruction *src,
+		unsigned src_bitsize, nir_op op)
+{
+	type_t src_type, dst_type;
+
+	switch (op) {
+	case nir_op_f2f32:
+	case nir_op_f2f16_rtne:
+	case nir_op_f2f16_rtz:
+	case nir_op_f2f16_undef:
+	case nir_op_f2i32:
+	case nir_op_f2i16:
+	case nir_op_f2i8:
+	case nir_op_f2u32:
+	case nir_op_f2u16:
+	case nir_op_f2u8:
+		switch (src_bitsize) {
+		case 32:
+			src_type = TYPE_F32;
+			break;
+		case 16:
+			src_type = TYPE_F16;
+			break;
+		default:
+			compile_error(ctx, "invalid src bit size: %u", src_bitsize);
+		}
+		break;
+
+	case nir_op_i2f32:
+	case nir_op_i2f16:
+	case nir_op_i2i32:
+	case nir_op_i2i16:
+	case nir_op_i2i8:
+		switch (src_bitsize) {
+		case 32:
+			src_type = TYPE_S32;
+			break;
+		case 16:
+			src_type = TYPE_S16;
+			break;
+		case 8:
+			src_type = TYPE_S8;
+			break;
+		default:
+			compile_error(ctx, "invalid src bit size: %u", src_bitsize);
+		}
+		break;
+
+	case nir_op_u2f32:
+	case nir_op_u2f16:
+	case nir_op_u2u32:
+	case nir_op_u2u16:
+	case nir_op_u2u8:
+		switch (src_bitsize) {
+		case 32:
+			src_type = TYPE_U32;
+			break;
+		case 16:
+			src_type = TYPE_U16;
+			break;
+		case 8:
+			src_type = TYPE_U8;
+			break;
+		default:
+			compile_error(ctx, "invalid src bit size: %u", src_bitsize);
+		}
+		break;
+
+	default:
+		compile_error(ctx, "invalid conversion op: %u", op);
+	}
+
+	switch (op) {
+	case nir_op_f2f32:
+	case nir_op_i2f32:
+	case nir_op_u2f32:
+		dst_type = TYPE_F32;
+		break;
+
+	case nir_op_f2f16_rtne:
+	case nir_op_f2f16_rtz:
+	case nir_op_f2f16_undef:
+		/* TODO how to handle rounding mode? */
+	case nir_op_i2f16:
+	case nir_op_u2f16:
+		dst_type = TYPE_F16;
+		break;
+
+	case nir_op_f2i32:
+	case nir_op_i2i32:
+		dst_type = TYPE_S32;
+		break;
+
+	case nir_op_f2i16:
+	case nir_op_i2i16:
+		dst_type = TYPE_S16;
+		break;
+
+	case nir_op_f2i8:
+	case nir_op_i2i8:
+		dst_type = TYPE_S8;
+		break;
+
+	case nir_op_f2u32:
+	case nir_op_u2u32:
+		dst_type = TYPE_U32;
+		break;
+
+	case nir_op_f2u16:
+	case nir_op_u2u16:
+		dst_type = TYPE_U16;
+		break;
+
+	case nir_op_f2u8:
+	case nir_op_u2u8:
+		dst_type = TYPE_U8;
+		break;
+
+	default:
+		compile_error(ctx, "invalid conversion op: %u", op);
+	}
+
+	return ir3_COV(ctx->block, src, src_type, dst_type);
+}
+
 static void
 emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
 {
 	const nir_op_info *info = &nir_op_infos[alu->op];
 	struct ir3_instruction **dst, *src[info->num_inputs];
+	unsigned bs[info->num_inputs];     /* bit size */
 	struct ir3_block *b = ctx->block;
 	unsigned dst_sz, wrmask;
 
@@ -984,22 +1117,33 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
 		compile_assert(ctx, !asrc->negate);
 
 		src[i] = get_src(ctx, &asrc->src)[asrc->swizzle[chan]];
+		bs[i] = nir_src_bit_size(asrc->src);
 
 		compile_assert(ctx, src[i]);
 	}
 
 	switch (alu->op) {
+	case nir_op_f2f32:
+	case nir_op_f2f16_rtne:
+	case nir_op_f2f16_rtz:
+	case nir_op_f2f16_undef:
 	case nir_op_f2i32:
-		dst[0] = ir3_COV(b, src[0], TYPE_F32, TYPE_S32);
-		break;
+	case nir_op_f2i16:
+	case nir_op_f2i8:
 	case nir_op_f2u32:
-		dst[0] = ir3_COV(b, src[0], TYPE_F32, TYPE_U32);
-		break;
+	case nir_op_f2u16:
+	case nir_op_f2u8:
 	case nir_op_i2f32:
-		dst[0] = ir3_COV(b, src[0], TYPE_S32, TYPE_F32);
-		break;
+	case nir_op_i2f16:
+	case nir_op_i2i32:
+	case nir_op_i2i16:
+	case nir_op_i2i8:
 	case nir_op_u2f32:
-		dst[0] = ir3_COV(b, src[0], TYPE_U32, TYPE_F32);
+	case nir_op_u2f16:
+	case nir_op_u2u32:
+	case nir_op_u2u16:
+	case nir_op_u2u8:
+		dst[0] = create_cov(ctx, src[0], bs[0], alu->op);
 		break;
 	case nir_op_f2b:
 		dst[0] = ir3_CMPS_F(b, src[0], 0, create_immed(b, fui(0.0)), 0);
@@ -1231,10 +1375,18 @@ emit_alu(struct ir3_context *ctx, nir_alu_instr *alu)
 		dst[0] = ir3_n2b(b, dst[0]);
 		break;
 
-	case nir_op_bcsel:
-		dst[0] = ir3_SEL_B32(b, src[1], 0, ir3_b2n(b, src[0]), 0, src[2], 0);
+	case nir_op_bcsel: {
+		struct ir3_instruction *cond = ir3_b2n(b, src[0]);
+		compile_assert(ctx, bs[1] == bs[2]);
+		/* the boolean condition is 32b even if src[1] and src[2] are
+		 * half-precision, but sel.b16 wants all three src's to be the
+		 * same type.
+		 */
+		if (bs[1] < 32)
+			cond = ir3_COV(b, cond, TYPE_U32, TYPE_U16);
+		dst[0] = ir3_SEL_B32(b, src[1], 0, cond, 0, src[2], 0);
 		break;
-
+	}
 	case nir_op_bit_count:
 		dst[0] = ir3_CBITS_B(b, src[0], 0);
 		break;
@@ -2207,6 +2359,23 @@ emit_intrinsic(struct ir3_context *ctx, nir_intrinsic_instr *intr)
 		}
 		dst[0] = ctx->instance_id;
 		break;
+	case nir_intrinsic_load_sample_id:
+		if (!ctx->samp_id) {
+			ctx->samp_id = create_input(b, 0);
+			ctx->samp_id->regs[0]->flags |= IR3_REG_HALF;
+			add_sysval_input(ctx, SYSTEM_VALUE_SAMPLE_ID,
+					ctx->samp_id);
+		}
+		dst[0] = ir3_COV(b, ctx->samp_id, TYPE_U16, TYPE_U32);
+		break;
+	case nir_intrinsic_load_sample_mask_in:
+		if (!ctx->samp_mask_in) {
+			ctx->samp_mask_in = create_input(b, 0);
+			add_sysval_input(ctx, SYSTEM_VALUE_SAMPLE_MASK_IN,
+					ctx->samp_mask_in);
+		}
+		dst[0] = ctx->samp_mask_in;
+		break;
 	case nir_intrinsic_load_user_clip_plane:
 		idx = nir_intrinsic_ucp_id(intr);
 		for (int i = 0; i < intr->num_components; i++) {
@@ -2416,7 +2585,7 @@ emit_tex(struct ir3_context *ctx, nir_tex_instr *tex)
 	}
 
 	switch (tex->op) {
-	case nir_texop_tex:      opc = OPC_SAM;      break;
+	case nir_texop_tex:      opc = has_lod ? OPC_SAML : OPC_SAM; break;
 	case nir_texop_txb:      opc = OPC_SAMB;     break;
 	case nir_texop_txl:      opc = OPC_SAML;     break;
 	case nir_texop_txd:      opc = OPC_SAMGQ;    break;
@@ -3149,6 +3318,7 @@ max_drvloc(struct exec_list *vars)
 }
 
 static const unsigned max_sysvals[SHADER_MAX] = {
+	[SHADER_FRAGMENT] = 8,
 	[SHADER_VERTEX]  = 16,
 	[SHADER_COMPUTE] = 16, // TODO how many do we actually need?
 };

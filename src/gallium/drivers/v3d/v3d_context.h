@@ -183,7 +183,7 @@ struct v3d_vertex_stateobj {
         struct pipe_vertex_element pipe[VC5_MAX_ATTRIBUTES];
         unsigned num_elements;
 
-        uint8_t attrs[12 * VC5_MAX_ATTRIBUTES];
+        uint8_t attrs[16 * VC5_MAX_ATTRIBUTES];
         struct v3d_bo *default_attribute_values;
 };
 
@@ -424,9 +424,6 @@ struct v3d_context {
 struct v3d_rasterizer_state {
         struct pipe_rasterizer_state base;
 
-        /* VC5_CONFIGURATION_BITS */
-        uint8_t config_bits[3];
-
         float point_size;
 
         /**
@@ -434,6 +431,11 @@ struct v3d_rasterizer_state {
          * VC5_PACKET_DEPTH_OFFSET
          */
         uint16_t offset_units;
+        /**
+         * The HW treats polygon offset units based on a Z24 buffer, so we
+         * need to scale up offset_units if we're only Z16.
+         */
+        uint16_t z16_offset_units;
         /**
          * Half-float (1/8/7 bits) value of polygon offset scale for
          * VC5_PACKET_DEPTH_OFFSET
@@ -445,14 +447,6 @@ struct v3d_depth_stencil_alpha_state {
         struct pipe_depth_stencil_alpha_state base;
 
         enum v3d_ez_state ez_state;
-
-        /** Uniforms for stencil state.
-         *
-         * Index 0 is either the front config, or the front-and-back config.
-         * Index 1 is the back config if doing separate back stencil.
-         * Index 2 is the writemask config if it's not a common mask value.
-         */
-        uint32_t stencil_uniforms[3];
 
         uint8_t stencil_front[6];
         uint8_t stencil_back[6];

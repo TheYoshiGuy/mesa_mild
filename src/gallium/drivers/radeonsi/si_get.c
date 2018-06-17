@@ -257,6 +257,7 @@ static int si_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_CONSERVATIVE_RASTER_PRE_SNAP_POINTS_LINES:
 	case PIPE_CAP_CONSERVATIVE_RASTER_POST_DEPTH_COVERAGE:
 	case PIPE_CAP_MAX_CONSERVATIVE_RASTER_SUBPIXEL_PRECISION_BIAS:
+	case PIPE_CAP_PROGRAMMABLE_SAMPLE_LOCATIONS:
 		return 0;
 
 	case PIPE_CAP_FENCE_SIGNAL:
@@ -920,8 +921,8 @@ static void si_query_memory_info(struct pipe_screen *screen,
 	 *
 	 * Instead, return statistics of this process.
 	 */
-	vram_usage = ws->query_value(ws, RADEON_REQUESTED_VRAM_MEMORY) / 1024;
-	gtt_usage =  ws->query_value(ws, RADEON_REQUESTED_GTT_MEMORY) / 1024;
+	vram_usage = ws->query_value(ws, RADEON_VRAM_USAGE) / 1024;
+	gtt_usage =  ws->query_value(ws, RADEON_GTT_USAGE) / 1024;
 
 	info->avail_device_memory =
 		vram_usage <= info->total_device_memory ?

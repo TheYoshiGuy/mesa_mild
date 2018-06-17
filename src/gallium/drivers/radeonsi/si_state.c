@@ -1007,12 +1007,15 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 	si_update_poly_offset_state(sctx);
 
 	if (!old_rs ||
-	    (old_rs->scissor_enable != rs->scissor_enable ||
-	     old_rs->line_width != rs->line_width ||
-	     old_rs->max_point_size != rs->max_point_size)) {
+	    old_rs->scissor_enable != rs->scissor_enable) {
 		sctx->scissors.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
 		si_mark_atom_dirty(sctx, &sctx->atoms.s.scissors);
 	}
+
+	if (!old_rs ||
+	    old_rs->line_width != rs->line_width ||
+	    old_rs->max_point_size != rs->max_point_size)
+		si_mark_atom_dirty(sctx, &sctx->atoms.s.guardband);
 
 	if (!old_rs ||
 	    old_rs->clip_halfz != rs->clip_halfz) {
@@ -1415,7 +1418,7 @@ static void si_emit_db_render_state(struct si_context *sctx)
 	}
 
 	/* Disable the gl_SampleMask fragment shader output if MSAA is disabled. */
-	if (!rs || !rs->multisample_enable)
+	if (!rs->multisample_enable)
 		db_shader_control &= C_02880C_MASK_EXPORT_ENABLE;
 
 	if (sctx->screen->has_rbplus &&
@@ -3248,7 +3251,7 @@ static void si_emit_msaa_sample_locs(struct si_context *sctx)
 		 */
 		if (has_msaa_sample_loc_bug &&
 		    sctx->framebuffer.nr_samples > 1 &&
-		    rs && !rs->multisample_enable)
+		    !rs->multisample_enable)
 			small_prim_filter_cntl &= C_028830_SMALL_PRIM_FILTER_ENABLE;
 
 		radeon_opt_set_context_reg(sctx,

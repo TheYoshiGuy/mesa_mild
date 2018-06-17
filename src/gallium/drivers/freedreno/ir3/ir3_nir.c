@@ -242,12 +242,20 @@ ir3_nir_scan_driver_consts(nir_shader *shader,
 						layout->ssbo_size.count;
 					layout->ssbo_size.count += 1; /* one const per */
 					break;
+				case nir_intrinsic_image_var_atomic_add:
+				case nir_intrinsic_image_var_atomic_min:
+				case nir_intrinsic_image_var_atomic_max:
+				case nir_intrinsic_image_var_atomic_and:
+				case nir_intrinsic_image_var_atomic_or:
+				case nir_intrinsic_image_var_atomic_xor:
+				case nir_intrinsic_image_var_atomic_exchange:
+				case nir_intrinsic_image_var_atomic_comp_swap:
 				case nir_intrinsic_image_var_store:
 					idx = intr->variables[0]->var->data.driver_location;
 					if (layout->image_dims.mask & (1 << idx))
 						break;
 					layout->image_dims.mask |= (1 << idx);
-					layout->ssbo_size.off[idx] =
+					layout->image_dims.off[idx] =
 						layout->image_dims.count;
 					layout->image_dims.count += 3; /* three const per */
 					break;

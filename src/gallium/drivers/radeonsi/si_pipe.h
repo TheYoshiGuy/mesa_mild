@@ -893,7 +893,6 @@ struct si_context {
 	int			last_sh_base_reg;
 	int			last_primitive_restart_en;
 	int			last_restart_index;
-	int			last_gs_out_prim;
 	int			last_prim;
 	int			last_multi_vgt_param;
 	int			last_rast_prim;
@@ -917,6 +916,7 @@ struct si_context {
 	int			last_tes_sh_base;
 	bool			last_tess_uses_primid;
 	unsigned		last_num_patches;
+	int			last_ls_hs_config;
 
 	/* Debug state. */
 	bool			is_debug;
@@ -1503,6 +1503,23 @@ static inline unsigned si_get_total_colormask(struct si_context *sctx)
 		colormask = 0; /* color0 writes all cbufs, but it's not written */
 
 	return colormask;
+}
+
+#define UTIL_ALL_PRIM_LINE_MODES ((1 << PIPE_PRIM_LINES) | \
+				  (1 << PIPE_PRIM_LINE_LOOP) | \
+				  (1 << PIPE_PRIM_LINE_STRIP) | \
+				  (1 << PIPE_PRIM_LINES_ADJACENCY) | \
+				  (1 << PIPE_PRIM_LINE_STRIP_ADJACENCY))
+
+static inline bool util_prim_is_lines(unsigned prim)
+{
+	return ((1 << prim) & UTIL_ALL_PRIM_LINE_MODES) != 0;
+}
+
+static inline bool util_prim_is_points_or_lines(unsigned prim)
+{
+	return ((1 << prim) & (UTIL_ALL_PRIM_LINE_MODES |
+			       (1 << PIPE_PRIM_POINTS))) != 0;
 }
 
 /**
